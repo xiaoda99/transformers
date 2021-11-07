@@ -23,6 +23,7 @@ from huggingface_hub.constants import HF_HUB_DISABLE_TELEMETRY as DISABLE_TELEME
 from . import __version__
 
 # Backward compatibility imports, to make sure all those objects can be found in file_utils
+# XD: changes are moved to hub.py
 from .utils import (
     CLOUDFRONT_DISTRIB_PREFIX,
     CONFIG_NAME,
