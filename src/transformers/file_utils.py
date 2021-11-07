@@ -276,6 +276,7 @@ hf_cache_home = os.path.expanduser(
     os.getenv("HF_HOME", os.path.join(os.getenv("XDG_CACHE_HOME", "~/.cache"), "huggingface"))
 )
 default_cache_path = os.path.join(hf_cache_home, "transformers")
+print('In file_utils.py: default_cache_path =', default_cache_path)  # XD debug
 
 # Onetime move from the old location to the new one if no ENV variable has been set.
 if (
@@ -1912,6 +1913,7 @@ def cached_path(
     if isinstance(cache_dir, Path):
         cache_dir = str(cache_dir)
 
+    print('In cached_path: url_or_filename =', url_or_filename)  # XD debug
     if is_offline_mode() and not local_files_only:
         logger.info("Offline mode: forcing local_files_only=True")
         local_files_only = True
@@ -1928,6 +1930,7 @@ def cached_path(
             use_auth_token=use_auth_token,
             local_files_only=local_files_only,
         )
+        print('In cached_path: output_path =', output_path)  # XD
     elif os.path.exists(url_or_filename):
         # File, and it exists.
         output_path = url_or_filename
@@ -2182,6 +2185,16 @@ def get_from_cache(
     # From now on, etag is not None.
     if os.path.exists(cache_path) and not force_download:
         return cache_path
+    # XD get plaintext symlink path
+    url_parts = url.split('/')
+    plaintext_filename = url_parts[-1]
+    main_bodies = ['pytorch', 'config', 'vocab', 'merges', 'added_tokens', 'special_tokens', 'tokenizer']
+    assert any(s in plaintext_filename for s in main_bodies), url
+    if any(plaintext_filename.startswith(s) for s in main_bodies):
+        assert 'resolve' in url_parts # https://huggingface.co/t5-large/resolve/main/pytorch_model.bin
+        plaintext_filename = url_parts[url_parts.index('resolve') - 1] + '-' + plaintext_filename
+    link_path = os.path.join(cache_dir, plaintext_filename)
+    if os.path.exists(link_path): return link_path
 
     # Prevent parallel downloads of the same file with a lock.
     lock_path = cache_path + ".lock"
@@ -2229,6 +2242,9 @@ def get_from_cache(
         meta_path = cache_path + ".json"
         with open(meta_path, "w") as meta_file:
             json.dump(meta, meta_file)
+        if not os.path.exists(link_path):  # XD
+            logger.info("creating symlink for %s <- %s", (cache_path, link_path))
+            os.symlink(cache_path, link_path)
 
     return cache_path
 
