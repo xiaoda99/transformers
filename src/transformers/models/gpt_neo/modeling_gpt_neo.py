@@ -537,12 +537,12 @@ class GPTNeoMLP(nn.Module):
         self.act = ACT2FN[config.activation_function]
         self.dropout = nn.Dropout(float(config.resid_dropout))
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, output_intermediate=False): # XD
         hidden_states = self.c_fc(hidden_states)
-        hidden_states = self.act(hidden_states)
+        intermediate = hidden_states = self.act(hidden_states)  # XD
         hidden_states = self.c_proj(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        return hidden_states
+        return (hidden_states, intermediate) if output_intermediate else hidden_states # XD
 
 
 class GPTNeoBlock(nn.Module):

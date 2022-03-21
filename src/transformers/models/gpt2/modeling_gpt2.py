@@ -570,12 +570,12 @@ class GPT2MLP(nn.Module):
         self.act = ACT2FN[config.activation_function]
         self.dropout = nn.Dropout(config.resid_pdrop)
 
-    def forward(self, hidden_states: Optional[Tuple[torch.FloatTensor]]) -> torch.FloatTensor:
+    def forward(self, hidden_states: Optional[Tuple[torch.FloatTensor]], output_intermediate=False) -> torch.FloatTensor:  # XD
         hidden_states = self.c_fc(hidden_states)
-        hidden_states = self.act(hidden_states)
+        intermediate = hidden_states = self.act(hidden_states) # XD
         hidden_states = self.c_proj(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        return hidden_states
+        return (hidden_states, intermediate) if output_intermediate else hidden_states # XD
 
 
 GPT2_ATTENTION_CLASSES = {
