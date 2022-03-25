@@ -90,11 +90,13 @@ def unify(model):
             self.resid_dropout = nn.Dropout(block.dropout)
 
 def _split_heads(tensor, num_heads, attn_head_size):
+    '''b i (n d) -> b n i d'''
     new_shape = tensor.size()[:-1] + (num_heads, attn_head_size)
     tensor = tensor.view(new_shape)
     return tensor.permute(0, 2, 1, 3)  # (batch, head, seq_length, head_features)
 
 def _merge_heads(tensor, num_heads, attn_head_size):
+    '''b n i d -> b i (n d)'''
     tensor = tensor.permute(0, 2, 1, 3).contiguous()
     new_shape = tensor.size()[:-2] + (num_heads * attn_head_size,)
     return tensor.view(new_shape)
@@ -114,7 +116,7 @@ def _attn(self, query, key, value, attention_mask=None):
     if isinstance(self, GPTNeoSelfAttention) or isinstance(self, GPTJAttention):
         # Keep the attention weights computation in fp32 to avoid overflow issues
         query, key = query.to(torch.float32), key.to(torch.float32)
-    attn_weights = torch.matmul(query, key.transpose(-1, -2))
+    attn_weights = torch.matmul(query, key.transpose(-1, -2)) # bnid,bnjd->bnij
 
     # turns out gptneo fold_scaling_into_initializer, and uses float32_logits. 
     # see https://crfm.stanford.edu/2021/08/26/mistral.html (Diagnosing Numerical Instability, Eureka!)
@@ -134,12 +136,12 @@ def _attn(self, query, key, value, attention_mask=None):
     attn_weights = attn_weights.type(value.dtype)
     attn_weights = self.attn_dropout(attn_weights)
 
-    attn_output = torch.matmul(attn_weights, value)
+    attn_output = torch.matmul(attn_weights, value) # bnij,bnjd->bnid
     return attn_output, attn_weights
 
 def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=False,
                 head_mask=None, attn_weights=None): # gptneo
-    hq, hk, hv = block.ln_1(hq), block.ln_1(hk), block.ln_1(hv)
+    # hq, hk, hv = block.ln_1(hq), block.ln_1(hk), block.ln_1(hv)
     self = block.attn  # block.attn.attention already renamed
     query = self.q_proj(hq)
     key = self.k_proj(hk)
@@ -179,12 +181,17 @@ def compute_loss(logits, labels, reduction='none'):
         labels = einops.repeat(labels, '1 i -> b i', b=logits.size(0))
     # shift_logits = logits[..., :-1, :].contiguous()
     # shift_labels = labels[..., 1:].contiguous()
-    loss_fct = nn.CrossEntropyLoss(reduction=reduction)
+    loss_fct = nn.CrossEntropyLoss(reduction='none' if reduction == 'per_example_mean' else reduction)
     # loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
     # print(f'logits.size = {logits.size()}, labels.size = {labels.size()}')
     loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
-    loss = loss.view(labels.size(0), -1)
-    return loss, labels
+    if reduction != 'mean':
+        loss = loss.view(labels.size(0), -1)
+        if reduction == 'per_example_mean':
+            # loss = einops.reduce(loss, 'b i -> b', 'sum') / \
+            #     einops.reduce(labels != -100, 'b i -> b', 'sum')
+            loss = torch.einsum('bi->b', loss) / torch.einsum('bi->b', labels != -100)
+    return loss
 
 def scaled_input(input, num_points, baseline=None, requires_grad=True):
     # shape of input: (bsz, num_head, seq_len, seq_len)
@@ -314,15 +321,15 @@ def get_scale_fn(factor=0):
     def scale(hidden): return hidden * factor
     return scale
 
-def plot_attn(attn, tokens, annot=False, figsize=(10, 10)):
-    plt.figure(figsize=figsize)
+def plot_attn(attn, tokens, annot=False, figsize=(10, 10), ax=None):
+    if ax is None: plt.figure(figsize=figsize)
     res = sns.heatmap(numpy(attn), square=True, cbar=False, annot=annot, fmt='d', linewidths=0.1, linecolor='grey', 
-                      xticklabels=tokens, yticklabels=tokens)
-    _ = res.set_xticklabels(res.get_xmajorticklabels(), fontsize=8, rotation=0)
+                      xticklabels=tokens, yticklabels=tokens, ax=ax)
+    _ = res.set_xticklabels(res.get_xmajorticklabels(), fontsize=8, rotation=90)
     _ = res.set_yticklabels(res.get_ymajorticklabels(), fontsize=8, rotation=0)
     # _ = plt.xlabel('%d-%d    %.4f' % (layer, head, v), fontsize=14)
-    res.tick_params(top=True, right=True, labeltop=True, labelright=True)
-    plt.show()
+    # res.tick_params(top=True, right=True, labeltop=True, labelright=True)
+    # plt.show()
 
 def cluster(emb, labels, n_clusters=3):
     assert emb.shape[0] == labels.shape[0], '%d ！= %d' % (emb.shape[0], labels.shape[0])

@@ -353,7 +353,7 @@ class GPT2Attention(nn.Module):
         outputs = (attn_output, present)
         if output_attentions:
             outputs += (attn_weights,)
-        outputs += (aaa,)
+        outputs += (aaa,) #by lxy
         return outputs  # a, present, (attentions)
 
 

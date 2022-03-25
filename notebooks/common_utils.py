@@ -29,7 +29,7 @@ def topk_md(tensor, k, largest=True):
     values, indices = tensor.flatten().topk(k, largest=largest)
     # https://stackoverflow.com/questions/64241325/top-k-indices-of-a-multi-dimensional-tensor
     rows, cols = np.unravel_index(indices.numpy(), tensor.shape)
-    return rows, cols
+    return rows, cols, values.numpy()
 
 def norm(tensor, p=2): return tensor.norm(p=p, dim=-1).mean().round().item()
 
