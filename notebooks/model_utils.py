@@ -158,11 +158,9 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=False,
     head_input, head_output = None, None
     if by_head:
         w_o = self.out_proj.weight
-        # (d_model, n_head, d_head) -> (n_head, d_head, d_model) -> (bsz=1, n_head, d_head, d_model)  
-        # w_o = w_o.view(self.embed_dim, self.num_heads, -1).permute(1, 2, 0).unsqueeze(0)
-        w_o = rearrange(w_o, 'e (n d) -> () n d e', n=self.num_heads) # d=d_head, e=d_model
-        # (bsz, n_head, qlen, d_head) * (1, n_head, d_head, d_model) -> (bsz, n_head, qlen, d_model)
-        head_input, head_output = value @ w_o, attn_output @ w_o  # bnid,bnde->bnie
+        # w_o = w_o.view(self.embed_dim, self.num_heads, -1).permute(1, 2, 0)
+        w_o = rearrange(w_o, 'e (n d) -> n d e', n=self.num_heads) # d=d_head, e=d_model
+        head_input, head_output = value @ w_o, attn_output @ w_o  # bnid,nde->bnie
         head_output = self.resid_dropout(head_output)
         head_input = self.resid_dropout(head_input)
 
@@ -183,8 +181,8 @@ def compute_loss(logits, labels, reduction='none'):
     # shift_labels = labels[..., 1:].contiguous()
     loss_fct = nn.CrossEntropyLoss(reduction='none' if reduction == 'per_example_mean' else reduction)
     # loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-    # print(f'logits.size = {logits.size()}, labels.size = {labels.size()}')
-    loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+    print(f'logits.size = {logits.size()}, labels.size = {labels.size()}')
+    loss = loss_fct(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
     if reduction != 'mean':
         loss = loss.view(labels.size(0), -1)
         if reduction == 'per_example_mean':

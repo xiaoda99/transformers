@@ -41,14 +41,14 @@ def prepare_inputs(inputs, device):
 
 def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows=None):
     assert input_ids.size(0) == 1  # bsz == 1
-    bos_id = tokenizer._convert_token_to_id(bos_token)
+    bos_id = tokenizer.convert_tokens_to_ids(bos_token)
     bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()
     if nrows is not None:
         assert nrows == len(bos_indices)
     else:
         nrows = len(bos_indices)
     if eos_token is not None:
-        eos_id = tokenizer._convert_token_to_id(eos_token)
+        eos_id = tokenizer.convert_tokens_to_ids(eos_token)
         eos_indices = (input_ids[0] == eos_id).nonzero()[-nrows:].squeeze(1).tolist()
     else:
         eos_indices = bos_indices[1:] + [input_ids.size(1)]
@@ -137,3 +137,26 @@ def einsum(
         if c not in r_keep_dims:
             mod_r = mod_r.unsqueeze(dim=i)
     return mod_r
+
+# adapted from: https://dzone.com/articles/python-timer-class-context
+# from timeit import default_timer
+from datetime import datetime
+
+class Timer(object):
+    def __init__(self, msg='', verbose=True):
+        self.verbose = verbose
+        # self.timer = default_timer
+        self.msg = msg
+        
+    def __enter__(self):
+        if self.verbose: print(self.msg, '...', end=' ')
+        self.start = datetime.now() # self.timer()
+        return self
+        
+    def __exit__(self, *args):
+        end = datetime.now() # self.timer()
+        self.elapsed = str(end - self.start).split('.')[0]
+        # self.elapsed_secs = end - self.start
+        # self.elapsed = self.elapsed_secs #* 1000   # millisecs
+        if self.verbose: print('done', self.elapsed)
+            # print('elapsed time: %d s' % self.elapsed)

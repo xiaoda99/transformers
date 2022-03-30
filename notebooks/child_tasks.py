@@ -1,9 +1,14 @@
+import sys
 from random import choice, choices, shuffle, sample, randint
 import string
+
+sys.path.insert(0, '/nas/xd/projects/PyFunctional')
 from functional import seq
 from functional.pipeline import Sequence
 from fn import _
 from collections import namedtuple 
+
+from child_utils import *
 
 
 def verbalize(obj):

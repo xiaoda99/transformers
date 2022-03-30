@@ -6,17 +6,17 @@ from random import choice, choices, shuffle, sample, randint
 
 from transformers import GPT2Tokenizer
 cache_dir = '/nas/xd/.cache/torch/transformers/'
-tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
+_tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
 
 cardinals = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
 ordinals = ['zeroth', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth']
 digit2cardinal = OrderedDict(zip(string.digits, cardinals))
 digit2ordinal = OrderedDict(zip(string.digits, ordinals))
 
-upper_letters = [l for l in string.ascii_uppercase if len(tokenizer.tokenize('%s %s' % (l*2, l*2))) == 2]
-lower_letters = [l for l in string.ascii_lowercase if len(tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
+uppercases = [l for l in string.ascii_uppercase if len(_tokenizer.tokenize('%s %s' % (l*2, l*2))) == 2]
+lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
 digits = list(string.digits[1:])
-full_vocab = upper_letters + digits
+full_vocab = uppercases + digits
 
 def inc(token):
     assert len(token) == 1 or token in ['->'], token
@@ -42,7 +42,7 @@ def to_digit(word):
 def double(x): return x.upper() * 2
 def single(x): return x[0]
 
-def to_rand_letter(x): return choice(upper_letters + lower_letters)
+def to_rand_letter(x): return choice(uppercases + lowercases)
 def to_rand_digit(x): return choice(digits)
 
 
@@ -70,7 +70,7 @@ def to_digit(word):
 def double(x): return x.upper() * 2
 def single(x): return x[0]
 
-def to_rand_letter(x): return choice(upper_letters + lower_letters)
+def to_rand_letter(x): return choice(uppercases + lowercases)
 def to_rand_digit(x): return choice(digits)
 
 inverse_fns = {
