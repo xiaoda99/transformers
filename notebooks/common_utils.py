@@ -4,10 +4,9 @@ import types
 import math
 import numpy as np
 from itertools import chain
-
 import torch
 import torch.nn as nn
-
+# torch.nn.LayerNorm
 # from transformers import GPT2Tokenizer
 
 # cache_dir = '/nas/xd/.cache/torch/transformers/'
@@ -44,6 +43,7 @@ def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows
     assert input_ids.size(0) == 1  # bsz == 1
     bos_id = tokenizer.convert_tokens_to_ids(bos_token)
     bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()
+    # print(bos_indices)
     if nrows is not None:
         assert nrows == len(bos_indices)
     else:
@@ -56,8 +56,11 @@ def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows
     # labels = torch.ones(input_ids.size(0), input_ids.size(1) - 1).long() * (-100)
     labels = torch.ones_like(input_ids) * (-100)
     answers = []
+    # print(bos_indices,eos_indices)
     for bos_i, eos_i in zip(bos_indices, eos_indices):
+        # eos_i = bos_i + 2  # show only the first answer token
         ans_ids = input_ids[0, bos_i + 1: eos_i]
+        # print(ans_ids)
         labels[0, bos_i: eos_i - 1] = ans_ids
         answers.append(ans_ids)
     return bos_indices, eos_indices, answers, labels
@@ -69,37 +72,49 @@ def convert_ids_to_tokens(ids, tokenizer):
     tokens = tokenizer.convert_ids_to_tokens(ids)
     return [tokenizer.convert_tokens_to_string([token]) for token in tokens]
 
+def mask_logits(logits, indices, kept_ids):
+    mask = torch.ones_like(logits) * (-1e9) # biv
+    for i, ids in zip(indices, kept_ids): mask[:, i, ids] = 0
+    return logits + mask
+    
 def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices, answers, labels, 
-        topk=5, loss_reduction='mean', show_range=None, sep='\t'):
+        mask_logits_fn=None, topk=5, loss_reduction='mean', show_range=None, sep='\t', verbose=True):
     # use_openai_api = isinstance(model, types.FunctionType)
     use_openai_api = hasattr(logits, 'token_logprobs')
     if use_openai_api: ans_nlls = []
+    if not use_openai_api and mask_logits_fn is not None: logits = mask_logits_fn(logits)
     
     bi = 0
     assert len(bos_indices) == len(examples), '%d != %d' % (len(bos_indices), len(examples))
     if show_range is None: show_range = range(len(examples))
     all_top1_correct = True
     for i, (example, bos_i, eos_i, ans_ids) in enumerate(zip(examples, bos_indices, eos_indices, answers)):
+        # eos_i = bos_i + 2  # show only the first answer token
         if i not in show_range: continue
+        # print(i)
         if use_openai_api:
             ans_prob_dist = [get_prob_dist(d, topk=topk) for d in logits.top_logprobs[bos_i + 1: eos_i]]
             ans_probs = [math.exp(lp) for lp in logits.token_logprobs[bos_i + 1: eos_i]]
             ans_nlls += [-lp for lp in logits.token_logprobs[bos_i + 1: eos_i]]
         else:
             ans_prob_dist = logits[bi, bos_i: eos_i - 1].softmax(-1)
+            # print(ans_prob_dist.shape)
             ans_probs = ans_prob_dist[torch.arange(ans_prob_dist.size(0)), ans_ids]
+            # print(ans_probs.shape)
         ans_tokens = convert_ids_to_tokens(ans_ids, tokenizer)
         for ans_id, ans_token, ans_prob, dist in zip(ans_ids, ans_tokens, numpy(ans_probs, decimals=3), ans_prob_dist):
             top1_correct = max(dist.items(), key=lambda x: x[1])[0] == ans_token.replace('Ġ', ' ') \
                 if use_openai_api else (dist.argmax() == ans_id).item()
             all_top1_correct = all_top1_correct and top1_correct
             indices_fn = partial(convert_ids_to_tokens, tokenizer=tokenizer)
-            print('\n' + ('*' if top1_correct else ' ') + ans_token, ans_prob, dist if use_openai_api 
-                else show_topk(*dist.topk(topk), indices_fn=indices_fn), end='') 
-        print(sep + example, end='')
-    print()
+            if verbose: 
+                print(('*' if top1_correct else ' ') + ans_token, ans_prob, dist if use_openai_api 
+                    else show_topk(*dist.topk(topk), indices_fn=indices_fn), sep, example) 
+            # if verbose: print(sep + example)
+    # if verbose: print()
     if use_openai_api:
         loss = ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls)
+        # print(ans_nlls)
     else:
         loss_fct = nn.CrossEntropyLoss(reduction=loss_reduction)
         # logits = logits[..., :-1, :]

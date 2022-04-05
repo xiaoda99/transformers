@@ -10,8 +10,8 @@ from einops import rearrange
 
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 from transformers.models.gpt_neo.modeling_gpt_neo import GPTNeoSelfAttention
-from transformers.models.gptj.modeling_gptj import GPTJAttention
-from transformers.models.xglm.modeling_xglm import XGLMAttention
+from transformers.models.gptj.modeling_gptj import GPTJAttention, GPTJBlock, GPTJModel
+from transformers.models.xglm.modeling_xglm import XGLMAttention, XGLMDecoderLayer
 
 # from sklearn.decomposition import PCA
 # from sklearn.cluster import KMeans
@@ -50,7 +50,8 @@ def embed_forward(transformer, inputs, output_embeds=True): # gptneo
     position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
     position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
     inputs_embeds = self.wte(input_ids)
-    position_embeds = self.wpe(position_ids)
+    position_embeds = self.wpe(position_ids) \
+        if not my_isinstance(transformer, GPTJModel) else inputs_embeds * 0.
     hidden_states = inputs_embeds + position_embeds
     hidden_states = self.drop(hidden_states)
     return (hidden_states, inputs_embeds, position_embeds) if output_embeds else hidden_states
@@ -61,15 +62,16 @@ def unify(model):
         model.transformer = model.model
         model.model.h = model.model.layers
         model.model.ln_f = model.model.layer_norm
-    for block in model.transformer.h:
-        if not hasattr(block, 'attn'):
-            assert hasattr(block, 'self_attn') # xglm
+
+    for i, block in enumerate(model.transformer.h):
+        if my_isinstance(block, XGLMDecoderLayer):
             block.attn = block.self_attn
+            block.ln_1 = block.self_attn_layer_norm
+            block.ln_2 = block.final_layer_norm
         if hasattr(block.attn, 'attention'): # gptneo
             block.attn = block.attn.attention
+        if my_isinstance(block, GPTJBlock): block.ln_2 = block.ln_1
 
-    blocks = model.transformer.h
-    for i, block in enumerate(blocks):
         self = block.attn
         if my_isinstance(self, GPT2Attention):
             embed_dim = self.c_proj.weight.size(0)
@@ -83,16 +85,19 @@ def unify(model):
             self.out_proj = nn.Linear(embed_dim, embed_dim)
             self.out_proj.weight = nn.Parameter(self.c_proj.weight.T)
             self.out_proj.bias = self.c_proj.bias
-        if my_isinstance(self, GPTNeoSelfAttention):
+        elif my_isinstance(self, GPTNeoSelfAttention):
             self.attention_type = 'global' if i % 2 == 0 else 'local'
-        if my_isinstance(self, XGLMAttention):
+        elif my_isinstance(self, XGLMAttention):
             self.attn_dropout = nn.Dropout(self.dropout)
             self.resid_dropout = nn.Dropout(block.dropout)
+        elif my_isinstance(self, GPTJAttention):
+            self.num_heads = self.num_attention_heads
 
-def _split_heads(tensor, num_heads, attn_head_size):
+def _split_heads(tensor, num_heads, attn_head_size, rotary=False):
     '''b i (n d) -> b n i d'''
     new_shape = tensor.size()[:-1] + (num_heads, attn_head_size)
     tensor = tensor.view(new_shape)
+    if rotary: return tensor
     return tensor.permute(0, 2, 1, 3)  # (batch, head, seq_length, head_features)
 
 def _merge_heads(tensor, num_heads, attn_head_size):
@@ -100,6 +105,25 @@ def _merge_heads(tensor, num_heads, attn_head_size):
     tensor = tensor.permute(0, 2, 1, 3).contiguous()
     new_shape = tensor.size()[:-2] + (num_heads * attn_head_size,)
     return tensor.view(new_shape)
+
+def fixed_pos_embedding(x, seq_dim=1, seq_len=None):
+    dim = x.shape[-1]
+    if seq_len is None:
+        seq_len = x.shape[seq_dim]
+    inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2) / dim))
+    sinusoid_inp = torch.einsum("i , j -> i j", torch.arange(seq_len), inv_freq).to(x.device).float()
+    return torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)
+
+def rotate_every_two(x):
+    x1 = x[:, :, :, ::2]
+    x2 = x[:, :, :, 1::2]
+    x = torch.stack((-x2, x1), axis=-1)
+    return x.flatten(-2)  # in einsum notation: rearrange(x, '... d j -> ... (d j)')
+
+def apply_rotary_pos_emb(x, sincos, offset=0):
+    sin, cos = map(lambda t: t[None, offset : x.shape[1] + offset, None, :].repeat_interleave(2, 3), sincos)
+    # einsum notation for lambda t: repeat(t[offset:x.shape[1]+offset,:], "n d -> () n () (d j)", j=2)
+    return (x * cos) + (rotate_every_two(x) * sin)
 
 def _attn(self, query, key, value, attention_mask=None):
     # bias and masked_bias copied from GPTNeoSelfAttention.__init__
@@ -147,12 +171,32 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=False,
     key = self.k_proj(hk)
     value = self.v_proj(hv)
 
-    query = _split_heads(query, self.num_heads, self.head_dim)
-    key = _split_heads(key, self.num_heads, self.head_dim)
+    rotary = my_isinstance(self, GPTJAttention)
+    query = _split_heads(query, self.num_heads, self.head_dim, rotary=rotary)
+    key = _split_heads(key, self.num_heads, self.head_dim, rotary=rotary)
     value = _split_heads(value, self.num_heads, self.head_dim)
+
+    if rotary:
+        seq_len = key.shape[1]
+        offset = 0
+        k_rot = key[:, :, :, : self.rotary_dim]
+        k_pass = key[:, :, :, self.rotary_dim :]
+        q_rot = query[:, :, :, : self.rotary_dim]
+        q_pass = query[:, :, :, self.rotary_dim :]
+
+        sincos = fixed_pos_embedding(k_rot, 1, seq_len=seq_len)
+        k_rot = apply_rotary_pos_emb(k_rot, sincos, offset=offset)
+        q_rot = apply_rotary_pos_emb(q_rot, sincos, offset=offset)
+
+        key = torch.cat([k_rot, k_pass], dim=-1)
+        query = torch.cat([q_rot, q_pass], dim=-1)
+        key = key.permute(0, 2, 1, 3)
+        query = query.permute(0, 2, 1, 3)
 
     attn_output, attn_weights = _attn(self, query, key, value, attention_mask) \
         if attn_weights is None else (attn_weights @ value, attn_weights)  # XD
+    # print('attn_output.shape',attn_output.shape)
+    # print('head_mask.shape',head_mask.shape)
     if head_mask is not None: attn_output = einsum('bnid,bni->bnid', attn_output, head_mask)
 
     head_input, head_output = None, None
@@ -179,16 +223,21 @@ def compute_loss(logits, labels, reduction='none'):
         labels = einops.repeat(labels, '1 i -> b i', b=logits.size(0))
     # shift_logits = logits[..., :-1, :].contiguous()
     # shift_labels = labels[..., 1:].contiguous()
+    # print(labels)
     loss_fct = nn.CrossEntropyLoss(reduction='none' if reduction == 'per_example_mean' else reduction)
     # loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-    print(f'logits.size = {logits.size()}, labels.size = {labels.size()}')
+    # print(f'logits.size = {logits.size()}, labels.size = {labels.size()}')
     loss = loss_fct(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
+    # print(loss.shape)
     if reduction != 'mean':
-        loss = loss.view(labels.size(0), -1)
+        loss = loss.view(labels.size(0), -1) #4,16
+        # print(loss)
+        # print(torch.einsum('bi->b', loss),torch.einsum('bi->b', labels != -100))
         if reduction == 'per_example_mean':
             # loss = einops.reduce(loss, 'b i -> b', 'sum') / \
             #     einops.reduce(labels != -100, 'b i -> b', 'sum')
             loss = torch.einsum('bi->b', loss) / torch.einsum('bi->b', labels != -100)
+            # print(loss)
     return loss
 
 def scaled_input(input, num_points, baseline=None, requires_grad=True):
@@ -403,33 +452,33 @@ def gen_detach_heads_tuples(module, exit_module, kept_layer, kept_head):
                           get_detach_heads_fn(kept_head=kept_head if i == kept_layer else None)))
     return tuples
 
-def forward(module, names, values=None, exit_module=None, extra_tuples=None,
-            detach_type=None, detach_pos=None, kept_layer=None, kept_head=None):
-    if type(names) != list: names, values = [names], [values]
-    if type(names) == list and type(values) != list: values = [values for _ in range(len(names))]
-    for name, value in zip(names, values): setattr(module, name, value)
-    if exit_module is not None: setattr(exit_module, 'exit', True)
-    if extra_tuples is not None:
-        for m, name, val in extra_tuples: setattr(m, name, val)
-    if detach_type is not None:
-        detach_pairs = gen_detach_pairs(module, exit_module, detach_type=detach_type)
-        for m, name in detach_pairs: setattr(m, name, get_detach_fn(detach_pos))
-    if kept_head is not None:
-        detach_tuples = gen_detach_heads_tuples(module, exit_module, kept_layer=kept_layer, kept_head=kept_head)
-        for m, name, fn in detach_tuples: setattr(m, name, fn)
-    try: outputs = model(**inputs, output_attentions=True, output_hidden_states=exit_module is not None)
-    finally:
-        if values[0] is None: embs = [getattr(module, name) for name in names]
-        for name in names: try_delattr(module, name)
-        if exit_module is not None: try_delattr(exit_module, 'exit')
-        if detach_type is not None:
-            for m, name in detach_pairs: try_delattr(m, name)
-        if kept_head is not None:
-            for m, name, _ in detach_tuples: try_delattr(m, name)
-        if extra_tuples is not None:
-            for m, name, _ in extra_tuples: try_delattr(m, name)
-    if values[0] is None and len(names) == 1: embs = embs[0]
-    return embs if values[0] is None else outputs
+# def forward(module, names, values=None, exit_module=None, extra_tuples=None,
+#             detach_type=None, detach_pos=None, kept_layer=None, kept_head=None):
+#     if type(names) != list: names, values = [names], [values]
+#     if type(names) == list and type(values) != list: values = [values for _ in range(len(names))]
+#     for name, value in zip(names, values): setattr(module, name, value)
+#     if exit_module is not None: setattr(exit_module, 'exit', True)
+#     if extra_tuples is not None:
+#         for m, name, val in extra_tuples: setattr(m, name, val)
+#     if detach_type is not None:
+#         detach_pairs = gen_detach_pairs(module, exit_module, detach_type=detach_type)
+#         for m, name in detach_pairs: setattr(m, name, get_detach_fn(detach_pos))
+#     if kept_head is not None:
+#         detach_tuples = gen_detach_heads_tuples(module, exit_module, kept_layer=kept_layer, kept_head=kept_head)
+#         for m, name, fn in detach_tuples: setattr(m, name, fn)
+#     try: outputs = model(**inputs, output_attentions=True, output_hidden_states=exit_module is not None)
+#     finally:
+#         if values[0] is None: embs = [getattr(module, name) for name in names]
+#         for name in names: try_delattr(module, name)
+#         if exit_module is not None: try_delattr(exit_module, 'exit')
+#         if detach_type is not None:
+#             for m, name in detach_pairs: try_delattr(m, name)
+#         if kept_head is not None:
+#             for m, name, _ in detach_tuples: try_delattr(m, name)
+#         if extra_tuples is not None:
+#             for m, name, _ in extra_tuples: try_delattr(m, name)
+#     if values[0] is None and len(names) == 1: embs = embs[0]
+#     return embs if values[0] is None else outputs
 
 
 def test(hidden, query, key=None, logits=None, always_show=False):
