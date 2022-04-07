@@ -101,6 +101,47 @@ tasks = [
     (is_included_by,         lambda: sample(upper_letters, 6),   sample,    lambda l,vocab,k: sample(vocab, 5)),
 ]
 
+def balance(examples, ans_vocab=[True, False]):
+    groups = seq(examples).group_by(_[-1]).map(_[1])  # 按ans分组
+    assert groups.len() == len(ans_vocab)  # 保证每种ans都出现
+    min_cnt = groups.map(lambda x: len(x)).min()
+    examples = groups.map(lambda x: sample(x, min_cnt)).flatten().list() # 每组都采样最小个数后去分组
+    return sample(examples, len(examples))  # 重新打乱
+
+def all_a(cxt, query):
+    SC, CD = cxt  # SC paris: studeng-course relation, CD pairs: course-department function
+    ss, d = query  # ss: 学生子集（可以*不止两个学生*），d: 课程
+#     return seq(ss).map(lambda s: seq(SC).filter(_[0] == s).map(_[1]).intersection(CD.filter(_[1] == d).map(_[0])).non_empty()).all()
+    return (seq(ss)
+            .map(lambda s: seq(SC).filter(_[0] == s).map(_[1])  # 学生s选的所有课程
+                 .intersection(
+                     seq(CD).filter(_[1] == d).map(_[0])) # d系的课程
+                 .non_empty())  # s选了d系的课程
+            .all())  # 学生子集ss都选了d系的课程
+
+def all_a_sample(vocab, k):
+    S_vocab, C_vocab, D_vocab = vocab  # vocabs of students, courses, departments
+    k_S, k_C, k_D, k_SC = k  # default values: k_S = 3, k_C = 3, k_D = 2, k_SC = 5
+    S, C, D = sample(S_vocab, k_S), sample(C_vocab, k_C), sample(D_vocab, k_D)
+    
+    while len(set(CD := choices(D, k=k_C))) < k_D: continue  # ds里每个系的课都要出现
+    CD = list(zip(C, CD))  # 得到每门课所属的系
+    
+    all_SC = list(itertools.product(S, C))  # or seq(S).cartesian(C).list()
+    while seq(SC := sample(all_SC, k_SC)).map(_[0]).distinct().len() < k_S: continue  # ss里每个学生都要选课
+    return SC, CD
+
+def select_distinct(tuples, col): return seq(tuples).map(_[col]).distinct().list()
+    
+def all_a_query(cxt,vocab,k):
+    SC, CD = cxt
+    k_S, k_C, k_D, k_SC = k
+    S, D = select_distinct(SC, 0), select_distinct(CD, 1)
+    k_ss = randint(2, len(S))
+    ss = sample(S, k_ss)
+    d = choice(D)
+    return ss, d
+        
 if __name__ == "__main__":
     input_strs = [make_input_str(tasks[4], nrows=4, ncols=5) for __ in range(n_total)]
     for s in sample(input_strs, 3): print(s)

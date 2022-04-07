@@ -8,8 +8,8 @@ from transformers import GPT2Tokenizer
 cache_dir = '/nas/xd/.cache/torch/transformers/'
 _tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
 
-cardinals = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
-ordinals = ['zeroth', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth']
+cardinals = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
+ordinals = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth']
 digit2cardinal = OrderedDict(zip(string.digits, cardinals))
 digit2ordinal = OrderedDict(zip(string.digits, ordinals))
 

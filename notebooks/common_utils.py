@@ -26,6 +26,9 @@ def show_topk(values, indices, values_fn=lambda x: numpy(x, decimals=3), indices
     return dict(OrderedDict(zip(indices_fn(indices), values_fn(values))))
 
 def topk_md(tensor, k, largest=True):
+    if tensor.ndim == 1:
+        values, indices = tensor.topk(k, largest=largest)
+        return indices.numpy(), values.numpy()
     values, indices = tensor.flatten().topk(k, largest=largest)
     # https://stackoverflow.com/questions/64241325/top-k-indices-of-a-multi-dimensional-tensor
     rows, cols = np.unravel_index(indices.numpy(), tensor.shape)
@@ -159,6 +162,14 @@ def einsum(
         if c not in r_keep_dims:
             mod_r = mod_r.unsqueeze(dim=i)
     return mod_r
+
+def binarize(a, fraction=0.33):
+    b = torch.zeros_like(a)
+    prev_v = None
+    for r, c, v in zip(*topk_md(a, 20)):
+        if prev_v is not None and abs(v) < abs(prev_v) * fraction: break
+        b[r, c] = 1; prev_v = v
+    return b
 
 # adapted from: https://dzone.com/articles/python-timer-class-context
 # from timeit import default_timer

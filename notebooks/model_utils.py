@@ -219,26 +219,53 @@ def mlp_forward(block, hidden_states, output_intermediate=False): # gptneo
     return block.mlp(block.ln_2(hidden_states), output_intermediate=output_intermediate)
 
 def compute_loss(logits, labels, reduction='none'):
+    # print('in compute_loss, labels =', labels)
     if labels.size(0) < logits.size(0): # logits has been scaled
         labels = einops.repeat(labels, '1 i -> b i', b=logits.size(0))
-    # shift_logits = logits[..., :-1, :].contiguous()
-    # shift_labels = labels[..., 1:].contiguous()
-    # print(labels)
     loss_fct = nn.CrossEntropyLoss(reduction='none' if reduction == 'per_example_mean' else reduction)
-    # loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
     # print(f'logits.size = {logits.size()}, labels.size = {labels.size()}')
     loss = loss_fct(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
-    # print(loss.shape)
     if reduction != 'mean':
         loss = loss.view(labels.size(0), -1) #4,16
-        # print(loss)
-        # print(torch.einsum('bi->b', loss),torch.einsum('bi->b', labels != -100))
         if reduction == 'per_example_mean':
-            # loss = einops.reduce(loss, 'b i -> b', 'sum') / \
-            #     einops.reduce(labels != -100, 'b i -> b', 'sum')
+            # loss = einops.reduce(loss, 'b i -> b', 'sum') / einops.reduce(labels != -100, 'b i -> b', 'sum')
+            # print('in compute_loss, before loss =', loss)
             loss = torch.einsum('bi->b', loss) / torch.einsum('bi->b', labels != -100)
-            # print(loss)
+            # print('in compute_loss, after loss =', loss)
     return loss
+
+def scaled_ln(ln, x, scale=0.1):
+    # return ln(x)
+    self = ln
+    mean = x.mean(dim=-1, keepdim=True)
+    var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
+    std = (var + self.eps).sqrt()
+    y = (x - mean) * self.weight + self.bias * std
+    return y * scale
+
+def sum_forward(model, outputs, labels=None, embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, ln_scale=0.1):
+    embed_output = outputs.hidden_states[0]
+    if embed_mask is not None: embed_output = einsum('bie,bi->bie', embed_output, embed_mask)
+    output = embed_output
+
+    head_outputs = rearrange(list(outputs.head_outputs), 'l 1 n i e -> 1 l n i e')
+    if head_mask is not None:
+        head_outputs = einsum('blni,blnie->blnie', head_mask, head_outputs)
+    elif attn_weights is not None:
+        head_inputs = rearrange(list(outputs.head_inputs), 'l 1 n i e -> 1 l n i e')
+        head_outputs = einsum('blnij,blnje->blnie', attn_weights, head_inputs)
+    attn_outputs = torch.einsum('blnie->blie', head_outputs)
+
+    mlp_outputs = rearrange(list(outputs.mlp_outputs), 'l 1 i e -> 1 l i e')
+    if mlp_mask is not None: mlp_outputs = einsum('blie,bli->blie', mlp_outputs, mlp_mask)
+    output = output + torch.einsum('blie->bie', attn_outputs + mlp_outputs)
+
+    logits, loss = None, None
+    if labels is not None:
+        ln_output = scaled_ln(model.transformer.ln_f, output, scale=ln_scale)
+        logits = model.lm_head(ln_output)
+        loss = compute_loss(logits, labels, reduction='per_example_mean')
+    return Outputs(hidden_states=(output,), logits=logits, loss=loss)
 
 def scaled_input(input, num_points, baseline=None, requires_grad=True):
     # shape of input: (bsz, num_head, seq_len, seq_len)
@@ -252,7 +279,50 @@ def scaled_input(input, num_points, baseline=None, requires_grad=True):
     if requires_grad: res.requires_grad_(True)
     return res #, step
 
+def attribute(forward_fn, x, get_y, num_points=20, batch_size=4):
+    scaled_x, grad = {}, {}
+    for key in x:
+        scaled_x[key] = scaled_input(x[key], num_points)
+        grad[key] = torch.zeros_like(x[key])
+    ys = []
+    for i in range(0, num_points, batch_size):
+        scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
+        o = forward_fn(model, **scaled_x_)
+        y = get_y(o); ys.append(y)
+        # print(f'y = {y}, ys = {ys}')
+        grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
+        for j, key in enumerate(x.keys()): grad[key] += grad_[j].sum(dim=0, keepdim=True)
+    attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in x}
+    return attr, torch.cat(ys)
 
+def get_x(key, outputs, to_layer=None):
+    # L dim removed when doing per-layer attribution
+    if key == 'head_mask': x = torch.ones(1, L, H, outputs.hidden_states[0].size(1))
+    elif key == 'mlp_mask': x = torch.ones(1, L, outputs.hidden_states[0].size(1))
+    elif key == 'embed_mask': x = torch.ones(1, outputs.hidden_states[0].size(1))
+    elif key == 'attn_weights': x = rearrange(list(outputs.attentions), 'l 1 n i j -> 1 l n i j')
+    if to_layer is not None and x.size(1) == L: x[:, to_layer:] = 0
+    return x
+    
+def get_head_weights(model, layer, head):
+    m = model.transformer.blocks[layer].attn
+    # wq = m.q_proj.weight.view(H, -1, embed_dim)[head]
+    # wk = m.k_proj.weight.view(H, -1, embed_dim)[head]
+    # wv = m.v_proj.weight.view(H, -1, embed_dim)[head]
+    # wo = m.out_proj.weight.view(embed_dim, H, -1)[:, head]
+    wq, wk, wv = [rearrange(getattr(m, name).weight, '(n d) e -> n d e', n=H)[head] # d e
+                for name in ['q_proj', 'k_proj', 'v_proj']]
+    wo = rearrange(getattr(m, 'out_proj').weight, 'e (n d) -> n e d', n=H)[head]  # e d
+    return wq.data, wk.data, wv.data, wo.data
+
+def combine_weights(weights, qk=True, with_embedding=False, BA=False):
+    wq, wk, wv, wo = weights
+    wqt = wq.t()
+    if with_embedding:
+        wqt, wk = we.t().mm(wqt), wk.mm(we)
+        wo, wv = wu.mm(wo), wv.mm(we)
+    if BA: return wk.mm(wqt) if qk else wv.mm(wo)
+    return wqt.mm(wk) if qk else wo.mm(wv)
 
 
 # task_name = 'find majority'  ##?
@@ -375,7 +445,7 @@ def plot_attn(attn, tokens, annot=False, figsize=(10, 10), ax=None):
     _ = res.set_xticklabels(res.get_xmajorticklabels(), fontsize=8, rotation=90)
     _ = res.set_yticklabels(res.get_ymajorticklabels(), fontsize=8, rotation=0)
     # _ = plt.xlabel('%d-%d    %.4f' % (layer, head, v), fontsize=14)
-    # res.tick_params(top=True, right=True, labeltop=True, labelright=True)
+    res.tick_params(top=False, right=True, labeltop=False, labelright=True)
     # plt.show()
 
 def cluster(emb, labels, n_clusters=3):
@@ -408,14 +478,14 @@ def get_key(self, h):
     key = key[0, head2, :]
     return key
 
-def get_head_weights(layer, head):
-    m = get_attn_module(blocks[layer])
-    wq = m.q_proj.weight.view(H, -1, hidden_size)[head]
-    wk = m.k_proj.weight.view(H, -1, hidden_size)[head]
-    wv = m.v_proj.weight.view(H, -1, hidden_size)[head]
-    wo = m.out_proj.weight.view(hidden_size, H, -1)[:, head]
-#     return wq, wk, wv, wo
-    return wq.t(), wk, wv.t(), wo.t()
+# def get_head_weights(layer, head):
+#     m = get_attn_module(blocks[layer])
+#     wq = m.q_proj.weight.view(H, -1, hidden_size)[head]
+#     wk = m.k_proj.weight.view(H, -1, hidden_size)[head]
+#     wv = m.v_proj.weight.view(H, -1, hidden_size)[head]
+#     wo = m.out_proj.weight.view(hidden_size, H, -1)[:, head]
+# #     return wq, wk, wv, wo
+#     return wq.t(), wk, wv.t(), wo.t()
 
 def plot_tgt_attn(a, ax=None, title=None):
 #     print(a.view(-1)[tgt_positions[4:]].mean())
@@ -526,14 +596,14 @@ def create_mask(from_positions, to_positions, accum=False):
             mask[:, from_positions[i], to_positions[:i]] = 1 / i if i > 0 else 0
     return mask
 
-combined_weights = {}
+# combined_weights = {}
 
-def get_combined_w(layer, head, qk=False):
-    if (layer, head, qk) in combined_weights: return combined_weights[(layer, head, qk)]
-    wq, wk, wv, wo = get_head_weights(layer, head)
-    w = torch.matmul(wq, wk) if qk else torch.matmul(wv, wo)
-    combined_weights[(layer, head, qk)] = w
-    return w
+# def get_combined_w(layer, head, qk=False):
+#     if (layer, head, qk) in combined_weights: return combined_weights[(layer, head, qk)]
+#     wq, wk, wv, wo = get_head_weights(layer, head)
+#     w = torch.matmul(wq, wk) if qk else torch.matmul(wv, wo)
+#     combined_weights[(layer, head, qk)] = w
+#     return w
 
 
 # ans_positions = bos_indices + 1
