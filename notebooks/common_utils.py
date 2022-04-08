@@ -68,9 +68,6 @@ def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows
         answers.append(ans_ids)
     return bos_indices, eos_indices, answers, labels
 
-def get_prob_dist(d, topk=5):
-    return {k: round(math.exp(v), 3) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]}
-
 def convert_ids_to_tokens(ids, tokenizer):
     tokens = tokenizer.convert_ids_to_tokens(ids)
     return [tokenizer.convert_tokens_to_string([token]) for token in tokens]
@@ -79,52 +76,6 @@ def mask_logits(logits, indices, kept_ids):
     mask = torch.ones_like(logits) * (-1e9) # biv
     for i, ids in zip(indices, kept_ids): mask[:, i, ids] = 0
     return logits + mask
-    
-def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices, answers, labels, 
-        mask_logits_fn=None, topk=5, loss_reduction='mean', show_range=None, sep='\t', verbose=True):
-    # use_openai_api = isinstance(model, types.FunctionType)
-    use_openai_api = hasattr(logits, 'token_logprobs')
-    if use_openai_api: ans_nlls = []
-    if not use_openai_api and mask_logits_fn is not None: logits = mask_logits_fn(logits)
-    
-    bi = 0
-    assert len(bos_indices) == len(examples), '%d != %d' % (len(bos_indices), len(examples))
-    if show_range is None: show_range = range(len(examples))
-    all_top1_correct = True
-    for i, (example, bos_i, eos_i, ans_ids) in enumerate(zip(examples, bos_indices, eos_indices, answers)):
-        # eos_i = bos_i + 2  # show only the first answer token
-        if i not in show_range: continue
-        # print(i)
-        if use_openai_api:
-            ans_prob_dist = [get_prob_dist(d, topk=topk) for d in logits.top_logprobs[bos_i + 1: eos_i]]
-            ans_probs = [math.exp(lp) for lp in logits.token_logprobs[bos_i + 1: eos_i]]
-            ans_nlls += [-lp for lp in logits.token_logprobs[bos_i + 1: eos_i]]
-        else:
-            ans_prob_dist = logits[bi, bos_i: eos_i - 1].softmax(-1)
-            # print(ans_prob_dist.shape)
-            ans_probs = ans_prob_dist[torch.arange(ans_prob_dist.size(0)), ans_ids]
-            # print(ans_probs.shape)
-        ans_tokens = convert_ids_to_tokens(ans_ids, tokenizer)
-        for ans_id, ans_token, ans_prob, dist in zip(ans_ids, ans_tokens, numpy(ans_probs, decimals=3), ans_prob_dist):
-            top1_correct = max(dist.items(), key=lambda x: x[1])[0] == ans_token.replace('Ġ', ' ') \
-                if use_openai_api else (dist.argmax() == ans_id).item()
-            all_top1_correct = all_top1_correct and top1_correct
-            indices_fn = partial(convert_ids_to_tokens, tokenizer=tokenizer)
-            if verbose: 
-                print(('*' if top1_correct else ' ') + ans_token, ans_prob, dist if use_openai_api 
-                    else show_topk(*dist.topk(topk), indices_fn=indices_fn), sep, example) 
-            # if verbose: print(sep + example)
-    # if verbose: print()
-    if use_openai_api:
-        loss = ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls)
-        # print(ans_nlls)
-    else:
-        loss_fct = nn.CrossEntropyLoss(reduction=loss_reduction)
-        # logits = logits[..., :-1, :]
-        loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
-        # loss = nn.CrossEntropyLoss()(logits.view(-1, logits.size(-1)), labels.view(-1)) if loss_reduction \
-        #     else nn.CrossEntropyLoss(reduction='none')(logits.view(-1, logits.size(-1)), labels.view(-1))[labels.view(-1)>=0].tolist()
-    return loss, all_top1_correct
 
 def my_isinstance(obj, type):  # to cope with autoreload
     # return isinstance(obj, type)  # fail on autorelaod

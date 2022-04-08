@@ -1,5 +1,7 @@
 import numpy as np
+import math
 from dataclasses import dataclass
+from functools import partial
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -16,7 +18,7 @@ from transformers.models.xglm.modeling_xglm import XGLMAttention, XGLMDecoderLay
 # from sklearn.decomposition import PCA
 # from sklearn.cluster import KMeans
 
-from common_utils import numpy, einsum, my_isinstance
+from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk
 
 @dataclass
 class Outputs:
@@ -167,32 +169,33 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=False,
                 head_mask=None, attn_weights=None): # gptneo
     # hq, hk, hv = block.ln_1(hq), block.ln_1(hk), block.ln_1(hv)
     self = block.attn  # block.attn.attention already renamed
-    query = self.q_proj(hq)
-    key = self.k_proj(hk)
+    if hq is not None:
+        query = self.q_proj(hq)
+        key = self.k_proj(hk)
+
+        rotary = my_isinstance(self, GPTJAttention)
+        query = _split_heads(query, self.num_heads, self.head_dim, rotary=rotary)
+        key = _split_heads(key, self.num_heads, self.head_dim, rotary=rotary)
+
+        if rotary:
+            seq_len = key.shape[1]
+            offset = 0
+            k_rot = key[:, :, :, : self.rotary_dim]
+            k_pass = key[:, :, :, self.rotary_dim :]
+            q_rot = query[:, :, :, : self.rotary_dim]
+            q_pass = query[:, :, :, self.rotary_dim :]
+
+            sincos = fixed_pos_embedding(k_rot, 1, seq_len=seq_len)
+            k_rot = apply_rotary_pos_emb(k_rot, sincos, offset=offset)
+            q_rot = apply_rotary_pos_emb(q_rot, sincos, offset=offset)
+
+            key = torch.cat([k_rot, k_pass], dim=-1)
+            query = torch.cat([q_rot, q_pass], dim=-1)
+            key = key.permute(0, 2, 1, 3)
+            query = query.permute(0, 2, 1, 3)
+
     value = self.v_proj(hv)
-
-    rotary = my_isinstance(self, GPTJAttention)
-    query = _split_heads(query, self.num_heads, self.head_dim, rotary=rotary)
-    key = _split_heads(key, self.num_heads, self.head_dim, rotary=rotary)
     value = _split_heads(value, self.num_heads, self.head_dim)
-
-    if rotary:
-        seq_len = key.shape[1]
-        offset = 0
-        k_rot = key[:, :, :, : self.rotary_dim]
-        k_pass = key[:, :, :, self.rotary_dim :]
-        q_rot = query[:, :, :, : self.rotary_dim]
-        q_pass = query[:, :, :, self.rotary_dim :]
-
-        sincos = fixed_pos_embedding(k_rot, 1, seq_len=seq_len)
-        k_rot = apply_rotary_pos_emb(k_rot, sincos, offset=offset)
-        q_rot = apply_rotary_pos_emb(q_rot, sincos, offset=offset)
-
-        key = torch.cat([k_rot, k_pass], dim=-1)
-        query = torch.cat([q_rot, q_pass], dim=-1)
-        key = key.permute(0, 2, 1, 3)
-        query = query.permute(0, 2, 1, 3)
-
     attn_output, attn_weights = _attn(self, query, key, value, attention_mask) \
         if attn_weights is None else (attn_weights @ value, attn_weights)  # XD
     # print('attn_output.shape',attn_output.shape)
@@ -220,6 +223,9 @@ def mlp_forward(block, hidden_states, output_intermediate=False): # gptneo
 
 def compute_loss(logits, labels, reduction='none'):
     # print('in compute_loss, labels =', labels)
+    if reduction == 'argmax':
+        labels[labels != -100] = logits[-1:].argmax(-1)[labels != -100]
+        reduction = 'per_example_mean'
     if labels.size(0) < logits.size(0): # logits has been scaled
         labels = einops.repeat(labels, '1 i -> b i', b=logits.size(0))
     loss_fct = nn.CrossEntropyLoss(reduction='none' if reduction == 'per_example_mean' else reduction)
@@ -234,16 +240,61 @@ def compute_loss(logits, labels, reduction='none'):
             # print('in compute_loss, after loss =', loss)
     return loss
 
-def scaled_ln(ln, x, scale=0.1):
+def get_prob_dist(d, topk=5):
+    return {k: round(math.exp(v), 3) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]}
+
+def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices, answers, labels, 
+        mask_logits_fn=None, topk=5, loss_reduction='mean', show_range=None, sep='\t', verbose=True):
+    # use_openai_api = isinstance(model, types.FunctionType)
+    use_openai_api = hasattr(logits, 'token_logprobs')
+    if use_openai_api: ans_nlls = []
+    if not use_openai_api and mask_logits_fn is not None: logits = mask_logits_fn(logits)
+    
+    bi = 0
+    assert len(bos_indices) == len(examples), '%d != %d' % (len(bos_indices), len(examples))
+    if show_range is None: show_range = range(len(examples))
+    all_top1_correct = True
+    for i, (example, bos_i, eos_i, ans_ids) in enumerate(zip(examples, bos_indices, eos_indices, answers)):
+        # eos_i = bos_i + 2  # show only the first answer token
+        if i not in show_range: continue
+        # print(i)
+        if use_openai_api:
+            ans_prob_dist = [get_prob_dist(d, topk=topk) for d in logits.top_logprobs[bos_i + 1: eos_i]]
+            ans_probs = [math.exp(lp) for lp in logits.token_logprobs[bos_i + 1: eos_i]]
+            ans_nlls += [-lp for lp in logits.token_logprobs[bos_i + 1: eos_i]]
+        else:
+            ans_prob_dist = logits[bi, bos_i: eos_i - 1].softmax(-1)
+            ans_probs = ans_prob_dist[torch.arange(ans_prob_dist.size(0)), ans_ids]
+        ans_tokens = convert_ids_to_tokens(ans_ids, tokenizer)
+        for ans_id, ans_token, ans_prob, dist in zip(ans_ids, ans_tokens, numpy(ans_probs, decimals=3), ans_prob_dist):
+            top1_correct = max(dist.items(), key=lambda x: x[1])[0] == ans_token.replace('Ġ', ' ') \
+                if use_openai_api else (dist.argmax() == ans_id).item()
+            all_top1_correct = all_top1_correct and top1_correct
+            indices_fn = partial(convert_ids_to_tokens, tokenizer=tokenizer)
+            if verbose: 
+                print(('*' if top1_correct else ' ') + ans_token, ans_prob, dist if use_openai_api 
+                    else show_topk(*dist.topk(topk), indices_fn=indices_fn), sep, example) 
+            # if verbose: print(sep + example)
+    # if verbose: print()
+    if use_openai_api:
+        loss = ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls)
+    else:
+        loss = compute_loss(logits, labels, reduction=loss_reduction)
+    return loss, all_top1_correct
+
+def scaled_ln(ln, x):#, scale=0.1):
     # return ln(x)
     self = ln
     mean = x.mean(dim=-1, keepdim=True)
     var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
     std = (var + self.eps).sqrt()
-    y = (x - mean) * self.weight + self.bias * std
-    return y * scale
+    std = std[-1:].detach()
+    y = (x - mean) * self.weight / std + self.bias
+    # print('in scaled_n, std =', std, std.size(), std.mean(dim=(1, 2)))
+    return y
 
-def sum_forward(model, outputs, labels=None, embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, ln_scale=0.1):
+def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
+        embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, ln_scale=0.1):
     embed_output = outputs.hidden_states[0]
     if embed_mask is not None: embed_output = einsum('bie,bi->bie', embed_output, embed_mask)
     output = embed_output
@@ -262,9 +313,9 @@ def sum_forward(model, outputs, labels=None, embed_mask=None, mlp_mask=None, hea
 
     logits, loss = None, None
     if labels is not None:
-        ln_output = scaled_ln(model.transformer.ln_f, output, scale=ln_scale)
+        ln_output = scaled_ln(model.transformer.ln_f, output)
         logits = model.lm_head(ln_output)
-        loss = compute_loss(logits, labels, reduction='per_example_mean')
+        loss = compute_loss(logits, labels, reduction=loss_reduction)
     return Outputs(hidden_states=(output,), logits=logits, loss=loss)
 
 def scaled_input(input, num_points, baseline=None, requires_grad=True):
@@ -296,6 +347,7 @@ def attribute(forward_fn, x, get_y, num_points=20, batch_size=4):
     return attr, torch.cat(ys)
 
 def get_x(key, outputs, to_layer=None):
+    L, H = len(outputs.hidden_states), outputs.attentions[0].size(1)
     # L dim removed when doing per-layer attribution
     if key == 'head_mask': x = torch.ones(1, L, H, outputs.hidden_states[0].size(1))
     elif key == 'mlp_mask': x = torch.ones(1, L, outputs.hidden_states[0].size(1))
