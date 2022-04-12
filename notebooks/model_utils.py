@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import numpy as np
 import math
 from dataclasses import dataclass
@@ -44,20 +45,6 @@ def fill_list(e, length, i, default_e=None): # fill e to ith position of a list 
 def default_get_hqkv(h): return h, h, h  # h is used for query, key and value
 def get_hqkv_k(h, h0): return h0, h, h0  # h is only used for key
 
-def embed_forward(transformer, inputs, output_embeds=True): # gptneo
-    self = transformer
-    input_ids = inputs.input_ids
-    input_shape = input_ids.size()
-    device = input_ids.device
-    position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
-    position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
-    inputs_embeds = self.wte(input_ids)
-    position_embeds = self.wpe(position_ids) \
-        if not my_isinstance(transformer, GPTJModel) else inputs_embeds * 0.
-    hidden_states = inputs_embeds + position_embeds
-    hidden_states = self.drop(hidden_states)
-    return (hidden_states, inputs_embeds, position_embeds) if output_embeds else hidden_states
-
 def unify(model):
     if not hasattr(model, 'transformer'):
         assert hasattr(model, 'model') # xglm
@@ -94,6 +81,31 @@ def unify(model):
             self.resid_dropout = nn.Dropout(block.dropout)
         elif my_isinstance(self, GPTJAttention):
             self.num_heads = self.num_attention_heads
+
+def scaled_ln(ln, x):
+    self = ln
+    mean = x.mean(dim=-1, keepdim=True)
+    var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
+    std = (var + self.eps).sqrt()
+    std = std[-1:].detach()  # use the std of the last original (unscaled) example in the batch
+    y = (x - mean) * self.weight / std + self.bias
+    return y
+
+def scaled_ln_wrapper(ln): return lambda x: scaled_ln(ln, x)
+
+def embed_forward(transformer, inputs, output_embeds=True): # gptneo
+    self = transformer
+    input_ids = inputs.input_ids
+    input_shape = input_ids.size()
+    device = input_ids.device
+    position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
+    position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
+    inputs_embeds = self.wte(input_ids)
+    position_embeds = self.wpe(position_ids) \
+        if not my_isinstance(transformer, GPTJModel) else inputs_embeds * 0.
+    hidden_states = inputs_embeds + position_embeds
+    hidden_states = self.drop(hidden_states)
+    return (hidden_states, inputs_embeds, position_embeds) if output_embeds else hidden_states
 
 def _split_heads(tensor, num_heads, attn_head_size, rotary=False):
     '''b i (n d) -> b n i d'''
@@ -148,13 +160,15 @@ def _attn(self, query, key, value, attention_mask=None):
     # see https://crfm.stanford.edu/2021/08/26/mistral.html (Diagnosing Numerical Instability, Eureka!)
     # and https://github.com/tensorflow/mesh/blob/master/mesh_tensorflow/transformer/attention.py#L517&66
     if not isinstance(self, GPTNeoSelfAttention):
-        attn_weights = attn_weights / (value.size(-1) ** 0.5)
+        # attn_weights = attn_weights / (value.size(-1) ** 0.5) # vale may be None
+        attn_weights = attn_weights / (query.size(-1) ** 0.5)
 
     # mask handling copied from GPTNeoSelfAttention._attn
     query_length, key_length = query.size(-2), key.size(-2)
     causal_mask = _attn.bias[:, :, key_length - query_length : key_length, :key_length].bool()
     attn_weights = torch.where(causal_mask, attn_weights, _attn.masked_bias.to(attn_weights.dtype))
     if attention_mask is not None: attn_weights = attn_weights + attention_mask
+    if value is None: return None, attn_weights
 
     attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
@@ -167,9 +181,8 @@ def _attn(self, query, key, value, attention_mask=None):
 
 def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=False,
                 head_mask=None, attn_weights=None): # gptneo
-    # hq, hk, hv = block.ln_1(hq), block.ln_1(hk), block.ln_1(hv)
     self = block.attn  # block.attn.attention already renamed
-    if hq is not None:
+    if hq is not None and attn_weights is None:
         query = self.q_proj(hq)
         key = self.k_proj(hk)
 
@@ -194,12 +207,13 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=False,
             key = key.permute(0, 2, 1, 3)
             query = query.permute(0, 2, 1, 3)
 
-    value = self.v_proj(hv)
-    value = _split_heads(value, self.num_heads, self.head_dim)
+    value = None
+    if hv is not None: value = _split_heads(self.v_proj(hv), self.num_heads, self.head_dim)
+
     attn_output, attn_weights = _attn(self, query, key, value, attention_mask) \
         if attn_weights is None else (attn_weights @ value, attn_weights)  # XD
-    # print('attn_output.shape',attn_output.shape)
-    # print('head_mask.shape',head_mask.shape)
+    if value is None: return None, attn_weights, None, None
+
     if head_mask is not None: attn_output = einsum('bnid,bni->bnid', attn_output, head_mask)
 
     head_input, head_output = None, None
@@ -218,11 +232,15 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=False,
     #     print(equal(head_output.sum(1) + self.resid_dropout(self.out_proj.bias), attn_output))
     return attn_output, attn_weights, head_input, head_output
 
-def mlp_forward(block, hidden_states, output_intermediate=False): # gptneo
-    return block.mlp(block.ln_2(hidden_states), output_intermediate=output_intermediate)
+def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, scale_ln=False):
+    if layer is not None: block = block.transformer.h[layer]
+    ln = scaled_ln_wrapper(block.ln_2) if scale_ln else block.ln_2
+    return block.mlp(ln(hidden_states), output_intermediate=output_intermediate)
 
-def compute_loss(logits, labels, reduction='none'):
+def compute_loss(logits, labels, reduction=None):
+    if reduction is None: reduction = 'per_example_mean'
     # print('in compute_loss, labels =', labels)
+    labels = labels.clone()
     if reduction == 'argmax':
         labels[labels != -100] = logits[-1:].argmax(-1)[labels != -100]
         reduction = 'per_example_mean'
@@ -282,19 +300,8 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
         loss = compute_loss(logits, labels, reduction=loss_reduction)
     return loss, all_top1_correct
 
-def scaled_ln(ln, x):#, scale=0.1):
-    # return ln(x)
-    self = ln
-    mean = x.mean(dim=-1, keepdim=True)
-    var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
-    std = (var + self.eps).sqrt()
-    std = std[-1:].detach()
-    y = (x - mean) * self.weight / std + self.bias
-    # print('in scaled_n, std =', std, std.size(), std.mean(dim=(1, 2)))
-    return y
-
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
-        embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, ln_scale=0.1):
+        embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None):
     embed_output = outputs.hidden_states[0]
     if embed_mask is not None: embed_output = einsum('bie,bi->bie', embed_output, embed_mask)
     output = embed_output
@@ -330,7 +337,7 @@ def scaled_input(input, num_points, baseline=None, requires_grad=True):
     if requires_grad: res.requires_grad_(True)
     return res #, step
 
-def attribute(forward_fn, x, get_y, num_points=20, batch_size=4):
+def attribute(forward_fn, model, x, post_forward_fn, num_points=20, batch_size=4):
     scaled_x, grad = {}, {}
     for key in x:
         scaled_x[key] = scaled_input(x[key], num_points)
@@ -339,7 +346,7 @@ def attribute(forward_fn, x, get_y, num_points=20, batch_size=4):
     for i in range(0, num_points, batch_size):
         scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
         o = forward_fn(model, **scaled_x_)
-        y = get_y(o); ys.append(y)
+        y = post_forward_fn(model, o); ys.append(y)
         # print(f'y = {y}, ys = {ys}')
         grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
         for j, key in enumerate(x.keys()): grad[key] += grad_[j].sum(dim=0, keepdim=True)

@@ -70,7 +70,11 @@ def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows
 
 def convert_ids_to_tokens(ids, tokenizer):
     tokens = tokenizer.convert_ids_to_tokens(ids)
-    return [tokenizer.convert_tokens_to_string([token]) for token in tokens]
+    wrapped = False
+    if type(tokens) == str: tokens, wrapped = [tokens], True
+    out = [tokenizer.convert_tokens_to_string([token]) for token in tokens]
+    if wrapped: out = out[0]  # unwrap
+    return out
 
 def mask_logits(logits, indices, kept_ids):
     mask = torch.ones_like(logits) * (-1e9) # biv
