@@ -332,7 +332,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     if embed_mask is not None: embed_output = einsum('bie,bi->bie', embed_output, embed_mask)
 
     head_outputs = rearrange(list(outputs.head_outputs), 'l 1 n i e -> 1 l n i e')
-    if reduce_fn == torch.cat and head_mask is None:
+    if reduce_fn == torch.cat and head_mask is None and attn_weights is not None:
         head_mask = einops.reduce(attn_weights, '1 l n i j -> 1 l n i', 'sum')
         attn_weights = None
     if head_mask is not None:
@@ -342,7 +342,9 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         head_outputs = einsum('blnij,blnje->blnie', attn_weights, head_inputs)
 
     mlp_outputs = rearrange(list(outputs.mlp_outputs), 'l 1 i e -> 1 l i e')
-    if mlp_mask is not None: mlp_outputs = einsum('blie,bli->blie', mlp_outputs, mlp_mask)
+    if mlp_mask is not None:
+        # print('in sm_forward, mlp_outputs.size(), mlp_mask.size() =', mlp_outputs.size(), mlp_mask.size())
+        mlp_outputs = einsum('blie,bli->blie', mlp_outputs, mlp_mask)
     if reduce_fn == sum:
         attn_outputs = torch.einsum('blnie->bie', head_outputs)
         mlp_outputs = torch.einsum('blie->bie', mlp_outputs)
@@ -415,7 +417,7 @@ def attribute2(forward_fn, model, x, post_forward_fn):
     return embed_attr, head_attr, mlp_attr
 
 def get_x(key, outputs, to_layer=None):
-    L, H = len(outputs.hidden_states), outputs.attentions[0].size(1)
+    L, H = len(outputs.attentions), outputs.attentions[0].size(1)
     # L dim removed when doing per-layer attribution
     if key == 'head_mask': x = torch.ones(1, L, H, outputs.hidden_states[0].size(1))
     elif key == 'mlp_mask': x = torch.ones(1, L, outputs.hidden_states[0].size(1))
