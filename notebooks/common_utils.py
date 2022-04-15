@@ -3,6 +3,7 @@ from collections import defaultdict, OrderedDict, Counter
 import types
 import math
 import numpy as np
+import pandas as pd
 from itertools import chain
 import torch
 import torch.nn as nn
@@ -33,6 +34,8 @@ def topk_md(tensor, k, largest=True):
     # https://stackoverflow.com/questions/64241325/top-k-indices-of-a-multi-dimensional-tensor
     rows, cols = np.unravel_index(indices.numpy(), tensor.shape)
     return rows, cols, values.numpy()
+
+def to_df(*args): return pd.DataFrame(list(zip(*args)))
 
 def norm(tensor, p=2): return tensor.norm(p=p, dim=-1).mean().round().item()
 
