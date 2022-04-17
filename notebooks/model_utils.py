@@ -20,7 +20,7 @@ from transformers.models.xglm.modeling_xglm import XGLMAttention, XGLMDecoderLay
 # from sklearn.decomposition import PCA
 # from sklearn.cluster import KMeans
 
-from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk
+from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md
 
 @dataclass
 class Outputs:
@@ -249,8 +249,7 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=True, compute_h
             key = key.permute(0, 2, 1, 3)
             query = query.permute(0, 2, 1, 3)
 
-    value = None
-    if hv is not None: value = _split_heads(self.v_proj(hv), self.num_heads, self.head_dim)
+    value = _split_heads(self.v_proj(hv), self.num_heads, self.head_dim) if hv is not None else None
 
     attn_output, attn_weights = _attn(self, query, key, value, attention_mask) \
         if attn_weights is None else (attn_weights @ value, attn_weights)  # XD
@@ -292,17 +291,17 @@ def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=
         self = block.attn
         backup_heads(self)
         try:
-            trim_heads(self, [head]); attn_weights = attn_weights[:, [head]]
+            trim_heads(self, [head]); attn_weights = attn_weights[:, [head]] # bnij->b1ij
             _, attn_logits, _, head_output = attn_forward(block, hq, hk, hv, attn_weights=attn_weights)
             assert head_output.size(1) == 1, str(head_output.size())
-            head_output = head_output[:, 0]
+            head_output = head_output[:, 0]  # b1ie->bie
             restore_heads(self)
         except Exception:
             restore_heads(self)
             raise  # print(traceback.format_exc())
     else:
         _, attn_logits, _, head_output = attn_forward(block, hq, hk, hv, attn_weights=attn_weights)
-        head_output = head_output[:, head]
+        head_output = head_output[:, head]  # bnie->bie
     logits, loss = None, None
     if labels is not None:
         logits, loss = lm_head_forward(model, head_output, labels=labels, loss_reduction=loss_reduction, scaled=scaled)
@@ -326,12 +325,18 @@ def mlp_forward(block, hidden_states, layer=None, output_intermediate=False,
 
 def lm_head_forward(model, hidden_states, labels=None, loss_reduction=None, compact=True, scaled=False):
     if compact and labels is not None:
-        n_valid = (labels != -100).sum(-1)[0].item()
+        qlen = hidden_states.size(1)
         if labels.size(0) != hidden_states.size(0): labels = einops.repeat(labels, '1 i -> b i', b=hidden_states.size(0))
-        hidden_states = rearrange(hidden_states[labels != -100], '(b i) e -> b i e', b=hidden_states.size(0), i=n_valid)
-        labels = rearrange(labels[labels != -100], '(b i) -> b i', b=labels.size(0), i=n_valid)
+        valid_flags = labels != -100
+        n_valid = valid_flags.sum(-1)[0].item()
+        hidden_states = rearrange(hidden_states[valid_flags], '(b i) e -> b i e', b=hidden_states.size(0), i=n_valid)
+        labels = rearrange(labels[valid_flags], '(b i) -> b i', b=labels.size(0), i=n_valid)
     logits = model.lm_head(scaled_ln(model.transformer.ln_f, hidden_states, scaled=scaled))
     loss = compute_loss(logits, labels, reduction=loss_reduction) if labels is not None else None
+    if compact:
+        logits0 = logits.new(logits.size(0), qlen, logits.size(2)).zero_()
+        logits0[valid_flags] = rearrange(logits, 'b i v -> (b i) v')
+        logits = logits0
     return logits, loss
 
 def compute_loss(logits, labels, reduction=None):
@@ -378,7 +383,6 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
     for i, (example, bos_i, eos_i, ans_ids) in enumerate(zip(examples, bos_indices, eos_indices, answers)):
         # eos_i = bos_i + 2  # show only the first answer token
         if i not in show_range: continue
-        # print(i)
         if use_openai_api:
             ans_prob_dist = [get_prob_dist(d, topk=topk) for d in logits.top_logprobs[bos_i + 1: eos_i]]
             ans_probs = [math.exp(lp) for lp in logits.token_logprobs[bos_i + 1: eos_i]]
@@ -396,8 +400,6 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
             if verbose: 
                 print(('*' if top1_correct else ' ') + ans_token, ans_prob, dist if use_openai_api 
                     else show_topk(*dist.topk(topk), indices_fn=indices_fn), sep, example) 
-            # if verbose: print(sep + example)
-    # if verbose: print()
     if use_openai_api:
         loss = ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls)
     else:
@@ -440,7 +442,6 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     return Outputs(hidden_states=(output,), logits=logits, loss=loss)
 
 def scaled_input(input, num_points, baseline=None, requires_grad=True):
-    # shape of input: (bsz, num_head, seq_len, seq_len)
     assert input.size(0) == 1
     if baseline is None: baseline = torch.zeros_like(input)
     if num_points == 3:
@@ -460,7 +461,6 @@ def compose_forward_fns(forward_fns, **kwargs):
         for fn in forward_fns:
             if my_isinstance(outputs, Outputs) and len(outputs.hidden_states) > 0:
                 outputs = outputs.hidden_states[-1]
-            # print('in compose_forward_fns, fn', fn, kwargs)
             outputs = fn(model, outputs, **kwargs)
         return -outputs.loss, outputs.logits
     return forward
@@ -685,8 +685,8 @@ def plot_attn(attn, tokens, annot=False, figsize=(10, 10), ax=None):
     if ax is None: plt.figure(figsize=figsize)
     res = sns.heatmap(numpy(attn), square=True, cbar=False, annot=annot, fmt='d', linewidths=0.1, linecolor='grey', 
                       xticklabels=tokens, yticklabels=tokens, ax=ax)
-    _ = res.set_xticklabels(res.get_xmajorticklabels(), fontsize=8, rotation=90)
-    _ = res.set_yticklabels(res.get_ymajorticklabels(), fontsize=8, rotation=0)
+    _ = res.set_xticklabels(res.get_xmajorticklabels(), fontsize=10, rotation=90)
+    _ = res.set_yticklabels(res.get_ymajorticklabels(), fontsize=10, rotation=0)
     # _ = plt.xlabel('%d-%d    %.4f' % (layer, head, v), fontsize=14)
     res.tick_params(top=True, right=True, labeltop=True, labelright=True)
     # plt.show()
