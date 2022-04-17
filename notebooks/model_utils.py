@@ -1,4 +1,5 @@
 from collections import OrderedDict
+from difflib import restore
 import numpy as np
 import math
 from dataclasses import dataclass
@@ -35,6 +36,13 @@ class Outputs:
     logits: torch.FloatTensor = None
     labels: torch.LongTensor = None
     loss: torch.FloatTensor = None
+
+@dataclass
+class Attributions:
+    embed: torch.FloatTensor = 0.
+    attn: torch.FloatTensor = 0.
+    head: torch.FloatTensor = 0.
+    mlp: torch.FloatTensor = 0.
 
 def fill_list(e, length, i, default_e=None): # fill e to ith position of a list of default_es
     if type(e) == list: assert len(e) == l, f'{len(e)} != {l}'; return e
@@ -82,8 +90,8 @@ def unify(model):
         elif my_isinstance(self, GPTJAttention):
             self.num_heads = self.num_attention_heads
 
-def scaled_ln(ln, x):
-    # return ln(x)
+def scaled_ln(ln, x, scaled=True):
+    if not scaled: return ln(x)
     self = ln
     mean = x.mean(dim=-1, keepdim=True)
     var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
@@ -180,16 +188,49 @@ def _attn(self, query, key, value, attention_mask=None):
     attn_output = torch.matmul(attn_weights, value) # bnij,bnjd->bnid
     return attn_output, attn_weights
 
-def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=False,
+def backup_heads(self):
+    self.backup_names = ['num_heads', 'q_proj', 'k_proj', 'v_proj', 'out_proj']
+    for name in self.backup_names: setattr(self, name + '0', getattr(self, name))
+
+def restore_heads(self):
+    for name in self.backup_names:
+        setattr(self, name , getattr(self, name + '0'))
+        # delattr(self, name + '0')
+
+def trim_heads(self, kept_heads):
+    for proj_name in ['q_proj', 'k_proj', 'v_proj', 'out_proj']:
+        assert getattr(self, proj_name).bias is None
+        weight = getattr(self, proj_name).weight
+        if proj_name == 'out_proj':
+            patterns = ['e (n d) -> n d e', 'n d e -> e (n d)']
+            size = (self.head_dim * len(kept_heads), self.embed_dim)
+        else:
+            patterns = ['(n d) e -> n d e', 'n d e -> (n d) e']
+            size = (self.embed_dim, self.head_dim * len(kept_heads))
+        weight = rearrange(weight, patterns[0], n=self.num_heads)[kept_heads]
+        weight = rearrange(weight, patterns[1])
+        proj = nn.Linear(*size, bias=False)
+        proj.weight = nn.Parameter(weight)
+        setattr(self, proj_name, proj)
+    self.num_heads = len(kept_heads)
+
+def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=True, compute_head_input=True,
                 head_mask=None, attn_weights=None): # gptneo
     self = block.attn  # block.attn.attention already renamed
     if hq is not None and hk is not None and attn_weights is None:
-        query = self.q_proj(hq)
-        key = self.k_proj(hk)
-
         rotary = my_isinstance(self, GPTJAttention)
-        query = _split_heads(query, self.num_heads, self.head_dim, rotary=rotary)
-        key = _split_heads(key, self.num_heads, self.head_dim, rotary=rotary)
+        if True: #head is None:
+            query = self.q_proj(hq)
+            key = self.k_proj(hk)
+            query = _split_heads(query, self.num_heads, self.head_dim, rotary=rotary)
+            key = _split_heads(key, self.num_heads, self.head_dim, rotary=rotary)
+        # else:
+        #     assert self.q_proj.bias is None and self.k_proj.bias is None
+        #     w_q = rearrange(self.q_proj.weight, '(n d) e -> n d e', n=self.num_heads)[head]
+        #     w_k = rearrange(self.k_proj.weight, '(n d) e -> n d e', n=self.num_heads)[head]
+        #     query, key = hq @ w_q.T, hk @ w_k.T  # bie,ed->bid
+        #     pattern = 'b i d -> b i 1 d' if rotary else 'b i d -> b 1 i d'
+        #     query, key = rearrange(query, pattern), rearrange(key, pattern)
 
         if rotary:
             seq_len = key.shape[1]
@@ -222,9 +263,10 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=False,
         w_o = self.out_proj.weight
         # w_o = w_o.view(self.embed_dim, self.num_heads, -1).permute(1, 2, 0)
         w_o = rearrange(w_o, 'e (n d) -> n d e', n=self.num_heads) # d=d_head, e=d_model
-        head_input, head_output = value @ w_o, attn_output @ w_o  # bnid,nde->bnie
+        head_output = attn_output @ w_o  # bnid,nde->bnie
         head_output = self.resid_dropout(head_output)
-        head_input = self.resid_dropout(head_input)
+        if self.num_heads < getattr(self, 'num_heads0', 0): compute_head_input = False
+        head_input = self.resid_dropout(value @ w_o) if compute_head_input else None
 
     attn_output = _merge_heads(attn_output, self.num_heads, self.head_dim)
     attn_output = self.out_proj(attn_output)
@@ -233,10 +275,64 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=False,
     #     print(equal(head_output.sum(1) + self.resid_dropout(self.out_proj.bias), attn_output))
     return attn_output, attn_weights, head_input, head_output
 
-def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, scaled=False):
-    if layer is not None: block = block.transformer.h[layer]
-    ln = scaled_ln_wrapper(block.ln_2) if scaled else block.ln_2
-    return block.mlp(ln(hidden_states), output_intermediate=output_intermediate)
+def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=None,
+            attn_weights=None, attn_labels=None, hidden_states_k=None, trim=True, scaled=True):
+    block = model.transformer.h[layer]
+    # only hq and hv can be scaled, not hk
+    hk = block.ln_1(hidden_states_k if hidden_states_k is not None else hidden_states)
+    h = scaled_ln(block.ln_1, hidden_states) if scaled else block.ln_1(hidden_states)
+    if attn_weights is not None: hq, hv = None, h
+    elif attn_labels is not None: hq, hv = h, None # return attn_logits instead of attn_weights by passing None hv 
+    # if attn_weights is not None:
+    #     w_v = rearrange(self.v_proj.weight, '(n d) e -> n d e', n=self.num_heads)[head]
+    #     value = hv @ w_v.T  # bje,ed->bjd
+    #     w_o = rearrange(self.out_proj.weight, 'e (n d) -> n d e', n=self.num_heads)[head]
+    #     head_output = attn_weights[:, head] @ value @ w_o # bij,bjd,de->bie
+    if trim:
+        self = block.attn
+        backup_heads(self)
+        try:
+            trim_heads(self, [head]); attn_weights = attn_weights[:, [head]]
+            _, attn_logits, _, head_output = attn_forward(block, hq, hk, hv, attn_weights=attn_weights)
+            assert head_output.size(1) == 1, str(head_output.size())
+            head_output = head_output[:, 0]
+            restore_heads(self)
+        except Exception:
+            restore_heads(self)
+            raise  # print(traceback.format_exc())
+    else:
+        _, attn_logits, _, head_output = attn_forward(block, hq, hk, hv, attn_weights=attn_weights)
+        head_output = head_output[:, head]
+    logits, loss = None, None
+    if labels is not None:
+        logits, loss = lm_head_forward(model, head_output, labels=labels, loss_reduction=loss_reduction, scaled=scaled)
+    elif attn_labels is not None:
+        # may do some attn_logits masking here
+        logits = attn_logits[:, head]  # bnij->bij
+        loss = -torch.einsum('bij->b', logits.log_softmax(-1) * attn_labels / attn_labels.sum()) # per_example_mean reduction
+    return Outputs(hidden_states=(head_output,) if head_output is not None else (), logits=logits, loss=loss)
+
+def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, 
+                labels=None, loss_reduction=None, scaled=False):
+    if layer is not None:
+        model = block
+        block = model.transformer.h[layer]
+    hidden_states = scaled_ln(block.ln_2, hidden_states, scaled=scaled)
+    if layer is None: return block.mlp(hidden_states, output_intermediate=output_intermediate)
+    hidden_states = block.mlp(hidden_states, output_intermediate=False)
+    logits, loss = lm_head_forward(model, hidden_states, labels=labels, loss_reduction=loss_reduction, scaled=scaled) \
+        if labels is not None else (None, None)
+    return Outputs(hidden_states=(hidden_states,), logits=logits, loss=loss)
+
+def lm_head_forward(model, hidden_states, labels=None, loss_reduction=None, compact=True, scaled=False):
+    if compact and labels is not None:
+        n_valid = (labels != -100).sum(-1)[0].item()
+        if labels.size(0) != hidden_states.size(0): labels = einops.repeat(labels, '1 i -> b i', b=hidden_states.size(0))
+        hidden_states = rearrange(hidden_states[labels != -100], '(b i) e -> b i e', b=hidden_states.size(0), i=n_valid)
+        labels = rearrange(labels[labels != -100], '(b i) -> b i', b=labels.size(0), i=n_valid)
+    logits = model.lm_head(scaled_ln(model.transformer.ln_f, hidden_states, scaled=scaled))
+    loss = compute_loss(logits, labels, reduction=loss_reduction) if labels is not None else None
+    return logits, loss
 
 def compute_loss(logits, labels, reduction=None):
     if reduction is None: reduction = 'per_example_mean'
@@ -259,6 +355,12 @@ def compute_loss(logits, labels, reduction=None):
             # print('in compute_loss, after loss =', loss)
     return loss
 
+def get_argmax_labels(model, hidden_states, labels):
+    logits = model.lm_head(model.transformer.ln_f(hidden_states))
+    argmax_labels = labels.clone()
+    argmax_labels[labels != -100] = logits.argmax(-1)[labels != -100]
+    return argmax_labels
+
 def get_prob_dist(d, topk=5):
     return {k: round(math.exp(v), 3) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]}
 
@@ -272,7 +374,7 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
     bi = 0
     assert len(bos_indices) == len(examples), '%d != %d' % (len(bos_indices), len(examples))
     if show_range is None: show_range = range(len(examples))
-    all_top1_correct = True
+    all_top1_correct = []  # True
     for i, (example, bos_i, eos_i, ans_ids) in enumerate(zip(examples, bos_indices, eos_indices, answers)):
         # eos_i = bos_i + 2  # show only the first answer token
         if i not in show_range: continue
@@ -288,7 +390,8 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
         for ans_id, ans_token, ans_prob, dist in zip(ans_ids, ans_tokens, numpy(ans_probs, decimals=3), ans_prob_dist):
             top1_correct = max(dist.items(), key=lambda x: x[1])[0] == ans_token.replace('Ġ', ' ') \
                 if use_openai_api else (dist.argmax() == ans_id).item()
-            all_top1_correct = all_top1_correct and top1_correct
+            # all_top1_correct = all_top1_correct and top1_correct
+            all_top1_correct.append(top1_correct)
             indices_fn = partial(convert_ids_to_tokens, tokenizer=tokenizer)
             if verbose: 
                 print(('*' if top1_correct else ' ') + ans_token, ans_prob, dist if use_openai_api 
@@ -299,32 +402,8 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
         loss = ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls)
     else:
         loss = compute_loss(logits, labels, reduction=loss_reduction)
+    all_top1_correct = sum(not correct for correct in all_top1_correct) <= 1
     return loss, all_top1_correct
-
-def sum_forward_old(model, outputs, labels=None, loss_reduction='per_example_mean', 
-        embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None):
-    embed_output = outputs.hidden_states[0]
-    if embed_mask is not None: embed_output = einsum('bie,bi->bie', embed_output, embed_mask)
-    output = embed_output
-
-    head_outputs = rearrange(list(outputs.head_outputs), 'l 1 n i e -> 1 l n i e')
-    if head_mask is not None:
-        head_outputs = einsum('blni,blnie->blnie', head_mask, head_outputs)
-    elif attn_weights is not None:
-        head_inputs = rearrange(list(outputs.head_inputs), 'l 1 n i e -> 1 l n i e')
-        head_outputs = einsum('blnij,blnje->blnie', attn_weights, head_inputs)
-    attn_outputs = torch.einsum('blnie->blie', head_outputs)
-
-    mlp_outputs = rearrange(list(outputs.mlp_outputs), 'l 1 i e -> 1 l i e')
-    if mlp_mask is not None: mlp_outputs = einsum('blie,bli->blie', mlp_outputs, mlp_mask)
-    output = output + torch.einsum('blie->bie', attn_outputs + mlp_outputs)
-
-    logits, loss = None, None
-    if labels is not None:
-        ln_output = scaled_ln(model.transformer.ln_f, output)
-        logits = model.lm_head(ln_output)
-        loss = compute_loss(logits, labels, reduction=loss_reduction)
-    return Outputs(hidden_states=(output,), logits=logits, loss=loss)
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
         embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, reduce_fn=sum, scaled=True):
@@ -355,7 +434,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
 
     logits, loss = None, None
     if labels is not None:
-        ln_output = scaled_ln(model.transformer.ln_f, output) if scaled else model.transformer.ln_f(output)
+        ln_output = scaled_ln(model.transformer.ln_f, output, scaled=scaled)
         logits = model.lm_head(ln_output)
         loss = compute_loss(logits, labels, reduction=loss_reduction)
     return Outputs(hidden_states=(output,), logits=logits, loss=loss)
@@ -400,6 +479,11 @@ def attribute(forward_fn, model, x, post_forward_fn, num_points=20, batch_size=4
         grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
         for j, key in enumerate(x.keys()): grad[key] += grad_[j].sum(dim=0, keepdim=True)
     attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in x}
+
+    attn_attr = attr['attn_weights']
+    head_attr = torch.einsum('lnij->ln', attn_attr)
+    mlp_attr = attr['mlp_mask'].sum(-1, keepdim=False) # li->l1
+    attr = Attributions(attn=attn_attr, head=head_attr, mlp=mlp_attr)
     return attr, torch.cat(ys), logits
 
 def attribute2(forward_fn, model, x, post_forward_fn):
@@ -414,7 +498,8 @@ def attribute2(forward_fn, model, x, post_forward_fn):
     embed_attr = y[:1].view(1, 1)
     head_attr = y[1: 1 + L * H].view(L, H)  # ln
     mlp_attr = y[1 + L * H:]#.view(L, 1)  # l1
-    return embed_attr, head_attr, mlp_attr
+    # return embed_attr, head_attr, mlp_attr
+    return Attributions(embed=embed_attr, head=head_attr, mlp=mlp_attr)
 
 def get_x(key, outputs, to_layer=None):
     L, H = len(outputs.attentions), outputs.attentions[0].size(1)
@@ -425,9 +510,27 @@ def get_x(key, outputs, to_layer=None):
     elif key == 'attn_weights': x = rearrange(list(outputs.attentions), 'l 1 n i j -> 1 l n i j')
     if to_layer is not None and x.size(1) == L: x[:, to_layer:] = 0
     return x
-    
+
+def plot_attr(attr, attr2):
+    fig, axs = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(12, 4))
+    def concat_attrs(head_attr, mlp_attr): return torch.cat([head_attr, einops.repeat(mlp_attr, 'l -> l 3')], dim=1)
+    for ax, a in zip(axs, [concat_attrs(attr.head, attr.mlp), concat_attrs(attr2.head, attr2.mlp)]):
+        res = sns.heatmap(a, cbar=True, ax=ax)
+        _ = res.set_yticklabels(res.get_ymajorticklabels(), rotation=0)
+        res.tick_params(top=False, right=True, labeltop=False, labelright=True)
+    plt.show()
+
+def get_head_rank(head_attr, layer, head, topk=20):
+    if head is not None:
+        head2rank = {k: v for k, v in zip(zip(*topk_md(head_attr, topk)[:2]), range(topk))}
+        return head2rank.get((layer, head), None)
+    else: # mlp
+        head2rank = {k: v for k, v in zip(zip(*topk_md(head_attr, topk)[:1]), range(topk))}
+        return head2rank.get((layer,), None)
+
 def get_head_weights(model, layer, head):
-    m = model.transformer.blocks[layer].attn
+    m = model.transformer.h[layer].attn
+    H = m.num_heads
     # wq = m.q_proj.weight.view(H, -1, embed_dim)[head]
     # wk = m.k_proj.weight.view(H, -1, embed_dim)[head]
     # wv = m.v_proj.weight.view(H, -1, embed_dim)[head]
