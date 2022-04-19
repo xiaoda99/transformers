@@ -23,8 +23,8 @@ def numpy(a, decimals=None):
     if decimals is not None: v = v.round(decimals)
     return v
 
-def show_topk(values, indices, values_fn=lambda x: numpy(x, decimals=3), indices_fn=lambda x: x):
-    return dict(OrderedDict(zip(indices_fn(indices), values_fn(values))))
+def show_topk(values, indices, values_fn=lambda x: numpy(x, decimals=3)): #, indices_fn=lambda x: x):
+    return dict(OrderedDict(zip(show_topk.indices_fn(indices), values_fn(values))))
 
 def topk_md(tensor, k, largest=True):
     if tensor.ndim == 1:

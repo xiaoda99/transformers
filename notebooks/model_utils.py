@@ -291,17 +291,18 @@ def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=
         self = block.attn
         backup_heads(self)
         try:
-            trim_heads(self, [head]); attn_weights = attn_weights[:, [head]] # bnij->b1ij
-            _, attn_logits, _, head_output = attn_forward(block, hq, hk, hv, attn_weights=attn_weights)
-            assert head_output.size(1) == 1, str(head_output.size())
-            head_output = head_output[:, 0]  # b1ie->bie
+            trim_heads(self, [head])
+            if attn_weights is not None: attn_weights = attn_weights[:, [head]] # bnij->b1ij
+            _, attn_logits, _, head_output = attn_forward(block, hq, hk, hv, attn_weights=attn_weights)#
+            assert head_output is None or head_output.size(1) == 1, str(head_output.size())
+            head = 0  # used to index head_output and attn_logits
             restore_heads(self)
         except Exception:
             restore_heads(self)
             raise  # print(traceback.format_exc())
     else:
         _, attn_logits, _, head_output = attn_forward(block, hq, hk, hv, attn_weights=attn_weights)
-        head_output = head_output[:, head]  # bnie->bie
+    if head_output is not None: head_output = head_output[:, head]
     logits, loss = None, None
     if labels is not None:
         logits, loss = lm_head_forward(model, head_output, labels=labels, loss_reduction=loss_reduction, scaled=scaled)
@@ -325,16 +326,15 @@ def mlp_forward(block, hidden_states, layer=None, output_intermediate=False,
 
 def lm_head_forward(model, hidden_states, labels=None, loss_reduction=None, compact=True, scaled=False):
     if compact and labels is not None:
-        qlen = hidden_states.size(1)
         if labels.size(0) != hidden_states.size(0): labels = einops.repeat(labels, '1 i -> b i', b=hidden_states.size(0))
         valid_flags = labels != -100
-        n_valid = valid_flags.sum(-1)[0].item()
+        n_valid = torch.einsum('bi->b', valid_flags)[0].item()
         hidden_states = rearrange(hidden_states[valid_flags], '(b i) e -> b i e', b=hidden_states.size(0), i=n_valid)
         labels = rearrange(labels[valid_flags], '(b i) -> b i', b=labels.size(0), i=n_valid)
     logits = model.lm_head(scaled_ln(model.transformer.ln_f, hidden_states, scaled=scaled))
     loss = compute_loss(logits, labels, reduction=loss_reduction) if labels is not None else None
     if compact:
-        logits0 = logits.new(logits.size(0), qlen, logits.size(2)).zero_()
+        logits0 = logits.new(logits.size(0), valid_flags.size(1), logits.size(2)).zero_()
         logits0[valid_flags] = rearrange(logits, 'b i v -> (b i) v')
         logits = logits0
     return logits, loss
@@ -404,7 +404,7 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
         loss = ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls)
     else:
         loss = compute_loss(logits, labels, reduction=loss_reduction)
-    all_top1_correct = sum(not correct for correct in all_top1_correct) <= 1
+    all_top1_correct = sum(not correct for correct in all_top1_correct) < 1
     return loss, all_top1_correct
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
