@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Optional
+import dataclasses
 from dataclasses import dataclass, field
 
 
@@ -166,3 +167,13 @@ class Timer(object):
 #     data: tuple = ()
 #     parent: Optional[Node] = None
 #     children: list[Node] = field(default_factory=list)
+
+def traverse(node, fn):
+    fn(node)
+    for child in node.children: traverse(child, fn)
+
+def reduce_objects(objs, fields, reduce_fn='mean'):
+    obj = dataclasses.replace(objs[0])
+    for field in fields:
+        setattr(obj, field, sum(getattr(o, field) for o in objs) / (len(objs) if reduce_fn == 'mean' else 1))
+    return obj

@@ -44,6 +44,15 @@ class Attributions:
     head: torch.FloatTensor = 0.
     mlp: torch.FloatTensor = 0.
 
+@dataclass
+class AttrData:
+    step: int = None
+    topk: int = None
+    layer: int = None
+    head: int = None
+    label_type: str = None
+    attr: Attributions = None
+
 def fill_list(e, length, i, default_e=None): # fill e to ith position of a list of default_es
     if type(e) == list: assert len(e) == l, f'{len(e)} != {l}'; return e
     l = [default_e for _ in range(length)]
@@ -466,6 +475,8 @@ def compose_forward_fns(forward_fns, **kwargs):
     return forward
 
 def attribute(forward_fn, model, x, post_forward_fn, num_points=20, batch_size=4):
+    if isinstance(post_forward_fn, (list, tuple)):
+        post_forward_fn = compose_forward_fns(post_forward_fn, scaled=True)
     scaled_x, grad = {}, {}
     for key in x:
         scaled_x[key] = scaled_input(x[key], num_points)
@@ -487,6 +498,8 @@ def attribute(forward_fn, model, x, post_forward_fn, num_points=20, batch_size=4
     return attr, torch.cat(ys), logits
 
 def attribute2(forward_fn, model, x, post_forward_fn):
+    if isinstance(post_forward_fn, (list, tuple)):
+        post_forward_fn = compose_forward_fns(post_forward_fn, scaled=False)
     with torch.no_grad():
         o = forward_fn(model, **x)
         y, logits = post_forward_fn(model, o)
