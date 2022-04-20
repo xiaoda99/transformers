@@ -1,10 +1,16 @@
+from __future__ import annotations
+from typing import Optional
+from dataclasses import dataclass, field
+
+
 from functools import partial
 from collections import defaultdict, OrderedDict, Counter
 import types
 import math
+from itertools import chain
+
 import numpy as np
 import pandas as pd
-from itertools import chain
 import torch
 import torch.nn as nn
 # torch.nn.LayerNorm
@@ -23,8 +29,10 @@ def numpy(a, decimals=None):
     if decimals is not None: v = v.round(decimals)
     return v
 
-def show_topk(values, indices, values_fn=lambda x: numpy(x, decimals=3)): #, indices_fn=lambda x: x):
-    return dict(OrderedDict(zip(show_topk.indices_fn(indices), values_fn(values))))
+def show_topk(values, indices, values_fn=lambda x: numpy(x, decimals=3), indices_fn=None):
+    if indices_fn is None:
+        indices_fn = show_topk.indices_fn if getattr(show_topk, 'indices_fn', None) is not None else lambda x: x
+    return dict(OrderedDict(zip(indices_fn(indices), values_fn(values))))
 
 def topk_md(tensor, k, largest=True):
     if tensor.ndim == 1:
@@ -151,3 +159,10 @@ class Timer(object):
         # self.elapsed = self.elapsed_secs #* 1000   # millisecs
         if self.verbose: print('done', self.elapsed)
             # print('elapsed time: %d s' % self.elapsed)
+
+# https://stackoverflow.com/questions/2461170/tree-implementation-in-python
+# @dataclass
+# class Node:
+#     data: tuple = ()
+#     parent: Optional[Node] = None
+#     children: list[Node] = field(default_factory=list)
