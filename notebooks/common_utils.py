@@ -155,7 +155,7 @@ class Timer(object):
         
     def __exit__(self, *args):
         end = datetime.now() # self.timer()
-        self.elapsed = str(end - self.start).split('.')[0]
+        self.elapsed = str(end - self.start)#.split('.')[0]
         # self.elapsed_secs = end - self.start
         # self.elapsed = self.elapsed_secs #* 1000   # millisecs
         if self.verbose: print('done', self.elapsed)

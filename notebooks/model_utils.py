@@ -417,7 +417,8 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
     return loss, all_top1_correct
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
-        embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, reduce_fn=sum, scaled=True):
+        embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, 
+        reduce_fn=sum, truncate_layers=False, scaled=True):
     embed_output = outputs.hidden_states[0]
     if embed_mask is not None: embed_output = einsum('bie,bi->bie', embed_output, embed_mask)
 
@@ -439,8 +440,10 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         attn_outputs = torch.einsum('blnie->bie', head_outputs)
         mlp_outputs = torch.einsum('blie->bie', mlp_outputs)
     elif reduce_fn == torch.cat:
-        attn_outputs = rearrange(head_outputs, '1 l n i e -> (l n) i e')
-        mlp_outputs = rearrange(mlp_outputs, '1 l i e -> l i e')
+        L = (torch.einsum('bli->l', mlp_mask) > 0).sum().item() \
+            if mlp_mask is not None and truncate_layers else len(outputs.mlp_outputs)
+        attn_outputs = rearrange(head_outputs[:, :L], '1 l n i e -> (l n) i e')
+        mlp_outputs = rearrange(mlp_outputs[:, :L], '1 l i e -> l i e')
     output = reduce_fn([embed_output, attn_outputs, mlp_outputs]) # bie for sum, (1+(ln)+l)ie for cat
 
     logits, loss = None, None
@@ -511,7 +514,25 @@ def attribute2(forward_fn, model, x, post_forward_fn):
     embed_attr = y[:1].view(1, 1)
     head_attr = y[1: 1 + L * H].view(L, H)  # ln
     mlp_attr = y[1 + L * H:]#.view(L, 1)  # l1
-    # return embed_attr, head_attr, mlp_attr
+    return Attributions(embed=embed_attr, head=head_attr, mlp=mlp_attr)
+
+def attribute22(forward_fn, model, x, post_forward_fn):
+    if isinstance(post_forward_fn, (list, tuple)):
+        post_forward_fn = compose_forward_fns(post_forward_fn, scaled=False)
+    with torch.no_grad():
+        o = forward_fn(model, **x, truncate_layers=True)
+        y, logits = post_forward_fn(model, o)
+    assert y.ndim == 1
+    L, H = len(model.transformer.h), model.transformer.h[0].attn.num_heads
+    head_attr, mlp_attr = torch.zeros(L, H), torch.zeros(L)
+    assert (y.size(0) - 1) % (H + 1) == 0
+    to_layer = (y.size(0) - 1) // (H + 1) # by solving equation b = 1 + ln + l
+    assert to_layer == (torch.einsum('bli->l', x['mlp_mask']) > 0).sum().item()
+    L = to_layer
+    embed_attr = y[:1]#.view(1, 1)
+    head_attr[:], mlp_attr[:] = embed_attr.item(), embed_attr.item()
+    head_attr[:L] = y[1: 1 + L * H].view(L, H)  # ln
+    mlp_attr[:L] = y[1 + L * H:]#.view(L, 1)  # l1
     return Attributions(embed=embed_attr, head=head_attr, mlp=mlp_attr)
 
 def get_x(key, outputs, to_layer=None):
