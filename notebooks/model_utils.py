@@ -318,7 +318,8 @@ def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=
     elif attn_labels is not None:
         # may do some attn_logits masking here
         logits = attn_logits[:, head]  # bnij->bij
-        loss = -torch.einsum('bij->b', logits.log_softmax(-1) * attn_labels / attn_labels.sum()) # per_example_mean reduction
+        # print('in head_forward, logits =', torch.einsum('bij->b', logits * torch.ones_like(logits).tril()))
+        loss = -torch.einsum('bij->b', logits.log_softmax(-1) * attn_labels) # per_example_sum. per_example_mean is hard to define when using unormalized attn attr  # bug fix
     return Outputs(hidden_states=(head_output,) if head_output is not None else (), logits=logits, loss=loss)
 
 def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, 
@@ -491,7 +492,9 @@ def attribute(forward_fn, model, x, post_forward_fn, num_points=20, batch_size=4
         y, logits = post_forward_fn(model, o); ys.append(y)
         # print(f'y = {y}, ys = {ys}')
         grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
-        for j, key in enumerate(x.keys()): grad[key] += grad_[j].sum(dim=0, keepdim=True)
+        for j, key in enumerate(x.keys()):
+            grad[key] += grad_[j].sum(dim=0, keepdim=True)
+            # print(key, 'grad', grad_[j].reshape(grad_[j].size(0), -1).sum(1)) # debug
     attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in x}
 
     attn_attr = attr['attn_weights']
