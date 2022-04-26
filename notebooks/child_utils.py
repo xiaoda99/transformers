@@ -18,6 +18,132 @@ lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %
 digits = list(string.digits[1:])
 full_vocab = uppercases + digits
 
+noun2adj = [  # The adjective form of x is y
+    ('rain','rainy'),
+    ('sun','sunny'),
+    ('friend','friendly'),
+    ('danger','dangerous'),
+    ('difference','different'),
+    ('sadness','sad'),
+    ('progress','progressive'),
+    ('success','successful'),
+    ('wisdom','wise'),
+    ('love','loving'),
+    ('kindness','kind'),
+    ('truth','true'),
+    ('beauty','beautiful'),
+    ('freedom','free'),
+    ('courage','courageous'),
+    ('silence','silent'),
+]
+
+antonyms = [
+    ('big', 'small'),
+    ('long', 'short'),
+    ('fat', 'thin'),
+    ('tall', 'short'),
+    ('strong', 'weak'),
+    ('high', 'low'),
+    ('hard', 'soft'),
+    ('fast', 'slow'),
+    ('light', 'dark'),
+    ('up', 'down'),
+    ('left', 'right'),
+    ('near', 'far'),
+    ('inside', 'outside'),
+    ('front', 'back'),
+    ('push', 'pull'),
+    ('open', 'close'),
+    ('hot', 'cold'),
+    ('happy', 'sad'),
+    ('loud', 'quiet'),
+    ('good', 'bad'),
+    ('right', 'wrong'),
+    ('rich', 'poor'),
+    ('clever', 'stupid'),
+    ('male', 'female'),
+    ('man', 'woman'),
+]
+
+# A list of words with their types:
+# big small -> size
+# blue red -> color
+# 2 3 -> number
+# cat dog -> animal
+# German France -> country
+# A B -> letter
+# Febrary September -> month
+# spring autumn -> season
+# 2008 2017 -> year
+# young old -> age
+# ofen rarely occasionally -> frequency
+# warm hot cold cool -> temperature
+# Sunday Monday -> day
+# fast slow -> speed
+
+capabilities = [ # A x can y.
+    ('knife', 'cut'),
+    # ('computer', 'calculate'),
+    ('phone', 'call'),
+    ('TV', 'show'),
+    ('car', 'drive'),
+    ('printer', 'print'),
+    ('pen', 'write'),
+    ('saw', 'cut'),
+    ('oven', 'bake'),
+    ('pot', 'boil'),
+    ('gun', 'shoot'),
+    # ('pan', 'fry'),
+    ('brush', 'paint'),
+    ('shovel', 'dig'),
+    ('hammer', 'hit'),
+    ('lamp', 'light'),
+    ('fan', 'blow'),
+]
+
+adj2very = [
+    ('good', 'excellent'),
+    ('bad', 'horrible'),
+    ('fat', 'obese'),
+    ('thin', 'skinny'),
+    ('clean', 'spotless'),
+    ('dirty', 'filthy'),
+    ('big', 'huge'),
+    ('small', 'tiny'),
+    ('clever', 'intelligent'),
+    ('stupid', 'idiotic'),
+    ('easy', 'effortless'),
+    ('hard', 'gruelling'),
+    ('boring', 'tedious'),
+    ('interesting', 'fascinating'),
+    ('cold', 'freezing'),
+    ('hot', 'boiling'),
+    ('sad', 'miserable'),
+    ('happy', 'ecstatic'),
+]
+
+
+en2fr = [
+    ('apple', 'pomme'),
+    ('cat', 'chat'),
+    ('banana', 'banane'),
+    ('watermelon', 'pastèque'),
+    ('morning', 'matin'),
+    ('butter', 'beurre'),
+    ('cheese', 'fromage'),
+    ('dog', 'chien'),
+    ('sugar', 'sucre'),
+    ('coffee', 'café'),
+    ('tea', 'thé'),
+    ('juice', 'jus'),
+    ('milk', 'lait'),
+    ('bread', 'pain'),
+    ('flower', 'fleur'),
+    ('grape', 'raisin'),
+    ('car', 'voiture'),
+    ('truck', 'camion'),
+]
+
 def inc(token):
     assert len(token) == 1 or token in ['->'], token
     if token.isalpha(): return chr(ord(token) + 1)

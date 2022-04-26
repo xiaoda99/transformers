@@ -67,15 +67,14 @@ def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows
         eos_id = tokenizer.convert_tokens_to_ids(eos_token)
         eos_indices = (input_ids[0] == eos_id).nonzero()[-nrows:].squeeze(1).tolist()
     else:
-        eos_indices = bos_indices[1:] + [input_ids.size(1)]
+        # eos_indices = bos_indices[1:] + [input_ids.size(1)]
+        eos_indices = [bos_i + 2 for bos_i in bos_indices]
     # labels = torch.ones(input_ids.size(0), input_ids.size(1) - 1).long() * (-100)
     labels = torch.ones_like(input_ids) * (-100)
     answers = []
-    # print(bos_indices,eos_indices)
     for bos_i, eos_i in zip(bos_indices, eos_indices):
         # eos_i = bos_i + 2  # show only the first answer token
         ans_ids = input_ids[0, bos_i + 1: eos_i]
-        # print(ans_ids)
         labels[0, bos_i: eos_i - 1] = ans_ids
         answers.append(ans_ids)
     return bos_indices, eos_indices, answers, labels

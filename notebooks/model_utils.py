@@ -458,12 +458,12 @@ def scaled_input(input, num_points, baseline=None, requires_grad=True):
     assert input.size(0) == 1
     if baseline is None: baseline = torch.zeros_like(input)
     if num_points == 3:
-        step = (input - baseline) / 20
-        res = torch.cat([baseline + step * i for i in [1, 10, 20]], dim=0)
+        step = (input - baseline) / 10
+        res = torch.cat([baseline + step * i for i in [0, 5, 10]], dim=0)
     else:
         step = (input - baseline) / num_points
-        # res = torch.cat([baseline + step * i for i in range(num_points)], dim=0)
-        res = torch.cat([baseline + step * (i + 1) for i in range(num_points)], dim=0)  # XD
+        res = torch.cat([baseline + step * i for i in range(num_points + 1)], dim=0)
+        # res = torch.cat([baseline + step * (i + 1) for i in range(num_points)], dim=0)  # XD
         # alphas = list(0.5 * (1 + np.polynomial.legendre.leggauss(num_points)[0])) # copied from captum
         # res = torch.cat([baseline + alpha * (input - baseline) for alpha in alphas], dim=0)
     if requires_grad: res.requires_grad_(True)
@@ -490,17 +490,26 @@ def attribute(forward_fn, model, x, post_forward_fn, num_points=20, batch_size=4
         scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
         o = forward_fn(model, **scaled_x_)
         y, logits = post_forward_fn(model, o); ys.append(y)
-        # print(f'y = {y}, ys = {ys}')
         grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
         for j, key in enumerate(x.keys()):
             grad[key] += grad_[j].sum(dim=0, keepdim=True)
+            # if i == 0: grad[key + '0'], grad[key + '1'] = grad_[j][0:1] * num_points, grad_[j][1:2] * num_points
             # print(key, 'grad', grad_[j].reshape(grad_[j].size(0), -1).sum(1)) # debug
     attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in x}
+    # attr.update({key + '0': (grad[key + '0'] / num_points * x[key]).squeeze(0) for key in x})
+    # attr.update({key + '1': (grad[key + '1'] / num_points * x[key]).squeeze(0) for key in x})
 
     attn_attr = attr['attn_weights']
     head_attr = torch.einsum('lnij->ln', attn_attr)
     mlp_attr = attr['mlp_mask'].sum(-1, keepdim=False) # li->l1
+
+    # head_attr0 = torch.einsum('lnij->ln', attr['attn_weights0'])
+    # mlp_attr0 = attr['mlp_mask0'].sum(-1, keepdim=False)
+    # head_attr1 = torch.einsum('lnij->ln', attr['attn_weights1'])
+    # mlp_attr1 = attr['mlp_mask1'].sum(-1, keepdim=False)
     attr = Attributions(attn=attn_attr, head=head_attr, mlp=mlp_attr)
+    # attr0 = Attributions(head=head_attr0, mlp=mlp_attr0)
+    # attr1 = Attributions(head=head_attr1, mlp=mlp_attr1)
     return attr, torch.cat(ys), logits
 
 def attribute2(forward_fn, model, x, post_forward_fn):
