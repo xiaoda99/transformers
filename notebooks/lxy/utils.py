@@ -260,6 +260,150 @@ def get_exmaples_noun2adj_reverse(k):
             stringss += ' ' + value + ' -> ' + key + '\n'
         ans.append(stringss)
     return ans
+antonyms = [
+    ('big', 'small'),
+    ('long', 'short'),
+    ('fat', 'thin'),
+    ('tall', 'short'),
+    ('strong', 'weak'),
+    ('high', 'low'),
+    ('hard', 'soft'),
+    ('fast', 'slow'),
+    ('light', 'dark'),
+    ('up', 'down'),
+    ('left', 'right'),
+    ('near', 'far'),
+    ('inside', 'outside'),
+    ('front', 'back'),
+    ('push', 'pull'),
+    ('open', 'close'),
+    ('hot', 'cold'),
+    ('happy', 'sad'),
+    ('loud', 'quiet'),
+    ('good', 'bad'),
+    ('right', 'wrong'),
+    ('rich', 'poor'),
+    ('clever', 'stupid'),
+    ('male', 'female'),
+    ('man', 'woman'),
+]
+def get_exmaples_antonyms(k):
+    ans = []
+    for j in range(k):
+        stringss =''
+        listss = random.sample(antonyms,8)
+        for key,value in listss:
+            stringss += ' '+ key + ' -> ' + value + '\n'
+        ans.append(stringss)
+    return ans
+def get_exmaples_antonyms_reverse(k):
+    ans = []
+    for j in range(k):
+        stringss =''
+        listss = random.sample(antonyms,8)
+        for key,value in listss:
+            stringss += ' '+ value + ' -> ' + key + '\n'
+        ans.append(stringss)
+    return ans
+
+adj2very = [
+    ('good', 'excellent'),
+    ('bad', 'horrible'),
+    ('fat', 'obese'),
+    ('thin', 'skinny'),
+    ('clean', 'spotless'),
+    ('dirty', 'filthy'),
+    ('big', 'huge'),
+    ('small', 'tiny'),
+    ('clever', 'intelligent'),
+    ('stupid', 'idiotic'),
+    ('easy', 'effortless'),
+    ('hard', 'gruelling'),
+    ('boring', 'tedious'),
+    ('interesting', 'fascinating'),
+    ('cold', 'freezing'),
+    ('hot', 'boiling'),
+    ('sad', 'miserable'),
+    ('happy', 'ecstatic'),
+]
+def get_exmaples_adj2very(k):
+    ans = []
+    for j in range(k):
+        stringss =''
+        listss = random.sample(adj2very,8)
+        for key,value in listss:
+            stringss += ' '+ key + ' -> ' + value + '\n'
+        ans.append(stringss)
+    return ans
+capabilities = [ # A x can y.
+    ('knife', 'cut'),
+    # ('computer', 'calculate'),
+    ('phone', 'call'),
+    ('TV', 'show'),
+    ('car', 'drive'),
+    ('printer', 'print'),
+    ('pen', 'write'),
+    ('saw', 'cut'),
+    ('oven', 'bake'),
+    ('pot', 'boil'),
+    ('gun', 'shoot'),
+    # ('pan', 'fry'),
+    ('brush', 'paint'),
+    ('shovel', 'dig'),
+    ('hammer', 'hit'),
+    ('lamp', 'light'),
+    ('fan', 'blow'),
+]
+def get_exmaples_capabilities(k):
+    ans = []
+    for j in range(k):
+        stringss =''
+        listss = random.sample(capabilities,8)
+        for key,value in listss:
+            stringss += ' '+ key + ' -> ' + value + '\n'
+        ans.append(stringss)
+    return ans
+
+
+en2fr = [
+    ('apple', 'pomme'),
+    ('cat', 'chat'),
+    ('banana', 'banane'),
+    ('watermelon', 'pastèque'),
+    ('morning', 'matin'),
+    ('butter', 'beurre'),
+    ('cheese', 'fromage'),
+    ('dog', 'chien'),
+    ('sugar', 'sucre'),
+    ('coffee', 'café'),
+    ('tea', 'thé'),
+    ('juice', 'jus'),
+    ('milk', 'lait'),
+    ('bread', 'pain'),
+    ('flower', 'fleur'),
+    ('grape', 'raisin'),
+    ('car', 'voiture'),
+    ('truck', 'camion'),
+]
+
+def get_exmaples_en2fr(k):
+    ans = []
+    for j in range(k):
+        stringss =''
+        listss = random.sample(en2fr,8)
+        for key,value in listss:
+            stringss += ' '+ key + ' -> ' + value + '\n'
+        ans.append(stringss)
+    return ans
+def get_exmaples_en2fr_reverse(k):
+    ans = []
+    for j in range(k):
+        stringss =''
+        listss = random.sample(en2fr,8)
+        for key,value in listss:
+            stringss += ' '+ value + ' -> ' + key + '\n'
+        ans.append(stringss)
+    return ans
 if __name__ == '__main__':
     get_exmaples_number_English(8)
         
