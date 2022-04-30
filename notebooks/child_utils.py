@@ -37,6 +37,47 @@ noun2adj = [  # The adjective form of x is y
     ('silence','silent'),
 ]
 
+lxy = [  # The adjective form of x is y
+    ('apple','Apple'),
+    ('high','High'),
+    ('kill','Kill'),
+    ('local','Local'),
+    ('sun','Sun'),
+    ('human','Human'),
+    ('photo','Photo'),
+    ('success','Success'),
+    ('wake','Wake'),
+    ('love','Love'),
+    ('wear','Wear'),
+    ('truth','Truth'),
+    ('order','Order'),
+    ('freedom','Freedom'),
+    ('watch','Watch'),
+    ('special','Special'),
+]
+
+verb_form =[
+    ('sleep','slept'),
+    ('go','went'),
+    ('talk','talked'),
+    ('can','could'),
+    ('do','did'),
+    ('forget','forgot'),
+    ('leave','left'),
+    ('are','were'),
+    ('begin','gegan'),
+    ('stand','stood'),
+    ('take','took'),
+    ('have','had'),
+    ('fly','flew'),
+    ('speak','spoke'),
+    ('come','came'),
+    ('try','tried'),
+    ('want','wanted'),
+]
+
+
+
 antonyms = [
     ('big', 'small'),
     ('long', 'short'),
@@ -122,7 +163,6 @@ adj2very = [
     ('happy', 'ecstatic'),
 ]
 
-
 en2fr = [
     ('apple', 'pomme'),
     ('cat', 'chat'),
@@ -142,6 +182,34 @@ en2fr = [
     ('grape', 'raisin'),
     ('car', 'voiture'),
     ('truck', 'camion'),
+]
+
+country2capital = [ #The capital of Germany is Berlin.
+    ('Germany', 'Berlin'),
+    ('France', 'Paris'),
+    ('China', 'Beijing'),
+    ('the United States', 'Washington, D.C'),
+    ('Italy', 'Rome'),
+    ('Japan', 'Tokyo'),
+    ('Russia', 'Moscow'),
+    ('Spain', 'Madrid'),
+    ('the United Kingdom', 'London'),
+    ('Canada', 'Ottawa'),
+    ('India', 'New Delhi'),
+    ('Australia', 'Canberra'),
+    ('Brazil', 'Brasília'),
+    ('Mexico', 'Mexico City'),
+    ('South Africa', 'Pretoria'),
+    ('Egypt', 'Cairo'),
+    ('Kenya', 'Nairobi'),
+    ('Korea', 'Seoul'),
+    ('the Philippines', 'Manila'),
+    ('Portugal', 'Lisbon'),
+    ('Switzerland', 'Bern'),
+    ('Thailand', 'Bangkok'),
+    ('Turkey', 'Ankara'),
+    ('Spain', 'Madrid'),
+    ('Greek', 'Athens'),
 ]
 
 def inc(token):

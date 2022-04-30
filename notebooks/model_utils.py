@@ -54,7 +54,7 @@ class AttrData:
     attr: Attributions = None
 
 def fill_list(e, length, i, default_e=None): # fill e to ith position of a list of default_es
-    if type(e) == list: assert len(e) == l, f'{len(e)} != {l}'; return e
+    if type(e) == list: assert len(e) == length, f'{len(e)} != {length}'; return e
     l = [default_e for _ in range(length)]
     if i is not None: l[i] = e
     return l
@@ -574,16 +574,18 @@ def get_head_rank(head_attr, layer, head, topk=20):
         head2rank = {k: v for k, v in zip(zip(*topk_md(head_attr, topk)[:1]), range(topk))}
         return head2rank.get((layer,), None)
 
-def get_head_weights(model, layer, head):
+def get_head_weights(model, layer, head=None, transpose=False):
     m = model.transformer.h[layer].attn
     H = m.num_heads
     # wq = m.q_proj.weight.view(H, -1, embed_dim)[head]
     # wk = m.k_proj.weight.view(H, -1, embed_dim)[head]
     # wv = m.v_proj.weight.view(H, -1, embed_dim)[head]
     # wo = m.out_proj.weight.view(embed_dim, H, -1)[:, head]
+    if head is None: head = range(H)
     wq, wk, wv = [rearrange(getattr(m, name).weight, '(n d) e -> n d e', n=H)[head] # d e
                 for name in ['q_proj', 'k_proj', 'v_proj']]
     wo = rearrange(getattr(m, 'out_proj').weight, 'e (n d) -> n e d', n=H)[head]  # e d
+    if transpose: wq, wk, wv, wo = wq.transpose(-2, -1), wk.transpose(-2, -1), wv.transpose(-2, -1), wo.transpose(-2, -1)
     return wq.data, wk.data, wv.data, wo.data
 
 def combine_weights(weights, qk=True, with_embedding=False, BA=False):
