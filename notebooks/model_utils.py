@@ -1,3 +1,4 @@
+# from ast import pattern
 from collections import OrderedDict
 from difflib import restore
 import numpy as np
@@ -582,10 +583,12 @@ def get_head_weights(model, layer, head=None, transpose=False):
     # wv = m.v_proj.weight.view(H, -1, embed_dim)[head]
     # wo = m.out_proj.weight.view(embed_dim, H, -1)[:, head]
     if head is None: head = range(H)
-    wq, wk, wv = [rearrange(getattr(m, name).weight, '(n d) e -> n d e', n=H)[head] # d e
+    (qkv_pattern, o_pattern) = ('(n d) e -> n d e', 'e (n d) -> n e d') \
+        if not transpose else ('(n d) e -> n e d', 'e (n d) -> n d e')
+    wq, wk, wv = [rearrange(getattr(m, name).weight, qkv_pattern, n=H)[head]
                 for name in ['q_proj', 'k_proj', 'v_proj']]
-    wo = rearrange(getattr(m, 'out_proj').weight, 'e (n d) -> n e d', n=H)[head]  # e d
-    if transpose: wq, wk, wv, wo = wq.transpose(-2, -1), wk.transpose(-2, -1), wv.transpose(-2, -1), wo.transpose(-2, -1)
+    wo = rearrange(getattr(m, 'out_proj').weight, o_pattern, n=H)[head]
+    # if transpose: wq, wk, wv, wo = wq.transpose(-2, -1), wk.transpose(-2, -1), wv.transpose(-2, -1), wo.transpose(-2, -1)
     return wq.data, wk.data, wv.data, wo.data
 
 def combine_weights(weights, qk=True, with_embedding=False, BA=False):
@@ -597,6 +600,33 @@ def combine_weights(weights, qk=True, with_embedding=False, BA=False):
     if BA: return wk.mm(wqt) if qk else wv.mm(wo)
     return wqt.mm(wk) if qk else wo.mm(wv)
 
+def plot_eigv(w, start_i=5, end_i=None, alpha=0.1, plot=True):
+    # w = w.detach()#.numpy()
+    x, y = w[:, 0], w[:, 1]
+    eigv_positivity = x.sum() / (x**2 + y**2).sqrt().sum()
+    if plot:
+        if start_i is None: start_i = 0
+        if end_i is None: end_i = len(w)
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.plot(x[start_i: end_i], y[start_i: end_i], '.', alpha=alpha)
+    return eigv_positivity.item()
+    
+def compute_eigv_positivity(model, L, H):
+    eigv_positivity_ov = torch.zeros((L, H)) 
+    eigv_positivity_qk = torch.zeros((L, H))
+    for layer in tqdm(range(L)):
+        for head in range(H):
+            wqT, wkT, wvT, woT = get_head_weights(model, layer, head, transpose=True)
+            wo = woT.T
+            e = model.transformer.h[layer].ln_1(_e)
+            # A, B = _wu, ln_f(e @ wvT @ woT).T
+            A, B = _wu @ wo, (e @ wvT).T
+            eig_ov = (B @ A).eig()[0]
+            q, k = (e @ wqT), (e @ wkT).T
+            eig_qk = (k @ q).eig()[0]
+            eigv_positivity_ov[layer, head] = plot_eigv(eig_ov, plot=False)
+            eigv_positivity_qk[layer, head] = plot_eigv(eig_qk, plot=False)
+    return eigv_positivity_ov, eigv_positivity_qk
 
 # losses2 = []
 # sum_output = head_outputs * 0
@@ -918,3 +948,25 @@ def create_mask(from_positions, to_positions, accum=False):
 # tgt_positions = torch.LongTensor(tgt_positions)
 # assert len(tgt_positions) == len(ans_positions), '%d != %d' % (len(tgt_positions), len(ans_positions))
 # # cand_is_tgt = torch.LongTensor(cand_positions).view(-1, n_candidates) == tgt_positions.unsqueeze(-1)
+
+
+
+
+
+# # x = torch.Tensor([[100., 100.02, 100.],
+# #                 [0.1, 1, 0.1]])
+# # x = torch.Tensor([[100., 100.1, 100.],
+# #                 [0.1, 1, 0.1]])
+# x = torch.Tensor([[100.1, 100., 100.1],
+#                 [0.1, 1, 0.1]])
+# _ = x.requires_grad_(True)
+# x.softmax(-1)
+
+# m = torch.ones(1, x.size(0))#; _ = m.requires_grad_(True)
+# num_points = 10
+# m = scaled_input(m, num_points)
+# xm = einsum('ni,bn->bi', x, m); _ = xm.requires_grad_(True)
+# y = xm.log_softmax(-1)[:, 1]
+# gm = torch.autograd.grad(y.unbind(), m)[0]
+# gm.mean(0)
+# x.sum(0).log_softmax(-1)

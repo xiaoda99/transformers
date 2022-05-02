@@ -404,6 +404,23 @@ def get_exmaples_en2fr_reverse(k):
             stringss += ' '+ value + ' -> ' + key + '\n'
         ans.append(stringss)
     return ans
+
+isA = []
+def get_examples_isA(k):
+    ans = []
+    with open('/nas/xd/projects/transformers/notebooks/lxy/test', 'r') as f:
+        for line in f.readlines():
+            isA.append(line.strip())
+    for j in range(k):
+        stringss =''
+        listss = random.sample(isA,8)
+        for key in listss:
+            stringss += key + '\n'
+        ans.append(stringss)
+    return ans
+
+
+
 if __name__ == '__main__':
     get_exmaples_number_English(8)
         
