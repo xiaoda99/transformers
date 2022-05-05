@@ -390,7 +390,7 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
     bi = 0
     assert len(bos_indices) == len(examples), '%d != %d' % (len(bos_indices), len(examples))
     if show_range is None: show_range = range(len(examples))
-    all_top1_correct = []  # True
+    top1_corrects = []  # True
     for i, (example, bos_i, eos_i, ans_ids) in enumerate(zip(examples, bos_indices, eos_indices, answers)):
         # eos_i = bos_i + 2  # show only the first answer token
         if i not in show_range: continue
@@ -405,8 +405,7 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
         for ans_id, ans_token, ans_prob, dist in zip(ans_ids, ans_tokens, numpy(ans_probs, decimals=3), ans_prob_dist):
             top1_correct = max(dist.items(), key=lambda x: x[1])[0] == ans_token.replace('Ġ', ' ') \
                 if use_openai_api else (dist.argmax() == ans_id).item()
-            # all_top1_correct = all_top1_correct and top1_correct
-            all_top1_correct.append(top1_correct)
+            top1_corrects.append(top1_correct)
             indices_fn = partial(convert_ids_to_tokens, tokenizer=tokenizer)
             if verbose: 
                 print(('*' if top1_correct else ' ') + ans_token, ans_prob, dist if use_openai_api 
@@ -415,8 +414,8 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
         loss = ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls)
     else:
         loss = compute_loss(logits, labels, reduction=loss_reduction)
-    all_top1_correct = sum(not correct for correct in all_top1_correct) < 1
-    return loss, all_top1_correct
+    # all_top1_correct = sum(not correct for correct in all_top1_correct) < 1
+    return loss, top1_corrects
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
         embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, 

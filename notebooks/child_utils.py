@@ -8,14 +8,14 @@ from transformers import GPT2Tokenizer
 cache_dir = '/nas/xd/.cache/torch/transformers/'
 _tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
 
+digits = list(string.digits[1:])
 cardinals = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
 ordinals = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth']
-digit2cardinal = OrderedDict(zip(string.digits, cardinals))
-digit2ordinal = OrderedDict(zip(string.digits, ordinals))
+digit2cardinal = OrderedDict(zip(digits, cardinals))
+digit2ordinal = OrderedDict(zip(digits, ordinals))
 
 uppercases = [l for l in string.ascii_uppercase if len(_tokenizer.tokenize('%s %s' % (l*2, l*2))) == 2]
 lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
-digits = list(string.digits[1:])
 full_vocab = uppercases + digits
 
 noun2adj = [  # The adjective form of x is y
@@ -76,8 +76,6 @@ verb_form =[
     ('want','wanted'),
 ]
 
-
-
 antonyms = [
     ('big', 'small'),
     ('long', 'short'),
@@ -104,6 +102,7 @@ antonyms = [
     ('clever', 'stupid'),
     ('male', 'female'),
     ('man', 'woman'),
+    ('true', 'false'),
 ]
 
 # A list of words with their types:
@@ -209,7 +208,7 @@ country2capital = [ #The capital of Germany is Berlin.
     ('Thailand', 'Bangkok'),
     ('Turkey', 'Ankara'),
     ('Spain', 'Madrid'),
-    ('Greek', 'Athens'),
+    ('Greece', 'Athens'),
 ]
 
 def inc(token):

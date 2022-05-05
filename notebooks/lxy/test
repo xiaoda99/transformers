@@ -1,14 +1,31 @@
-big small -> size
-blue red -> color
-2 3 -> number
-cat dog -> animal
-German France -> country
-A B -> letter
-February September -> month
-spring autumn -> season
-2008 2017 -> year
-young old -> age
-ofen rarely occasionally -> frequency
-warm hot cold cool -> temperature
-Sunday Monday -> day
-fast slow -> speed
+big -> size
+small -> size
+blue -> color
+red -> color
+2 -> number
+3 -> number
+cat -> animal
+dog -> animal
+German -> country
+France -> country
+A -> letter
+B -> letter
+February -> month
+September -> month
+spring -> season
+autumn -> season
+2008 -> year
+2017 -> year
+young -> age
+old -> age
+ofen -> frequency
+rarely -> frequency
+occasionally -> frequency
+warm -> temperature
+hot -> temperature
+cold -> temperature
+cool -> temperature
+Sunday -> day
+Monday -> day
+fast -> speed
+slow -> speed

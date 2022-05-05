@@ -415,11 +415,58 @@ def get_examples_isA(k):
         stringss =''
         listss = random.sample(isA,8)
         for key in listss:
-            stringss += key + '\n'
+            stringss += ' '+ key + '\n'
         ans.append(stringss)
     return ans
 
 
+country2capital = [ #The capital of Germany is Berlin.
+    ('Germany', 'Berlin'),
+    ('France', 'Paris'),
+    ('China', 'Beijing'),
+    ('the United States', 'Washington, D.C'),
+    ('Italy', 'Rome'),
+    ('Japan', 'Tokyo'),
+    ('Russia', 'Moscow'),
+    ('Spain', 'Madrid'),
+    ('the United Kingdom', 'London'),
+    ('Canada', 'Ottawa'),
+    ('India', 'New Delhi'),
+    ('Australia', 'Canberra'),
+    ('Brazil', 'Brasília'),
+    ('Mexico', 'Mexico City'),
+    ('South Africa', 'Pretoria'),
+    ('Egypt', 'Cairo'),
+    ('Kenya', 'Nairobi'),
+    ('Korea', 'Seoul'),
+    ('the Philippines', 'Manila'),
+    ('Portugal', 'Lisbon'),
+    ('Switzerland', 'Bern'),
+    ('Thailand', 'Bangkok'),
+    ('Turkey', 'Ankara'),
+    ('Spain', 'Madrid'),
+    ('Greek', 'Athens'),
+]
+
+def get_exmaples_country2capital(k):
+    ans = []
+    for j in range(k):
+        stringss =''
+        listss = random.sample(country2capital,8)
+        for key,value in listss:
+            stringss += ' '+ key + ' -> ' + value + '\n'
+        ans.append(stringss)
+    return ans
+
+def get_exmaples_country2capital_reverse(k):
+    ans = []
+    for j in range(k):
+        stringss =''
+        listss = random.sample(country2capital,8)
+        for key,value in listss:
+            stringss += ' '+ value + ' -> ' + key + '\n'
+        ans.append(stringss)
+    return ans
 
 if __name__ == '__main__':
     get_exmaples_number_English(8)
