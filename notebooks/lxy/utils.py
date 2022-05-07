@@ -71,8 +71,10 @@ def get_examples_query_repeat(k):
         stringss =''
         for i in range(8):
             listss = random.sample(sets,2)
-            temp = random.sample(listss,2)
-            stringss += ' ' + ' '.join(listss)+' , '+' '.join(temp) + ' -> '+ list(set(listss) - set(temp))[0]+'\n'
+            temp = listss[1]
+            listss = listss + [listss[0],listss[0]]
+            listss = random.sample(listss,len(listss))
+            stringss += ' ' + ' '.join(listss)+' -> '+ temp +'\n'
         ans.append(stringss)
     return ans
 
