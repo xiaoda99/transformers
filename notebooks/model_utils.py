@@ -21,7 +21,7 @@ from transformers.models.xglm.modeling_xglm import XGLMAttention, XGLMDecoderLay
 # from sklearn.decomposition import PCA
 # from sklearn.cluster import KMeans
 
-from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md
+from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, equal
 
 @dataclass
 class Outputs:
@@ -130,7 +130,7 @@ def _split_heads(tensor, num_heads, attn_head_size, rotary=False):
     '''b i (n d) -> b n i d'''
     new_shape = tensor.size()[:-1] + (num_heads, attn_head_size)
     tensor = tensor.view(new_shape)
-    if rotary: return tensor
+    if rotary: return tensor  # bind
     return tensor.permute(0, 2, 1, 3)  # (batch, head, seq_length, head_features)
 
 def _merge_heads(tensor, num_heads, attn_head_size):
@@ -230,10 +230,16 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=True, compute_h
     if hq is not None and hk is not None and attn_weights is None:
         rotary = my_isinstance(self, GPTJAttention)
         if True: #head is None:
-            query = self.q_proj(hq)
             key = self.k_proj(hk)
-            query = _split_heads(query, self.num_heads, self.head_dim, rotary=rotary)
             key = _split_heads(key, self.num_heads, self.head_dim, rotary=rotary)
+            if hq.ndim == 3:  # bie
+                query = self.q_proj(hq)
+                query = _split_heads(query, self.num_heads, self.head_dim, rotary=rotary)
+            else:
+                assert hq.ndim == 4  # bnid, computed in cat_attn_forward
+                if rotary: hq = rearrange(hq, 'b n i d -> b i n d')
+                assert hq.size()[1:] == key.size()[1:], f'{hq.size()} != {key.size()}'
+                query = hq
         # else:
         #     assert self.q_proj.bias is None and self.k_proj.bias is None
         #     w_q = rearrange(self.q_proj.weight, '(n d) e -> n d e', n=self.num_heads)[head]
@@ -419,7 +425,7 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
         embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, 
-        reduce_fn=sum, truncate_layers=False, scaled=True):
+        reduce_fn=sum, truncate_layers=False, scaled=True, reshape=False):
     embed_output = outputs.hidden_states[0]
     if embed_mask is not None: embed_output = einsum('bie,bi->bie', embed_output, embed_mask)
 
@@ -437,15 +443,25 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     if mlp_mask is not None:
         # print('in sm_forward, mlp_outputs.size(), mlp_mask.size() =', mlp_outputs.size(), mlp_mask.size())
         mlp_outputs = einsum('blie,bli->blie', mlp_outputs, mlp_mask)
-    if reduce_fn == sum:
-        attn_outputs = torch.einsum('blnie->bie', head_outputs)
-        mlp_outputs = torch.einsum('blie->bie', mlp_outputs)
-    elif reduce_fn == torch.cat:
+    if not reshape:
+        if reduce_fn == sum:
+            attn_outputs = torch.einsum('blnie->bie', head_outputs)
+            mlp_outputs = torch.einsum('blie->bie', mlp_outputs)
+        elif reduce_fn == torch.cat:
+            L = (torch.einsum('bli->l', mlp_mask) > 0).sum().item() \
+                if mlp_mask is not None and truncate_layers else len(outputs.mlp_outputs)
+            attn_outputs = rearrange(head_outputs[:, :L], '1 l n i e -> (l n) i e')
+            mlp_outputs = rearrange(mlp_outputs[:, :L], '1 l i e -> l i e')
+        output = reduce_fn([embed_output, attn_outputs, mlp_outputs]) # bie for sum, (1+(ln)+l)ie for cat
+    else:
+        assert reduce_fn == torch.cat
         L = (torch.einsum('bli->l', mlp_mask) > 0).sum().item() \
             if mlp_mask is not None and truncate_layers else len(outputs.mlp_outputs)
-        attn_outputs = rearrange(head_outputs[:, :L], '1 l n i e -> (l n) i e')
-        mlp_outputs = rearrange(mlp_outputs[:, :L], '1 l i e -> l i e')
-    output = reduce_fn([embed_output, attn_outputs, mlp_outputs]) # bie for sum, (1+(ln)+l)ie for cat
+        attn_outputs = rearrange(head_outputs[:, :L], '1 l n i e -> l n i e')
+        mlp_outputs = rearrange(mlp_outputs[:, :L], '1 l i e -> l 1 i e')
+        padded_embed_output = embed_output.new(*((L,) + embed_output.size())).zero_() # l1ie
+        padded_embed_output[0] = embed_output
+        output = torch.cat([attn_outputs, mlp_outputs, padded_embed_output], dim=1) # lnie,l1ie,l1ie->l(n+2)ie
 
     logits, loss = None, None
     if labels is not None:
@@ -453,6 +469,20 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         logits = model.lm_head(ln_output)
         loss = compute_loss(logits, labels, reduction=loss_reduction)
     return Outputs(hidden_states=(output,), logits=logits, loss=loss)
+
+def cat_attn_forward(block, cat_hidden_states, sum_hidden_states, mask=None, attn_labels=None, scaled=True):
+    hidden_states = torch.einsum('bnloi,loie->bnie', mask, cat_hidden_states) # o=n+2
+    # print(equal(hidden_states[-1:, 0], sum_hidden_states))  # bnie->1ie
+    hq, hk, hv = scaled_ln(block.ln_1, hidden_states, scaled=scaled), block.ln_1(sum_hidden_states), None
+    self = block.attn
+    assert self.q_proj.bias is None
+    wq = rearrange(block.attn.q_proj.weight, '(n d) e -> n e d', n=self.num_heads)
+    query = hq @ wq  # bnie,ned->bnid
+    attn_logits = attn_forward(block, query, hk, hv)[1]
+    loss = None
+    if attn_labels is not None:
+        loss = -torch.einsum('bnij->b', attn_logits.log_softmax(-1) * attn_labels)
+    return Outputs(hidden_states=(hidden_states), logits=attn_logits, loss=loss)
 
 def scaled_input(input, num_points, baseline=None, requires_grad=True):
     assert input.size(0) == 1
@@ -478,7 +508,8 @@ def compose_forward_fns(forward_fns, **kwargs):
         return -outputs.loss, outputs.logits
     return forward
 
-def attribute(forward_fn, model, x, post_forward_fn, num_points=20, batch_size=4):
+def _attribute(forward_fn, model, x, post_forward_fn=[], num_points=10, batch_size=None):
+    if batch_size is None: batch_size = num_points + 1
     if isinstance(post_forward_fn, (list, tuple)):
         post_forward_fn = compose_forward_fns(post_forward_fn, scaled=True)
     scaled_x, grad = {}, {}
@@ -493,6 +524,27 @@ def attribute(forward_fn, model, x, post_forward_fn, num_points=20, batch_size=4
         grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
         for j, key in enumerate(x.keys()):
             grad[key] += grad_[j].sum(dim=0, keepdim=True)
+    attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in x}
+    return attr, torch.cat(ys), logits
+
+def attribute(forward_fn, model, x, post_forward_fn=[], num_points=10, batch_size=11):
+    if batch_size is None: batch_size = num_points + 1
+    if isinstance(post_forward_fn, (list, tuple)):
+        post_forward_fn = compose_forward_fns(post_forward_fn, scaled=True)
+    scaled_x, grad = {}, {}
+    for key in x:
+        scaled_x[key] = scaled_input(x[key], num_points)
+        grad[key] = torch.zeros_like(x[key])
+    ys = []
+    for i in range(0, num_points, batch_size):
+        scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
+        o = forward_fn(model, **scaled_x_)
+        y, logits = post_forward_fn(model, o); ys.append(y)
+        # print(y)
+        grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
+        for j, key in enumerate(x.keys()):
+            # print( grad_[j].shape)
+            grad[key] += grad_[j].sum(dim=0, keepdim=True)
             # if i == 0: grad[key + '0'], grad[key + '1'] = grad_[j][0:1] * num_points, grad_[j][1:2] * num_points
             # print(key, 'grad', grad_[j].reshape(grad_[j].size(0), -1).sum(1)) # debug
     attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in x}
@@ -500,9 +552,11 @@ def attribute(forward_fn, model, x, post_forward_fn, num_points=20, batch_size=4
     # attr.update({key + '1': (grad[key + '1'] / num_points * x[key]).squeeze(0) for key in x})
 
     attn_attr = attr['attn_weights']
+    # print(attn_attr.shape)
     head_attr = torch.einsum('lnij->ln', attn_attr)
+    # print(attr['mlp_mask'].shape)
     mlp_attr = attr['mlp_mask'].sum(-1, keepdim=False) # li->l1
-
+    # print(mlp_attr.shape)
     # head_attr0 = torch.einsum('lnij->ln', attr['attn_weights0'])
     # mlp_attr0 = attr['mlp_mask0'].sum(-1, keepdim=False)
     # head_attr1 = torch.einsum('lnij->ln', attr['attn_weights1'])
@@ -882,26 +936,26 @@ def gen_detach_heads_tuples(module, exit_module, kept_layer, kept_head):
 #     return embs if values[0] is None else outputs
 
 
-def test(hidden, query, key=None, logits=None, always_show=False):
-    if logits is None:
-        if key is None:
-            key = self.k_proj(hidden)
-            key = self._split_heads(key, self.num_heads, self.head_dim)[0, head2]
-        logits = (query * key).sum(dim=-1)
-    else:
-        always_show = True
-    cand_pos = torch.LongTensor(cand_positions).view(-1, n_candidates)
-    is_extremal = [logits[p] == logits[cand_pos[i]].max() for i, p in enumerate(tgt_positions)]
-    if always_show or sum(is_extremal[1:]) / len(tgt_positions[1:]) > 0.9:
-        logits[0] = logits[1]
-        plot(logits)
-        _ = plt.xticks(range(len(logits)), tokens)
-        for p, b in zip(tgt_positions, is_extremal): plt.axvline(x=p, color='gray' if b else 'r')
-        plt.show()
-        probs = logits[cand_positions].view(-1, n_candidates).softmax(-1)[cand_is_tgt]
-        print(numpy(probs), '\n', probs.mean())
-        return True
-    return False 
+# def test(hidden, query, key=None, logits=None, always_show=False):
+#     if logits is None:
+#         if key is None:
+#             key = self.k_proj(hidden)
+#             key = self._split_heads(key, self.num_heads, self.head_dim)[0, head2]
+#         logits = (query * key).sum(dim=-1)
+#     else:
+#         always_show = True
+#     cand_pos = torch.LongTensor(cand_positions).view(-1, n_candidates)
+#     is_extremal = [logits[p] == logits[cand_pos[i]].max() for i, p in enumerate(tgt_positions)]
+#     if always_show or sum(is_extremal[1:]) / len(tgt_positions[1:]) > 0.9:
+#         logits[0] = logits[1]
+#         plot(logits)
+#         _ = plt.xticks(range(len(logits)), tokens)
+#         for p, b in zip(tgt_positions, is_extremal): plt.axvline(x=p, color='gray' if b else 'r')
+#         plt.show()
+#         probs = logits[cand_positions].view(-1, n_candidates).softmax(-1)[cand_is_tgt]
+#         print(numpy(probs), '\n', probs.mean())
+#         return True
+#     return False 
 
 
 def plot_tgt_attn_losses(labels, losses, losses1):

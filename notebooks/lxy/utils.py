@@ -13,6 +13,59 @@ def get_examples_middle_end(k):
         ans.append(stringss)
     return ans
 
+def get_examples_behind(k):
+    sets = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
+    ans = []
+    for j in range(k):
+        stringss =''
+        for i in range(8):
+            listss = random.sample(sets,3)
+            index = random.randint(0, 2)
+            listss.insert(index,'*')
+            stringss += ' ' + ' '.join(listss)+' -> '+listss[index+1]+'\n'
+        ans.append(stringss)
+    return ans
+
+def get_examples_before(k):
+    sets = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
+    ans = []
+    for j in range(k):
+        stringss =''
+        for i in range(8):
+            listss = random.sample(sets,3)
+            index = random.randint(1, 3)
+            # index = random.sample([1,2,3],1)[0]
+            listss.insert(index,'*')
+            stringss += ' ' + ' '.join(listss)+' -> '+listss[index-1]+'\n'
+        ans.append(stringss)
+    return ans
+
+def get_examples_query_before(k):
+    sets = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
+    ans = []
+    for j in range(k):
+        stringss =''
+        for i in range(8):
+            listss = random.sample(sets,4)
+            index = random.randint(1, 3)
+            stringss += ' ' + ' '.join(listss)+' , '+listss[index] + ' -> '+listss[index-1]+'\n'
+        ans.append(stringss)
+    return ans
+
+def get_examples_query_chaji(k):
+    sets = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
+    ans = []
+    for j in range(k):
+        stringss =''
+        for i in range(8):
+            listss = random.sample(sets,3)
+            temp = random.sample(listss,2)
+            stringss += ' ' + ' '.join(listss)+' , '+' '.join(temp) + ' -> '+ list(set(listss) - set(temp))[0]+'\n'
+        ans.append(stringss)
+    return ans
+
+
+
 def get_exmaples_number_English(k):
     sets = {}
     

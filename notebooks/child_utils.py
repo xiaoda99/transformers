@@ -6,7 +6,7 @@ from random import choice, choices, shuffle, sample, randint
 
 from transformers import GPT2Tokenizer
 cache_dir = '/nas/xd/.cache/torch/transformers/'
-_tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
+# _tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
 
 digits = list(string.digits[1:])
 cardinals = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
@@ -14,9 +14,9 @@ ordinals = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', '
 digit2cardinal = OrderedDict(zip(digits, cardinals))
 digit2ordinal = OrderedDict(zip(digits, ordinals))
 
-uppercases = [l for l in string.ascii_uppercase if len(_tokenizer.tokenize('%s %s' % (l*2, l*2))) == 2]
-lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
-full_vocab = uppercases + digits
+# uppercases = [l for l in string.ascii_uppercase if len(_tokenizer.tokenize('%s %s' % (l*2, l*2))) == 2]
+# lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
+# full_vocab = uppercases + digits
 
 noun2adj = [  # The adjective form of x is y
     ('rain','rainy'),
@@ -65,7 +65,7 @@ verb_form =[
     ('forget','forgot'),
     ('leave','left'),
     ('are','were'),
-    ('begin','gegan'),
+    ('begin','began'),
     ('stand','stood'),
     ('take','took'),
     ('have','had'),
@@ -79,7 +79,7 @@ verb_form =[
 antonyms = [
     ('big', 'small'),
     ('long', 'short'),
-    ('fat', 'thin'),
+    ('thick', 'thin'),
     ('tall', 'short'),
     ('strong', 'weak'),
     ('high', 'low'),
@@ -125,7 +125,7 @@ capabilities = [ # A x can y.
     ('knife', 'cut'),
     # ('computer', 'calculate'),
     ('phone', 'call'),
-    ('TV', 'show'),
+    ('TV', 'watch'),  # show
     ('car', 'drive'),
     ('printer', 'print'),
     ('pen', 'write'),
@@ -166,7 +166,7 @@ en2fr = [
     ('apple', 'pomme'),
     ('cat', 'chat'),
     ('banana', 'banane'),
-    ('watermelon', 'pastèque'),
+    # ('watermelon', 'pastèque'),
     ('morning', 'matin'),
     ('butter', 'beurre'),
     ('cheese', 'fromage'),
