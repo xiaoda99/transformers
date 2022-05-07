@@ -471,13 +471,17 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     return Outputs(hidden_states=(output,), logits=logits, loss=loss)
 
 def cat_attn_forward(block, cat_hidden_states, sum_hidden_states, mask=None, attn_labels=None, scaled=True):
-    hidden_states = torch.einsum('bnloi,loie->bnie', mask, cat_hidden_states) # o=n+2
+    # cat_hidden_states = special_head_outputs  sie
+    cat_hidden_states = torch.cat([sum_hidden_states - cat_hidden_states.sum(0), cat_hidden_states]) # cat(1ie - sie->ie, sie) -> (1+s)ie
+    hidden_states = torch.einsum('bnpi,pie->bnie', mask, cat_hidden_states) # p=1+s
+
+    # hidden_states = torch.einsum('bnloi,loie->bnie', mask, cat_hidden_states) # o=n+2
     # print(equal(hidden_states[-1:, 0], sum_hidden_states))  # bnie->1ie
     hq, hk, hv = scaled_ln(block.ln_1, hidden_states, scaled=scaled), block.ln_1(sum_hidden_states), None
     self = block.attn
     assert self.q_proj.bias is None
     wq = rearrange(block.attn.q_proj.weight, '(n d) e -> n e d', n=self.num_heads)
-    query = hq @ wq  # bnie,ned->bnid
+    query = hq @ wq  # bnie,ned->bnid, the most important line
     attn_logits = attn_forward(block, query, hk, hv)[1]
     loss = None
     if attn_labels is not None:
@@ -823,7 +827,7 @@ def get_scale_fn(factor=0):
     def scale(hidden): return hidden * factor
     return scale
 
-def plot_attn(attn, tokens, annot=False, figsize=(10, 10), ax=None):
+def plot_attn(attn, tokens, annot=False, figsize=(15, 15), ax=None):
     if ax is None: plt.figure(figsize=figsize)
     res = sns.heatmap(numpy(attn), square=True, cbar=False, annot=annot, fmt='d', linewidths=0.1, linecolor='grey', 
                       xticklabels=tokens, yticklabels=tokens, ax=ax)
