@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 from collections import defaultdict, OrderedDict, Counter
 import string
 from random import choice, choices, shuffle, sample, randint
@@ -211,6 +212,33 @@ country2capital = [ #The capital of Germany is Berlin.
     ('Greece', 'Athens'),
 ]
 
+grammar_correction = [
+    ('Anna and Mike is going skiing.', 'Anna and Mike are going skiing.'),
+    ('Anna and Pat are married; he has been together for 20 years.', 'Anna and Pat are married; they have been together for 20 years.'),
+    ('I walk to the store and I bought milk.', 'I walked to the store and I bought milk.'),
+    ('We all eat the fish and then made dessert.', 'We all ate the fish and then made dessert.'),
+    ('Today I have went to the store to to buys some many bottle of water.', 'Today I went to the store to buy some bottles of water.'),
+    ('I eated the purple berries.', 'I ate the purple berries.'),
+    ('The patient was died.', 'The patient died.'),
+    ('We think that Leslie likes ourselves.', 'We think that Leslie likes us.'),
+    ('I have tried to hit ball with bat, but my swing is has miss.', 'I have tried to hit the ball with the bat, but my swing has missed.'),
+]
+
+drop_first_and_last = [
+    ('4, 5, 0, 0', '5, 0'),
+    ('3, 8, 3, 8, 3', '8, 3, 8'),
+    ('4, 9, 4, 9, 4, 9, 9, 9, 9, 9', '9, 4, 9, 4, 9, 9, 9, 9'),
+    ('5, 7, 7, 9, 8, 1, 4, 0, 6', '7, 7, 9, 8, 1, 4, 0'),
+    ('2, 1, 1, 2, 2, 7, 2, 7', '1, 1, 2, 2, 7, 2'),
+]
+
+remove_two = [
+    ('8, 0, 5, 12, 0, 2', '8, 5, 12, 2'),
+    ('8, 19, 7, 8, 8, 8, 7, 7, 7, 7', '19'),
+    ('0, 1, 18, 9, 9, 0, 15, 6, 1', '18, 15, 6'),
+    ('0, 17, 4, 8, 4, 10, 1', '0, 17, 8, 10, 1'),
+]
+
 def inc(token):
     assert len(token) == 1 or token in ['->'], token
     if token.isalpha(): return chr(ord(token) + 1)
@@ -271,6 +299,273 @@ inverse_fns = {
     double.__name__: single, x10.__name__: d10,
     to_cardinal.__name__: to_digit, to_ordinal.__name__: to_digit}
 inverse_fns.keys()
+
+
+from type import * 
+
+class Task(object):
+    def __init__(self, name, request, examples, features=None, cache=False):
+        '''request: the type of this task
+        examples: list of tuples of (input, output). input should be a tuple, with one entry for each argument
+        cache: should program evaluations be cached?
+        features: list of floats.'''
+        self.cache = cache
+        self.features = features
+        self.request = request
+        self.name = name
+        self.examples = examples
+        if len(self.examples) > 0:
+            assert all(len(xs) == len(examples[0][0])
+                       for xs, _ in examples), \
+                "(for task %s) FATAL: Number of arguments varies." % name
+
+    def __str__(self):
+        if self.supervision is None:
+            return self.name
+        else:
+            return self.name + " (%s)"%self.supervision
+
+    def __repr__(self):
+        return "Task(name={self.name}, request={self.request}, examples={self.examples}"\
+            .format(self=self)
+
+    def __eq__(self, o): return self.name == o.name
+
+    def __ne__(self, o): return not (self == o)
+
+    def __hash__(self): return hash(self.name)
+
+    def describe(self):
+        description = ["%s : %s" % (self.name, self.request)]
+        for xs, y in self.examples:
+            if len(xs) == 1:
+                description.append("f(%s) = %s" % (xs[0], y))
+            else:
+                description.append("f%s = %s" % (xs, y))
+        return "\n".join(description)
+
+    def predict(self, f, x):
+        for a in x:
+            f = f(a)
+        return f
+
+    @property
+    def supervision(self):
+        if not hasattr(self, 'supervisedSolution'): return None
+        return self.supervisedSolution
+
+    def check(self, e, timeout=None):
+        if timeout is not None:
+            def timeoutCallBack(_1, _2): raise EvaluationTimeout()
+        try:
+            signal.signal(signal.SIGVTALRM, timeoutCallBack)
+            signal.setitimer(signal.ITIMER_VIRTUAL, timeout)
+
+            try:
+                f = e.evaluate([])
+            except IndexError:
+                # free variable
+                return False
+            except Exception as e:
+                eprint("Exception during evaluation:", e)
+                return False
+
+            for x, y in self.examples:
+                if self.cache and (x, e) in EVALUATIONTABLE:
+                    p = EVALUATIONTABLE[(x, e)]
+                else:
+                    try:
+                        p = self.predict(f, x)
+                    except BaseException:
+                        p = None
+                    if self.cache:
+                        EVALUATIONTABLE[(x, e)] = p
+                if p != y:
+                    if timeout is not None:
+                        signal.signal(signal.SIGVTALRM, lambda *_: None)
+                        signal.setitimer(signal.ITIMER_VIRTUAL, 0)
+                    return False
+
+            return True
+        # except e:
+            # eprint(e)
+            # assert(False)
+        except EvaluationTimeout:
+            eprint("Timed out while evaluating", e)
+            return False
+        finally:
+            if timeout is not None:
+                signal.signal(signal.SIGVTALRM, lambda *_: None)
+                signal.setitimer(signal.ITIMER_VIRTUAL, 0)
+
+    def logLikelihood(self, e, timeout=None):
+        if self.check(e, timeout):
+            return 0.0
+        else:
+            return NEGATIVEINFINITY
+
+    @staticmethod
+    def featureMeanAndStandardDeviation(tasks):
+        dimension = len(tasks[0].features)
+        averages = [sum(t.features[j] for t in tasks) / float(len(tasks))
+                    for j in range(dimension)]
+        variances = [sum((t.features[j] -
+                          averages[j])**2 for t in tasks) /
+                     float(len(tasks)) for j in range(dimension)]
+        standardDeviations = [v**0.5 for v in variances]
+        for j, s in enumerate(standardDeviations):
+            if s == 0.:
+                eprint(
+                    "WARNING: Feature %d is always %f" %
+                    (j + 1, averages[j]))
+        return averages, standardDeviations
+
+    def as_json_dict(self):
+        return {
+            "name": self.name,
+            "request": str(self.request),
+            "examples": [{"inputs": x, "output": y} for x, y in self.examples]
+        }
+
+def lcs(u, v):
+    # t[(n,m)] = length of longest common string ending at first
+    # n elements of u & first m elements of v
+    t = {}
+
+    for n in range(len(u) + 1):
+        for m in range(len(v) + 1):
+            if m == 0 or n == 0:
+                t[(n, m)] = 0
+                continue
+
+            if u[n - 1] == v[m - 1]:
+                t[(n, m)] = 1 + t[(n - 1, m - 1)]
+            else:
+                t[(n, m)] = 0
+    l, n, m = max((l, n, m) for (n, m), l in t.items())
+    return u[n - l:n]
+    
+def guessConstantStrings(task):
+    if task.request.returns() == tlist(tcharacter):
+        examples = task.examples
+        guesses = {}
+        N = 10
+        T = 2
+        for n in range(min(N, len(examples))):
+            for m in range(n + 1, min(N, len(examples))):
+                y1 = examples[n][1]
+                y2 = examples[m][1]
+                l = ''.join(lcs(y1, y2))
+                if len(l) > 2:
+                    guesses[l] = guesses.get(l, 0) + 1
+
+        task.stringConstants = [g for g, f in guesses.items()
+                                if f >= T]
+    else:
+        task.stringConstants = []
+                    
+
+    task.BIC = 1.
+    task.maxParameters = 1
+
+    task.specialTask = ("stringConstant",
+                        {"maxParameters": task.maxParameters,
+                         "stringConstants": task.stringConstants})
+
+def loadPBETasks(directory="PBE_Strings_Track"):
+    """
+    Processes sygus benchmarks into task objects
+    For these benchmarks, all of the constant strings are given to us.
+    In a sense this is cheating
+    Returns (tasksWithoutCheating, tasksWithCheating).
+    NB: Results in paper are done without "cheating"
+    """
+    import os
+    from sexpdata import loads, Symbol
+
+    def findStrings(s):
+        if isinstance(s, list):
+            return [y
+                    for x in s
+                    for y in findStrings(x)]
+        if isinstance(s, str):
+            return [s]
+        return []
+
+    def explode(s):
+        return [c for c in s]
+
+    tasks = []
+    cheatingTasks = []
+    for f in os.listdir(directory):
+        if not f.endswith('.sl'):
+            continue
+        with open(directory + "/" + f, "r") as handle:
+            message = "(%s)" % (handle.read())
+
+        expression = loads(message)
+
+        constants = []
+        name = f
+        examples = []
+        declarative = False
+        for e in expression:
+            if len(e) == 0:
+                continue
+            if e[0] == Symbol('constraint'):
+                e = e[1]
+                assert e[0] == Symbol('=')
+                inputs = e[1]
+                assert inputs[0] == Symbol('f')
+                inputs = inputs[1:]
+                output = e[2]
+                examples.append((inputs, output))
+            elif e[0] == Symbol('synth-fun'):
+                if e[1] == Symbol('f'):
+                    constants += findStrings(e)
+                else:
+                    declarative = True
+                    break
+        if declarative: continue
+        
+        examples = list({(tuple(xs), y) for xs, y in examples})
+
+        task = Task(name, arrow(*[tstr] * (len(examples[0][0]) + 1)),
+                    [(tuple(map(explode, xs)), explode(y))
+                     for xs, y in examples])
+        cheat = task
+
+        tasks.append(task)
+        cheatingTasks.append(cheat)
+
+    for p in tasks:
+        guessConstantStrings(p)
+    return tasks, cheatingTasks
+
+def retrieveJSONTasks(filename, features=False):
+    """
+    For JSON of the form:
+        {"name": str,
+         "type": {"input" : bool|int|list-of-bool|list-of-int,
+                  "output": bool|int|list-of-bool|list-of-int},
+         "examples": [{"i": data, "o": data}]}
+    """
+    with open(filename, "r") as f:
+        loaded = json.load(f)
+    TP = {
+        "bool": tbool,
+        "int": tint,
+        "list-of-bool": tlist(tbool),
+        "list-of-int": tlist(tint),
+    }
+    return [Task(
+        item["name"],
+        arrow(TP[item["type"]["input"]], TP[item["type"]["output"]]),
+        [((ex["i"],), ex["o"]) for ex in item["examples"]],
+        features=(None if not features else list_features(
+            [((ex["i"],), ex["o"]) for ex in item["examples"]])),
+        cache=False,
+    ) for item in loaded]
 
 '''
 vocab = list(string.ascii_uppercase) #+ ['_'] * 16

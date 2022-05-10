@@ -114,7 +114,7 @@ def scaled_ln_wrapper(ln): return lambda x: scaled_ln(ln, x)
 
 def embed_forward(transformer, inputs, output_embeds=True): # gptneo
     self = transformer
-    input_ids = inputs.input_ids
+    input_ids = inputs if isinstance(inputs, torch.Tensor) else inputs.input_ids
     input_shape = input_ids.size()
     device = input_ids.device
     position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
@@ -209,7 +209,7 @@ def restore_heads(self):
 
 def trim_heads(self, kept_heads):
     for proj_name in ['q_proj', 'k_proj', 'v_proj', 'out_proj']:
-        assert getattr(self, proj_name).bias is None
+        # assert getattr(self, proj_name).bias is None #lxy，报错
         weight = getattr(self, proj_name).weight
         if proj_name == 'out_proj':
             patterns = ['e (n d) -> n d e', 'n d e -> e (n d)']
@@ -217,7 +217,7 @@ def trim_heads(self, kept_heads):
         else:
             patterns = ['(n d) e -> n d e', 'n d e -> (n d) e']
             size = (self.embed_dim, self.head_dim * len(kept_heads))
-        weight = rearrange(weight, patterns[0], n=self.num_heads)[kept_heads]
+        weight = rearrange(weight, patterns[0], n=self.num_heads)[kept_heads] #[kept_heads,head_dim,embed_dim]
         weight = rearrange(weight, patterns[1])
         proj = nn.Linear(*size, bias=False)
         proj.weight = nn.Parameter(weight)
@@ -543,6 +543,7 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=10, batch_siz
     for i in range(0, num_points, batch_size):
         scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
         o = forward_fn(model, **scaled_x_)
+        # print(o.)
         y, logits = post_forward_fn(model, o); ys.append(y)
         # print(y)
         grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
@@ -559,13 +560,14 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=10, batch_siz
     # print(attn_attr.shape)
     head_attr = torch.einsum('lnij->ln', attn_attr)
     # print(attr['mlp_mask'].shape)
-    mlp_attr = attr['mlp_mask'].sum(-1, keepdim=False) # li->l1
+    mlp_attr = attr['mlp_mask'].sum(-1, keepdim=False) # li->l
+    emb_attr = attr['embed_mask'].sum(-1, keepdim=True) # i->1
     # print(mlp_attr.shape)
     # head_attr0 = torch.einsum('lnij->ln', attr['attn_weights0'])
     # mlp_attr0 = attr['mlp_mask0'].sum(-1, keepdim=False)
     # head_attr1 = torch.einsum('lnij->ln', attr['attn_weights1'])
     # mlp_attr1 = attr['mlp_mask1'].sum(-1, keepdim=False)
-    attr = Attributions(attn=attn_attr, head=head_attr, mlp=mlp_attr)
+    attr = Attributions(attn=attn_attr, head=head_attr, mlp=mlp_attr, embed = emb_attr)
     # attr0 = Attributions(head=head_attr0, mlp=mlp_attr0)
     # attr1 = Attributions(head=head_attr1, mlp=mlp_attr1)
     return attr, torch.cat(ys), logits
@@ -581,7 +583,7 @@ def attribute2(forward_fn, model, x, post_forward_fn):
     # assert (y.size(0) - 1) % (H + 1) == 0
     # to_layer = (y.size(0) - 1) // (H + 1) # by solving equation b = 1 + ln + l
     # assert to_layer == (torch.einsum('blni->l', x['head_mask']) > 0).sum().item()
-    embed_attr = y[:1].view(1, 1)
+    embed_attr = y[:1].view(1)
     head_attr = y[1: 1 + L * H].view(L, H)  # ln
     mlp_attr = y[1 + L * H:]#.view(L, 1)  # l1
     return Attributions(embed=embed_attr, head=head_attr, mlp=mlp_attr)
@@ -617,8 +619,8 @@ def get_x(key, outputs, to_layer=None):
 
 def plot_attr(attr, attr2):
     fig, axs = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(12, 4))
-    def concat_attrs(head_attr, mlp_attr): return torch.cat([head_attr, einops.repeat(mlp_attr, 'l -> l 3')], dim=1)
-    for ax, a in zip(axs, [concat_attrs(attr.head, attr.mlp), concat_attrs(attr2.head, attr2.mlp)]):
+    def concat_attrs(head_attr, mlp_attr, embed_attr): return torch.cat([head_attr, einops.repeat(mlp_attr, 'l -> l 3'), einops.repeat(embed_attr, '1 -> l 3', l = head_attr.size(0))], dim=1)
+    for ax, a in zip(axs, [concat_attrs(attr.head, attr.mlp, attr.embed), concat_attrs(attr2.head, attr2.mlp, attr2.embed)]):
         res = sns.heatmap(a, cbar=True, ax=ax)
         _ = res.set_yticklabels(res.get_ymajorticklabels(), rotation=0)
         res.tick_params(top=False, right=True, labeltop=False, labelright=True)
@@ -687,6 +689,8 @@ def compute_eigv_positivity(model, L, H):
             eigv_positivity_ov[layer, head, 0] = plot_eigv(eig_ov, plot=False)
             eigv_positivity_qk[layer, head, 1] = plot_eigv(eig_qk, plot=False)
     return eigv_positivity_ov, eigv_positivity_qk
+
+def _get_affinities(w1, w2): return (w1 @ w2).norm(dim=(-2,-1)) / w1.norm(dim=(-2,-1))  # mnde,ed->mndd->mn
 
 def _get_affinities3(w1, w2, w3, chunks=8):  # not faster
     assert w2.size(0) == 1, str(w2.size())

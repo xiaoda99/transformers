@@ -18,7 +18,7 @@ def get_examples_behind(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
+        for i in range(16):
             listss = random.sample(sets,3)
             index = random.randint(0, 2)
             listss.insert(index,'*')
@@ -45,10 +45,22 @@ def get_examples_query_before(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
-            listss = random.sample(sets,4)
-            index = random.randint(1, 3)
+        for i in range(12):
+            listss = random.sample(sets,8)
+            index = random.randint(1, 7)
             stringss += ' ' + ' '.join(listss)+' , '+listss[index] + ' -> '+listss[index-1]+'\n'
+        ans.append(stringss)
+    return ans
+
+def get_examples_query_behid(k):
+    sets = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
+    ans = []
+    for j in range(k):
+        stringss =''
+        for i in range(12):
+            listss = random.sample(sets,4)
+            index = random.randint(0, 2)
+            stringss += ' ' + ' '.join(listss)+' , '+listss[index] + ' -> '+listss[index+1]+'\n'
         ans.append(stringss)
     return ans
 
@@ -63,6 +75,7 @@ def get_examples_query_chaji(k):
             stringss += ' ' + ' '.join(listss)+' , '+' '.join(temp) + ' -> '+ list(set(listss) - set(temp))[0]+'\n'
         ans.append(stringss)
     return ans
+
 
 def get_examples_query_repeat(k):
     sets = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
@@ -140,7 +153,7 @@ def get_exmaples_English_English_reverse(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
+        for i in range(12):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + sets[listss[0]] + ' -> ' + listss[0] + '\n'
         ans.append(stringss)
@@ -157,7 +170,7 @@ def get_exmaples_number_first(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
+        for i in range(16):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + listss[0] + ' -> ' + sets[listss[0]] + '\n'
         ans.append(stringss)
@@ -172,7 +185,7 @@ def get_exmaples_number_first_reverse(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
+        for i in range(12):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + sets[listss[0]] + ' -> ' + listss[0] + '\n'
         ans.append(stringss)
@@ -285,7 +298,7 @@ def get_exmaples_verb_form_reverse(k):
     ans = []
     for j in range(k):
         stringss =''
-        listss = random.sample(verb_form,8)
+        listss = random.sample(verb_form,12)
         for key,value in listss:
             stringss += ' ' + value + ' -> ' + key + '\n'
         ans.append(stringss)
@@ -322,7 +335,7 @@ def get_exmaples_noun2adj_reverse(k):
     ans = []
     for j in range(k):
         stringss =''
-        listss = random.sample(noun2adj,8)
+        listss = random.sample(noun2adj,12)
         for key,value in listss:
             stringss += ' ' + value + ' -> ' + key + '\n'
         ans.append(stringss)
