@@ -18,7 +18,7 @@ def get_examples_behind(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(16):
+        for i in range(8):
             listss = random.sample(sets,3)
             index = random.randint(0, 2)
             listss.insert(index,'*')
@@ -45,9 +45,9 @@ def get_examples_query_before(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(12):
-            listss = random.sample(sets,8)
-            index = random.randint(1, 7)
+        for i in range(8):
+            listss = random.sample(sets,4)
+            index = random.randint(1, 3)
             stringss += ' ' + ' '.join(listss)+' , '+listss[index] + ' -> '+listss[index-1]+'\n'
         ans.append(stringss)
     return ans
@@ -153,7 +153,7 @@ def get_exmaples_English_English_reverse(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(12):
+        for i in range(8):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + sets[listss[0]] + ' -> ' + listss[0] + '\n'
         ans.append(stringss)
@@ -170,7 +170,7 @@ def get_exmaples_number_first(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(16):
+        for i in range(8):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + listss[0] + ' -> ' + sets[listss[0]] + '\n'
         ans.append(stringss)
@@ -185,7 +185,7 @@ def get_exmaples_number_first_reverse(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(12):
+        for i in range(8):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + sets[listss[0]] + ' -> ' + listss[0] + '\n'
         ans.append(stringss)
@@ -501,6 +501,54 @@ def get_examples_isA(k):
 
 from captum.attr import visualization as viz
 
+
+country2capital = [ #The capital of Germany is Berlin.
+    ('Germany', 'Berlin'),
+    ('France', 'Paris'),
+    ('China', 'Beijing'),
+    ('the United States', 'Washington, D.C'),
+    ('Italy', 'Rome'),
+    ('Japan', 'Tokyo'),
+    ('Russia', 'Moscow'),
+    ('Spain', 'Madrid'),
+    ('the United Kingdom', 'London'),
+    ('Canada', 'Ottawa'),
+    ('India', 'New Delhi'),
+    ('Australia', 'Canberra'),
+    ('Brazil', 'Brasília'),
+    ('Mexico', 'Mexico City'),
+    ('South Africa', 'Pretoria'),
+    ('Egypt', 'Cairo'),
+    ('Kenya', 'Nairobi'),
+    ('Korea', 'Seoul'),
+    ('the Philippines', 'Manila'),
+    ('Portugal', 'Lisbon'),
+    ('Switzerland', 'Bern'),
+    ('Thailand', 'Bangkok'),
+    ('Turkey', 'Ankara'),
+    ('Spain', 'Madrid'),
+    ('Greece', 'Athens'),
+]
+
+def get_exmaples_country2capital(k):
+    ans = []
+    for j in range(k):
+        stringss =''
+        listss = random.sample(country2capital,8)
+        for key,value in listss:
+            stringss += ' '+ key + ' -> ' + value + '\n'
+        ans.append(stringss)
+    return ans
+
+def get_exmaples_country2capital_reverse(k):
+    ans = []
+    for j in range(k):
+        stringss =''
+        listss = random.sample(country2capital,8)
+        for key,value in listss:
+            stringss += ' '+ value + ' -> ' + key + '\n'
+        ans.append(stringss)
+    return ans
 if __name__ == '__main__':
     get_exmaples_number_English(8)
         
