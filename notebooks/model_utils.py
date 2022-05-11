@@ -670,10 +670,12 @@ def plot_eigv(w, start_i=1, end_i=None, alpha=0.1, plot=True):
         plt.plot(x[start_i: end_i], y[start_i: end_i], '.', alpha=alpha)
     return eigv_positivity.item()
 
+def get_eigv_pos(m): return plot_eigv(m.eig()[0], plot=False)
+
 def compute_eigv_positivity(model, L, H):
-    eigv_positivity_ov = torch.zeros((L, H, 2)) 
-    # eigv_positivity_ov = torch.zeros((L, H)) 
-    # eigv_positivity_qk = torch.zeros((L, H))
+    # eigv_positivity_ov = torch.zeros((L, H, 2)) 
+    eigv_positivity_ov = torch.zeros((L, H)) 
+    eigv_positivity_qk = torch.zeros((L, H))
     for layer in tqdm(range(L)):
         for head in range(H):
             wqT, wkT, wvT, woT = get_head_weights(model, layer, head, transpose=True)
@@ -684,13 +686,27 @@ def compute_eigv_positivity(model, L, H):
             eig_ov = (B @ A).eig()[0]
             q, k = (e @ wqT), (e @ wkT).T
             eig_qk = (k @ q).eig()[0]
-            # eigv_positivity_ov[layer, head] = plot_eigv(eig_ov, plot=False)
-            # eigv_positivity_qk[layer, head] = plot_eigv(eig_qk, plot=False)
-            eigv_positivity_ov[layer, head, 0] = plot_eigv(eig_ov, plot=False)
-            eigv_positivity_qk[layer, head, 1] = plot_eigv(eig_qk, plot=False)
+            eigv_positivity_ov[layer, head] = plot_eigv(eig_ov, plot=False)
+            eigv_positivity_qk[layer, head] = plot_eigv(eig_qk, plot=False)
+            # eigv_positivity_ov[layer, head, 0] = plot_eigv(eig_ov, plot=False)
+            # eigv_positivity_ov[layer, head, 1] = plot_eigv(eig_qk, plot=False)
     return eigv_positivity_ov, eigv_positivity_qk
 
+def get_affinities(w1, w2):
+    pattern = 'mce,ned->mncd'
+    if w1.ndim == 4: pattern = 'p' + pattern
+    a = torch.einsum(pattern, w1, w2).norm(dim=(-2,-1))
+    return a, a / torch.einsum('m,n', w1.norm(dim=(-2,-1)), w2.norm(dim=(-2,-1)))
+
 def _get_affinities(w1, w2): return (w1 @ w2).norm(dim=(-2,-1)) / w1.norm(dim=(-2,-1))  # mnde,ed->mndd->mn
+
+def get_affinities3(w1, w2, w3):
+    a = torch.einsum('mce,nef->mncf', w1, w2)
+    # m = torch.einsum('mnce,oed->mnocd', a, w3) # very subtle bug! Result is wrong when o=m! Don't know why!
+    # a = m.norm(dim=(-2,-1)) # mnodd->mno
+    a = rearrange([(a @ w).norm(dim=(-2, -1))  # mnce,ed->mncd->mn
+        for w in w3], 'o m n -> m n o')   # Result is right. Also more mem efficient
+    return a, a / torch.einsum('m,n,o->mno', w1.norm(dim=(-2,-1)), w2.norm(dim=(-2,-1)), w3.norm(dim=(-2,-1)))
 
 def _get_affinities3(w1, w2, w3, chunks=8):  # not faster
     assert w2.size(0) == 1, str(w2.size())
