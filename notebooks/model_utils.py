@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from functools import partial
 import matplotlib.pyplot as plt
 import seaborn as sns
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -425,7 +426,7 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
         embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, 
-        reduce_fn=sum, truncate_layers=False, scaled=True, reshape=False):
+        reduce_fn=sum, truncate_layers=False, scaled=True, reshape=False, output_layers=None):
     embed_output = outputs.hidden_states[0]
     if embed_mask is not None: embed_output = einsum('bie,bi->bie', embed_output, embed_mask)
 
@@ -443,7 +444,23 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     if mlp_mask is not None:
         # print('in sm_forward, mlp_outputs.size(), mlp_mask.size() =', mlp_outputs.size(), mlp_mask.size())
         mlp_outputs = einsum('blie,bli->blie', mlp_outputs, mlp_mask)
-    if not reshape:
+    if reshape:
+        assert reduce_fn == torch.cat
+        L = (torch.einsum('bli->l', mlp_mask) > 0).sum().item() \
+            if mlp_mask is not None and truncate_layers else len(outputs.mlp_outputs)
+        attn_outputs = rearrange(head_outputs[:, :L], '1 l n i e -> l n i e')
+        mlp_outputs = rearrange(mlp_outputs[:, :L], '1 l i e -> l 1 i e')
+        padded_embed_output = embed_output.new(*((L,) + embed_output.size())).zero_() # l1ie
+        padded_embed_output[0] = embed_output
+        output = torch.cat([attn_outputs, mlp_outputs, padded_embed_output], dim=1) # lnie,l1ie,l1ie->l(n+2)ie
+    elif output_layers is not None:
+        assert reduce_fn == torch.sum
+        output = []
+        for l in output_layers:
+            attn_outputs = torch.einsum('blnie->bie', head_outputs[:, :l])
+            mlp_outputs = torch.einsum('blie->bie', mlp_outputs[:, :l])
+            output.append(reduce_fn([embed_output, attn_outputs, mlp_outputs])) # bie
+    else:
         if reduce_fn == sum:
             attn_outputs = torch.einsum('blnie->bie', head_outputs)
             mlp_outputs = torch.einsum('blie->bie', mlp_outputs)
@@ -453,15 +470,6 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
             attn_outputs = rearrange(head_outputs[:, :L], '1 l n i e -> (l n) i e')
             mlp_outputs = rearrange(mlp_outputs[:, :L], '1 l i e -> l i e')
         output = reduce_fn([embed_output, attn_outputs, mlp_outputs]) # bie for sum, (1+(ln)+l)ie for cat
-    else:
-        assert reduce_fn == torch.cat
-        L = (torch.einsum('bli->l', mlp_mask) > 0).sum().item() \
-            if mlp_mask is not None and truncate_layers else len(outputs.mlp_outputs)
-        attn_outputs = rearrange(head_outputs[:, :L], '1 l n i e -> l n i e')
-        mlp_outputs = rearrange(mlp_outputs[:, :L], '1 l i e -> l 1 i e')
-        padded_embed_output = embed_output.new(*((L,) + embed_output.size())).zero_() # l1ie
-        padded_embed_output[0] = embed_output
-        output = torch.cat([attn_outputs, mlp_outputs, padded_embed_output], dim=1) # lnie,l1ie,l1ie->l(n+2)ie
 
     logits, loss = None, None
     if labels is not None:
@@ -673,18 +681,21 @@ def plot_eigv(w, start_i=1, end_i=None, alpha=0.1, plot=True):
 def get_eigv_pos(m): return plot_eigv(m.eig()[0], plot=False)
 
 def compute_eigv_positivity(model, L, H):
+    we = model.transformer.wte.weight.data.t()
+    wu = model.lm_head.weight.data
+    _e = mlp_forward(model.transformer.h[0], we.T) + we.T
+
     # eigv_positivity_ov = torch.zeros((L, H, 2)) 
     eigv_positivity_ov = torch.zeros((L, H)) 
     eigv_positivity_qk = torch.zeros((L, H))
     for layer in tqdm(range(L)):
+        e = model.transformer.h[layer].ln_1(_e)
         for head in range(H):
-            wqT, wkT, wvT, woT = get_head_weights(model, layer, head, transpose=True)
-            wo = woT.T
-            e = model.transformer.h[layer].ln_1(_e)
-            # A, B = _wu, ln_f(e @ wvT @ woT).T
-            A, B = _wu @ wo, (e @ wvT).T
+            wq, wk, wv, wo = get_head_weights(model, layer, head, transpose=True)
+            # A, B = wu, ln_f(e @ wv @ wo).T
+            A, B = wu @ wo.T, (e @ wv).T
             eig_ov = (B @ A).eig()[0]
-            q, k = (e @ wqT), (e @ wkT).T
+            q, k = (e @ wq), (e @ wk).T
             eig_qk = (k @ q).eig()[0]
             eigv_positivity_ov[layer, head] = plot_eigv(eig_ov, plot=False)
             eigv_positivity_qk[layer, head] = plot_eigv(eig_qk, plot=False)
