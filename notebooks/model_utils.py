@@ -1,6 +1,8 @@
 # from ast import pattern
 from collections import OrderedDict
 from difflib import restore
+# from typing import Iterable
+from collections.abc import Iterable  # same as typing.Iterable?
 import numpy as np
 import math
 from dataclasses import dataclass
@@ -22,7 +24,7 @@ from transformers.models.xglm.modeling_xglm import XGLMAttention, XGLMDecoderLay
 # from sklearn.decomposition import PCA
 # from sklearn.cluster import KMeans
 
-from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, equal
+from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, equal, join_lists
 
 @dataclass
 class Outputs:
@@ -293,17 +295,24 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=True, compute_h
 
 def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=None,
             attn_weights=None, attn_labels=None, hidden_states_k=None, trim=True, scaled=True):
+    if isinstance(layer, Iterable):  # tuple, list or np.ndarray
+        assert labels is None and attn_labels is not None
+        assert isinstance(attn_labels, (list, tuple))
+        assert isinstance(hidden_states_k, (list, tuple))
+        if not isinstance(hidden_states, (list, tuple)): hidden_states = [hidden_states] * len(layer)
+        assert len(attn_labels) == len(hidden_states) == len(hidden_states_k) == len(layer) == len(head)
+        outputs = [head_forward(model, hs, l, h, loss_reduction=loss_reduction,
+            attn_labels=al, hidden_states_k=hk, trim=trim, scaled=scaled)
+            for hs, l, h, al, hk in zip(hidden_states, layer, head, attn_labels, hidden_states_k)]
+        return Outputs(hidden_states=[o.hidden_states for o in outputs],
+            logits=[o.logits for o in outputs], loss=sum(o.loss for o in outputs))
+
     block = model.transformer.h[layer]
     # only hq and hv can be scaled, not hk
     hk = block.ln_1(hidden_states_k if hidden_states_k is not None else hidden_states)
     h = scaled_ln(block.ln_1, hidden_states) if scaled else block.ln_1(hidden_states)
     if attn_weights is not None: hq, hv = None, h
     elif attn_labels is not None: hq, hv = h, None # return attn_logits instead of attn_weights by passing None hv 
-    # if attn_weights is not None:
-    #     w_v = rearrange(self.v_proj.weight, '(n d) e -> n d e', n=self.num_heads)[head]
-    #     value = hv @ w_v.T  # bje,ed->bjd
-    #     w_o = rearrange(self.out_proj.weight, 'e (n d) -> n d e', n=self.num_heads)[head]
-    #     head_output = attn_weights[:, head] @ value @ w_o # bij,bjd,de->bie
     if trim:
         self = block.attn
         backup_heads(self)
@@ -426,7 +435,7 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
         embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, 
-        reduce_fn=sum, truncate_layers=False, scaled=True, reshape=False, output_layers=None):
+        reduce_fn=sum, truncate_layers=False, scaled=True, reshape=False, output_layer=None):
     embed_output = outputs.hidden_states[0]
     if embed_mask is not None: embed_output = einsum('bie,bi->bie', embed_output, embed_mask)
 
@@ -444,7 +453,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     if mlp_mask is not None:
         # print('in sm_forward, mlp_outputs.size(), mlp_mask.size() =', mlp_outputs.size(), mlp_mask.size())
         mlp_outputs = einsum('blie,bli->blie', mlp_outputs, mlp_mask)
-    if reshape:
+    if reshape:  # for head amplication, obsolete
         assert reduce_fn == torch.cat
         L = (torch.einsum('bli->l', mlp_mask) > 0).sum().item() \
             if mlp_mask is not None and truncate_layers else len(outputs.mlp_outputs)
@@ -453,14 +462,23 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         padded_embed_output = embed_output.new(*((L,) + embed_output.size())).zero_() # l1ie
         padded_embed_output[0] = embed_output
         output = torch.cat([attn_outputs, mlp_outputs, padded_embed_output], dim=1) # lnie,l1ie,l1ie->l(n+2)ie
-    elif output_layers is not None:
-        assert reduce_fn == torch.sum
-        output = []
-        for l in output_layers:
-            attn_outputs = torch.einsum('blnie->bie', head_outputs[:, :l])
-            mlp_outputs = torch.einsum('blie->bie', mlp_outputs[:, :l])
-            output.append(reduce_fn([embed_output, attn_outputs, mlp_outputs])) # bie
-    else:
+    elif output_layer is not None:  # default
+        assert reduce_fn == sum
+        if isinstance(output_layer, Iterable):
+            # output = []
+            # for l in output_layer:
+            #     attn_outputs = torch.einsum('blnie->bie', head_outputs[:, :l])
+            #     _mlp_outputs = torch.einsum('blie->bie', mlp_outputs[:, :l])
+            #     output.append(reduce_fn([embed_output, attn_outputs, _mlp_outputs])) # bie for sum
+            output = [reduce_fn([embed_output,
+                                torch.einsum('blnie->bie', head_outputs[:, :l]), 
+                                torch.einsum('blie->bie', mlp_outputs[:, :l])])
+                    for l in output_layer]
+        else:
+            attn_outputs = torch.einsum('blnie->bie', head_outputs[:, :output_layer])
+            mlp_outputs = torch.einsum('blie->bie', mlp_outputs[:, :output_layer])
+            output = reduce_fn([embed_output, attn_outputs, mlp_outputs]) # bie for sum
+    else:  # for compatibility
         if reduce_fn == sum:
             attn_outputs = torch.einsum('blnie->bie', head_outputs)
             mlp_outputs = torch.einsum('blie->bie', mlp_outputs)
@@ -726,6 +744,60 @@ def _get_affinities3(w1, w2, w3, chunks=8):  # not faster
         for w in w3.chunk(chunks)], 'chunks m o -> m 1 (chunks o)') \
         if chunks is not None else (a @ w3).norm(dim=(-2, -1)).unsqueeze(1)  # m1ce,oed->mocd->mo->m1o  # cuda out of mem
     return a, a / torch.einsum('m,n,o->mno', w1.norm(dim=(-2,-1)), w2.norm(dim=(-2,-1)), w3.norm(dim=(-2,-1)))
+
+def get_affinities_below(model, l1, wv1, wo1):
+    wvs0, wos0 = zip(*[get_head_weights(model, l0, transpose=True)[2:] for l0 in range(l1)])
+    wvs0 = rearrange(list(wvs0), 'l h e d -> l h e d')
+    wos0 = rearrange(list(wos0), 'l h d e -> l h d e')
+    # na0 = _get_affinities(wvs0 @ wos0, wv1)
+    na0 = _get_affinities(wos0, wv1)  # much faster with similar results
+    # [(l, h, v, eigv_positivity[l, h], k_comp_max[l, h], pos_heads2val.get((l, h))) 
+    #   for l, h, v in list(zip(*topk_md(na0, 20)))]
+    return na0
+
+def compute_eigv_pos012(model, l1, wv1, wo1, heads0, heads2, k_comp_max, eigv_positivity,
+                    k_comp0_thld=1, use_ln=False, verbose=False):
+    blocks = model.transformer.h
+    eigv_pos012, eigv_pos012_ln = [], []
+    if use_ln: ln1 = blocks[l1].ln_1
+    for l0, h0 in heads0:
+        k_comp0 = k_comp_max[l0, h0].item()
+        if k_comp0 > k_comp0_thld: continue
+        wv0, wo0 = get_head_weights(model, l0, h0, transpose=True)[2:]
+        hq0 = wv0 @ wo0 @ wv1 @ wo1
+        if use_ln: 
+            ln0 = blocks[l0].ln_1
+            hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1
+        for l2, h2 in heads2:
+            wq2, wk2 = get_head_weights(model, l2, h2, transpose=True)[:2]
+            q0, k0 = hq0 @ wq2, wk2
+            eigv_pos0 = get_eigv_pos(k0.T @ q0)
+            eigv_pos = eigv_pos0
+            if use_ln: 
+                ln2 = blocks[l2].ln_1
+                q, k = ln2(hq) @ wq2, ln2(_e) @ wk2
+                eigv_pos = get_eigv_pos(k.T @ q)
+            if verbose:
+                print(f'{l0}-{h0}, {l2}-{h2}', eigv_pos0, eigv_pos, eigv_positivity[l2, h2], k_comp0)
+            eigv_pos012.append(eigv_pos0)
+            eigv_pos012_ln.append(eigv_pos)
+    return eigv_pos012, eigv_pos012_ln
+
+def get_affinities_above(model, l1, wv1, wo1):
+    wqs2, wks2 = zip(*[get_head_weights(model, l2, transpose=True)[:2] for l2 in range(l1 + 1, L)])
+    wqs2 = rearrange(list(wqs2), 'l h e d -> l h e d')
+    wks2 = rearrange(list(wks2), 'l h e d -> l h e d')
+    # na2 = _get_affinities(wks2 @ wqs2.transpose(-2, -1), wo1.T)  # lhed,lhde->lhee aff with ed
+    na2 = _get_affinities(wqs2.transpose(-2, -1), wo1.T)  # lhde aff with ed, much faster with similar results
+    na2 = torch.cat([torch.zeros(l1 + 1, H), na2])  # cat(l1+1 n, l-l1-1,n)->ln
+    # [(i, f'{l}-{h}', v, eigv_positivity[l, h], k_comp_max[l, h]) for i, (l, h, v) in enumerate(zip(*topk_md(na2, 30)))]
+    return na2
+
+def get_conductivity(eigv_positivity012, l1, h1, plot=False, figsize=(5, 2)):
+    x = eigv_positivity012.get((l1, h1))
+    if x is None: return 0.
+    if plot: plt.figure(figsize=figsize); plt.hist(x, 20); _ = plt.title(f'{l1}-{h1}'); plt.show()
+    return np.abs(np.array(x)).mean()
 
 # losses2 = []
 # sum_output = head_outputs * 0
