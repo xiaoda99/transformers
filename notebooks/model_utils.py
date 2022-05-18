@@ -519,7 +519,8 @@ def scaled_input(input, num_points, baseline=None, requires_grad=True):
     if baseline is None: baseline = torch.zeros_like(input)
     if num_points == 3:
         step = (input - baseline) / 10
-        res = torch.cat([baseline + step * i for i in [0, 5, 10]], dim=0)
+        res = torch.cat([baseline + step * i for i in [0, 5, 10]], dim=0) #lxy
+        # res = torch.cat([baseline + step * i for i in [0, ]], dim=0)
     else:
         step = (input - baseline) / num_points
         res = torch.cat([baseline + step * i for i in range(num_points + 1)], dim=0)
@@ -543,17 +544,18 @@ def _attribute(forward_fn, model, x, post_forward_fn=[], num_points=10, batch_si
     if isinstance(post_forward_fn, (list, tuple)):
         post_forward_fn = compose_forward_fns(post_forward_fn, scaled=True)
     scaled_x, grad = {}, {}
-    for key in x:
-        scaled_x[key] = scaled_input(x[key], num_points)
-        grad[key] = torch.zeros_like(x[key])
-    ys = []
-    for i in range(0, num_points, batch_size):
-        scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
-        o = forward_fn(model, **scaled_x_)
-        y, logits = post_forward_fn(model, o); ys.append(y)
-        grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
-        for j, key in enumerate(x.keys()):
-            grad[key] += grad_[j].sum(dim=0, keepdim=True)
+    with torch.enable_grad():
+        for key in x:
+            scaled_x[key] = scaled_input(x[key], num_points)
+            grad[key] = torch.zeros_like(x[key])
+        ys = []
+        for i in range(0, num_points, batch_size):
+            scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
+            o = forward_fn(model, **scaled_x_)
+            y, logits = post_forward_fn(model, o); ys.append(y)
+            grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
+            for j, key in enumerate(x.keys()):
+                grad[key] += grad_[j].sum(dim=0, keepdim=True)
     attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in x}
     return attr, torch.cat(ys), logits
 
@@ -562,22 +564,23 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=10, batch_siz
     if isinstance(post_forward_fn, (list, tuple)):
         post_forward_fn = compose_forward_fns(post_forward_fn, scaled=True)
     scaled_x, grad = {}, {}
-    for key in x:
-        scaled_x[key] = scaled_input(x[key], num_points)
-        grad[key] = torch.zeros_like(x[key])
-    ys = []
-    for i in range(0, num_points, batch_size):
-        scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
-        o = forward_fn(model, **scaled_x_)
-        # print(o.)
-        y, logits = post_forward_fn(model, o); ys.append(y)
-        # print(y)
-        grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
-        for j, key in enumerate(x.keys()):
-            # print( grad_[j].shape)
-            grad[key] += grad_[j].sum(dim=0, keepdim=True)
-            # if i == 0: grad[key + '0'], grad[key + '1'] = grad_[j][0:1] * num_points, grad_[j][1:2] * num_points
-            # print(key, 'grad', grad_[j].reshape(grad_[j].size(0), -1).sum(1)) # debug
+    with torch.enable_grad():
+        for key in x:
+            scaled_x[key] = scaled_input(x[key], num_points)
+            grad[key] = torch.zeros_like(x[key])
+        ys = []
+        for i in range(0, num_points, batch_size):
+            scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
+            o = forward_fn(model, **scaled_x_)
+            # print(o.)
+            y, logits = post_forward_fn(model, o); ys.append(y)
+            # print(y)
+            grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
+            for j, key in enumerate(x.keys()):
+                # print( grad_[j].shape)
+                grad[key] += grad_[j].sum(dim=0, keepdim=True)
+                # if i == 0: grad[key + '0'], grad[key + '1'] = grad_[j][0:1] * num_points, grad_[j][1:2] * num_points
+                # print(key, 'grad', grad_[j].reshape(grad_[j].size(0), -1).sum(1)) # debug
     attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in x}
     # attr.update({key + '0': (grad[key + '0'] / num_points * x[key]).squeeze(0) for key in x})
     # attr.update({key + '1': (grad[key + '1'] / num_points * x[key]).squeeze(0) for key in x})
@@ -745,29 +748,48 @@ def _get_affinities3(w1, w2, w3, chunks=8):  # not faster
         if chunks is not None else (a @ w3).norm(dim=(-2, -1)).unsqueeze(1)  # m1ce,oed->mocd->mo->m1o  # cuda out of mem
     return a, a / torch.einsum('m,n,o->mno', w1.norm(dim=(-2,-1)), w2.norm(dim=(-2,-1)), w3.norm(dim=(-2,-1)))
 
-def get_affinities_below(model, l1, wv1, wo1):
-    wvs0, wos0 = zip(*[get_head_weights(model, l0, transpose=True)[2:] for l0 in range(l1)])
-    wvs0 = rearrange(list(wvs0), 'l h e d -> l h e d')
-    wos0 = rearrange(list(wos0), 'l h d e -> l h d e')
+def get_ov_affinities(model, l1, wv1, wo1, layer_range):
+    wvs0, wos0 = zip(*[get_head_weights(model, l0, transpose=True)[2:] for l0 in layer_range])
+    wvs0 = rearrange(list(wvs0), 'l n e d -> l n e d')
+    wos0 = rearrange(list(wos0), 'l n d e -> l n d e')
     # na0 = _get_affinities(wvs0 @ wos0, wv1)
     na0 = _get_affinities(wos0, wv1)  # much faster with similar results
     # [(l, h, v, eigv_positivity[l, h], k_comp_max[l, h], pos_heads2val.get((l, h))) 
     #   for l, h, v in list(zip(*topk_md(na0, 20)))]
     return na0
 
-def compute_eigv_pos012(model, l1, wv1, wo1, heads0, heads2, k_comp_max, eigv_positivity,
-                    k_comp0_thld=1, use_ln=False, verbose=False):
+def get_qk_affinities(model, l1, wv1, wo1, layer_range):
+    wqs2, wks2 = zip(*[get_head_weights(model, l2, transpose=True)[:2] for l2 in layer_range])
+    wqs2 = rearrange(list(wqs2), 'l n e d -> l n e d')
+    wks2 = rearrange(list(wks2), 'l n e d -> l n e d')
+    # na2 = _get_affinities(wks2 @ wqs2.transpose(-2, -1), wo1.T)  # lhed,lhde->lhee aff with ed
+    na2 = _get_affinities(wqs2.transpose(-2, -1), wo1.T)  # lhde aff with ed, much faster with similar results
+    H = wqs2.size(1)
+    na2 = torch.cat([torch.zeros(min(layer_range), H), na2])  # cat(l1+1 n, l-l1-1,n)->ln
+    # [(i, f'{l}-{h}', v, eigv_positivity[l, h], k_comp_max[l, h]) for i, (l, h, v) in enumerate(zip(*topk_md(na2, 30)))]
+    return na2
+
+def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity,
+                    heads_1=None, use_ln=False, _e=None, verbose=False):
     blocks = model.transformer.h
-    eigv_pos012, eigv_pos012_ln = [], []
+    eigv_pos012, eigv_pos012_ln = {}, {} #[], []
     if use_ln: ln1 = blocks[l1].ln_1
-    for l0, h0 in heads0:
-        k_comp0 = k_comp_max[l0, h0].item()
-        if k_comp0 > k_comp0_thld: continue
+    for l0, h0 in tqdm(heads0):
+        # k_comp0 = k_comp_max[l0, h0].item()
+        # if k_comp0 > k_comp0_thld: continue # gpt2-large's 15-4, 17-5, 18-4 > 0.98
         wv0, wo0 = get_head_weights(model, l0, h0, transpose=True)[2:]
         hq0 = wv0 @ wo0 @ wv1 @ wo1
+        if heads_1 is not None:
+            # l_1, h_1 = heads_1[0]
+            # wv_1, wo_1 = get_head_weights(model, l_1, h_1, transpose=True)[2:]
+            ln_1 = blocks[heads_1[0][0]].ln_1
+            wvo_1 = sum(torch.matmul(*get_head_weights(model, l, h, transpose=True)[2:]) for l, h in heads_1)
+            hq0 = wvo_1 @ hq0
         if use_ln: 
             ln0 = blocks[l0].ln_1
-            hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1
+            hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if heads_1 is None else \
+                ln1((ln0(ln_1(_e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1
+        eigv_pos_mean = []
         for l2, h2 in heads2:
             wq2, wk2 = get_head_weights(model, l2, h2, transpose=True)[:2]
             q0, k0 = hq0 @ wq2, wk2
@@ -777,27 +799,33 @@ def compute_eigv_pos012(model, l1, wv1, wo1, heads0, heads2, k_comp_max, eigv_po
                 ln2 = blocks[l2].ln_1
                 q, k = ln2(hq) @ wq2, ln2(_e) @ wk2
                 eigv_pos = get_eigv_pos(k.T @ q)
-            if verbose:
-                print(f'{l0}-{h0}, {l2}-{h2}', eigv_pos0, eigv_pos, eigv_positivity[l2, h2], k_comp0)
-            eigv_pos012.append(eigv_pos0)
-            eigv_pos012_ln.append(eigv_pos)
+            # if verbose:
+            #     if heads_1 is not None: print(f'{l_1}-{h_1}', end='\t')
+            #     print(f'{l0}-{h0}, {l1}-{h1}, {l2}-{h2}', eigv_pos, eigv_positivity[l2, h2], k_comp0)
+            # eigv_pos012.append(eigv_pos0)
+            # eigv_pos012_ln.append(eigv_pos)
+            eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
+            # eigv_pos012_ln[(l0, h0, l2, h2)] = eigv_pos
+            eigv_pos_mean.append(eigv_pos)
+        eigv_pos_mean = sum(eigv_pos_mean) / len(eigv_pos_mean)
+        # if eigv_pos_mean < -0.9: print(f'{l0}-{h0}, {l1}-{h1}', eigv_pos_mean, eigv_positivity[l0, h0], k_comp0)
     return eigv_pos012, eigv_pos012_ln
-
-def get_affinities_above(model, l1, wv1, wo1):
-    wqs2, wks2 = zip(*[get_head_weights(model, l2, transpose=True)[:2] for l2 in range(l1 + 1, L)])
-    wqs2 = rearrange(list(wqs2), 'l h e d -> l h e d')
-    wks2 = rearrange(list(wks2), 'l h e d -> l h e d')
-    # na2 = _get_affinities(wks2 @ wqs2.transpose(-2, -1), wo1.T)  # lhed,lhde->lhee aff with ed
-    na2 = _get_affinities(wqs2.transpose(-2, -1), wo1.T)  # lhde aff with ed, much faster with similar results
-    na2 = torch.cat([torch.zeros(l1 + 1, H), na2])  # cat(l1+1 n, l-l1-1,n)->ln
-    # [(i, f'{l}-{h}', v, eigv_positivity[l, h], k_comp_max[l, h]) for i, (l, h, v) in enumerate(zip(*topk_md(na2, 30)))]
-    return na2
 
 def get_conductivity(eigv_positivity012, l1, h1, plot=False, figsize=(5, 2)):
     x = eigv_positivity012.get((l1, h1))
     if x is None: return 0.
     if plot: plt.figure(figsize=figsize); plt.hist(x, 20); _ = plt.title(f'{l1}-{h1}'); plt.show()
     return np.abs(np.array(x)).mean()
+
+def plot_k_comp(heads, k_compositions, pos_heads2val):
+    ls, hs = zip(*heads)
+    _ = plt.figure(figsize=(20, len(heads) * 0.5))
+    _ = sns.heatmap(torch.cat([k_compositions[list(ls), list(hs)], torch.Tensor(list(pos_heads2val.values())).unsqueeze(0)]), cbar=False,
+        xticklabels=[f'{l}-{h}' for l, h in pos_heads2val.keys()], yticklabels=[f'{l}-{h}' for l, h in heads])
+
+def add_attr(head_tuples, attr_dicts):
+    if not isinstance(attr_dicts, (tuple, list)): attr_dicts = [attr_dicts]
+    return [[l, h, v] + [attr_dict[l, h] for attr_dict in attr_dicts] for l, h, v in head_tuples]
 
 # losses2 = []
 # sum_output = head_outputs * 0

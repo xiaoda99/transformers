@@ -7,7 +7,7 @@ def get_examples_middle_end(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
+        for i in range(12):
             listss = random.sample(sets,3)
             stringss += ' '.join(listss)+' -> '+listss[1]+'\n'
         ans.append(stringss)
@@ -104,7 +104,7 @@ def get_exmaples_number_English(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
+        for i in range(12):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + listss[0] + ' -> ' + sets[listss[0]] + '\n'
         ans.append(stringss)
@@ -137,7 +137,7 @@ def get_exmaples_English_English(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
+        for i in range(12):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + listss[0] + ' -> ' + sets[listss[0]] + '\n'
         ans.append(stringss)
@@ -153,7 +153,7 @@ def get_exmaples_English_English_reverse(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
+        for i in range(12):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + sets[listss[0]] + ' -> ' + listss[0] + '\n'
         ans.append(stringss)
@@ -170,7 +170,7 @@ def get_exmaples_number_first(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
+        for i in range(12):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + listss[0] + ' -> ' + sets[listss[0]] + '\n'
         ans.append(stringss)
@@ -185,7 +185,7 @@ def get_exmaples_number_first_reverse(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(8):
+        for i in range(12):
             listss = random.sample(list(sets.keys()),1)
             stringss += ' ' + sets[listss[0]] + ' -> ' + listss[0] + '\n'
         ans.append(stringss)
@@ -326,7 +326,7 @@ def get_exmaples_noun2adj(k):
     ans = []
     for j in range(k):
         stringss =''
-        listss = random.sample(noun2adj,8)
+        listss = random.sample(noun2adj,12)
         for key,value in listss:
             stringss += ' ' + key + ' -> ' + value + '\n'
         ans.append(stringss)
@@ -438,7 +438,7 @@ def get_exmaples_capabilities(k):
     ans = []
     for j in range(k):
         stringss =''
-        listss = random.sample(capabilities,8)
+        listss = random.sample(capabilities,12)
         for key,value in listss:
             stringss += ' '+ key + ' -> ' + value + '\n'
         ans.append(stringss)
@@ -493,7 +493,7 @@ def get_examples_isA(k):
             isA.append(line.strip())
     for j in range(k):
         stringss =''
-        listss = random.sample(isA,8)
+        listss = random.sample(isA,12)
         for key in listss:
             stringss += key + '\n'
         ans.append(stringss)
@@ -549,6 +549,43 @@ def get_exmaples_country2capital_reverse(k):
             stringss += ' '+ value + ' -> ' + key + '\n'
         ans.append(stringss)
     return ans
+
+
+from collections import defaultdict
+import random
+def readfileSST2(filepath, k):
+    ans = []
+    with open(filepath, 'r') as f:
+        for i, line in enumerate(f.readlines()[1:]):
+            templist = line.strip().split('\t')
+            ans.append([templist[0],templist[1]])
+    dictss =defaultdict(list)
+    for text,label in ans:
+        if label =='1':
+            dictss['1'].append(text)
+        else:
+            dictss['0'].append(text)
+    ans111 = []
+    for i in range(k):
+        merge =[]
+        positives = random.sample(dictss['1'],4)
+        negtives = random.sample(dictss['0'],4)
+        for pos in positives[:2]:
+            merge.append(' ' + pos +'-> '+ 'True\n')
+        for neg in negtives[:2]:
+            merge.append(' ' + neg +'-> '+ 'False\n')
+        merge = random.sample(merge,len(merge))
+        merge11 = []
+        for pos in positives[2:]:
+            merge11.append(' ' + pos +'-> '+ 'True\n')
+        for neg in negtives[2:]:
+            merge11.append(' ' + neg +'-> '+ 'False\n')
+        merge11 = random.sample(merge11,len(merge11))
+        merge.extend(merge11)
+        if len(set(merge)) == len(merge):
+            ans111.append(''.join(merge))
+    return ans111
+from captum.attr import visualization as viz
 if __name__ == '__main__':
     get_exmaples_number_English(8)
         
