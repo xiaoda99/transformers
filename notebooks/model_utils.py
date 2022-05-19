@@ -2,7 +2,8 @@
 from collections import OrderedDict
 from difflib import restore
 # from typing import Iterable
-from collections.abc import Iterable  # same as typing.Iterable?
+from collections.abc import Iterable
+from matplotlib import scale  # same as typing.Iterable?
 import numpy as np
 import math
 from dataclasses import dataclass
@@ -46,6 +47,7 @@ class Attributions:
     embed: torch.FloatTensor = 0.
     attn: torch.FloatTensor = 0.
     head: torch.FloatTensor = 0.
+    neuron: torch.FloatTensor = 0.
     mlp: torch.FloatTensor = 0.
 
 @dataclass
@@ -55,6 +57,7 @@ class AttrData:
     layer: int = None
     head: int = None
     label_type: str = None
+    attribute_k: bool = False
     attr: Attributions = None
 
 def fill_list(e, length, i, default_e=None): # fill e to ith position of a list of default_es
@@ -294,25 +297,29 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=True, compute_h
     return attn_output, attn_weights, head_input, head_output
 
 def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=None,
-            attn_weights=None, attn_labels=None, hidden_states_k=None, trim=True, scaled=True):
+            attn_weights=None, attn_labels=None, hidden_states0=None, attribute_k=False, trim=True, scaled=True):
     if isinstance(layer, Iterable):  # tuple, list or np.ndarray
         assert labels is None and attn_labels is not None
         assert isinstance(attn_labels, (list, tuple))
-        assert isinstance(hidden_states_k, (list, tuple))
+        assert isinstance(hidden_states0, (list, tuple))
         if not isinstance(hidden_states, (list, tuple)): hidden_states = [hidden_states] * len(layer)
-        assert len(attn_labels) == len(hidden_states) == len(hidden_states_k) == len(layer) == len(head)
+        assert len(attn_labels) == len(hidden_states) == len(hidden_states0) == len(layer) == len(head)
         outputs = [head_forward(model, hs, l, h, loss_reduction=loss_reduction,
-            attn_labels=al, hidden_states_k=hk, trim=trim, scaled=scaled)
-            for hs, l, h, al, hk in zip(hidden_states, layer, head, attn_labels, hidden_states_k)]
+            attn_labels=al, hidden_states0=hk, trim=trim, scaled=scaled)
+            for hs, l, h, al, hk in zip(hidden_states, layer, head, attn_labels, hidden_states0)]
         return Outputs(hidden_states=[o.hidden_states for o in outputs],
             logits=[o.logits for o in outputs], loss=sum(o.loss for o in outputs))
 
     block = model.transformer.h[layer]
     # only hq and hv can be scaled, not hk
-    hk = block.ln_1(hidden_states_k if hidden_states_k is not None else hidden_states)
-    h = scaled_ln(block.ln_1, hidden_states) if scaled else block.ln_1(hidden_states)
-    if attn_weights is not None: hq, hv = None, h
-    elif attn_labels is not None: hq, hv = h, None # return attn_logits instead of attn_weights by passing None hv 
+    hk = block.ln_1(hidden_states0 if hidden_states0 is not None else hidden_states)
+    h = scaled_ln(block.ln_1, hidden_states, scaled=scaled) #if scaled else block.ln_1(hidden_states)
+    if attn_weights is not None:
+        hq, hv = None, h
+    elif attn_labels is not None:
+        hq, hv = h, None # return attn_logits instead of attn_weights by passing None hv 
+        if attribute_k: hq, hk = hk, hq
+
     if trim:
         self = block.attn
         backup_heads(self)
@@ -336,7 +343,8 @@ def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=
         # may do some attn_logits masking here
         logits = attn_logits[:, head]  # bnij->bij
         # print('in head_forward, logits =', torch.einsum('bij->b', logits * torch.ones_like(logits).tril()))
-        loss = -torch.einsum('bij->b', logits.log_softmax(-1) * attn_labels) # per_example_sum. per_example_mean is hard to define when using unormalized attn attr  # bug fix
+        if not attribute_k: logits = logits.log_softmax(-1)
+        loss = -torch.einsum('bij->b', logits * attn_labels) # per_example_sum. per_example_mean is hard to define when using unormalized attn attr  # bug fix
     return Outputs(hidden_states=(head_output,) if head_output is not None else (), logits=logits, loss=loss)
 
 def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, 
@@ -434,7 +442,7 @@ def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices
     return loss, top1_corrects
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
-        embed_mask=None, mlp_mask=None, head_mask=None, attn_weights=None, 
+        embed_mask=None, mlp_mask=None, head_mask=None, neuron_mask=None, attn_weights=None, 
         reduce_fn=sum, truncate_layers=False, scaled=True, reshape=False, output_layer=None):
     embed_output = outputs.hidden_states[0]
     if embed_mask is not None: embed_output = einsum('bie,bi->bie', embed_output, embed_mask)
@@ -445,6 +453,8 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         attn_weights = None
     if head_mask is not None:
         head_outputs = einsum('blni,blnie->blnie', head_mask, head_outputs)
+    elif neuron_mask is not None:
+        head_outputs = einsum('blnie,blnie->blnie', neuron_mask, head_outputs)
     elif attn_weights is not None:
         head_inputs = rearrange(list(outputs.head_inputs), 'l 1 n i e -> 1 l n i e')
         head_outputs = einsum('blnij,blnje->blnie', attn_weights, head_inputs)
@@ -572,12 +582,9 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=10, batch_siz
         for i in range(0, num_points, batch_size):
             scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
             o = forward_fn(model, **scaled_x_)
-            # print(o.)
             y, logits = post_forward_fn(model, o); ys.append(y)
-            # print(y)
             grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x_.values()))
             for j, key in enumerate(x.keys()):
-                # print( grad_[j].shape)
                 grad[key] += grad_[j].sum(dim=0, keepdim=True)
                 # if i == 0: grad[key + '0'], grad[key + '1'] = grad_[j][0:1] * num_points, grad_[j][1:2] * num_points
                 # print(key, 'grad', grad_[j].reshape(grad_[j].size(0), -1).sum(1)) # debug
@@ -585,20 +592,13 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=10, batch_siz
     # attr.update({key + '0': (grad[key + '0'] / num_points * x[key]).squeeze(0) for key in x})
     # attr.update({key + '1': (grad[key + '1'] / num_points * x[key]).squeeze(0) for key in x})
 
-    attn_attr = attr['attn_weights']
-    # print(attn_attr.shape)
-    head_attr = torch.einsum('lnij->ln', attn_attr)
-    # print(attr['mlp_mask'].shape)
+    attn_attr = attr.get('attn_weights')
+    neuron_attr = attr.get('neuron_mask')
+    head_attr = torch.einsum('lnij->ln', attn_attr) if attn_attr is not None \
+        else torch.einsum('lnie->ln', neuron_attr)
     mlp_attr = attr['mlp_mask'].sum(-1, keepdim=False) # li->l
     emb_attr = attr['embed_mask'].sum(-1, keepdim=True) # i->1
-    # print(mlp_attr.shape)
-    # head_attr0 = torch.einsum('lnij->ln', attr['attn_weights0'])
-    # mlp_attr0 = attr['mlp_mask0'].sum(-1, keepdim=False)
-    # head_attr1 = torch.einsum('lnij->ln', attr['attn_weights1'])
-    # mlp_attr1 = attr['mlp_mask1'].sum(-1, keepdim=False)
-    attr = Attributions(attn=attn_attr, head=head_attr, mlp=mlp_attr, embed = emb_attr)
-    # attr0 = Attributions(head=head_attr0, mlp=mlp_attr0)
-    # attr1 = Attributions(head=head_attr1, mlp=mlp_attr1)
+    attr = Attributions(attn=attn_attr, head=head_attr, neuron=neuron_attr, mlp=mlp_attr, embed = emb_attr)
     return attr, torch.cat(ys), logits
 
 def attribute2(forward_fn, model, x, post_forward_fn):
@@ -640,6 +640,7 @@ def get_x(key, outputs, to_layer=None):
     L, H = len(outputs.attentions), outputs.attentions[0].size(1)
     # L dim removed when doing per-layer attribution
     if key == 'head_mask': x = torch.ones(1, L, H, outputs.hidden_states[0].size(1))
+    elif key == 'neuron_mask': x = torch.ones(1, L, H, outputs.hidden_states[0].size(1), outputs.hidden_states[0].size(-1))
     elif key == 'mlp_mask': x = torch.ones(1, L, outputs.hidden_states[0].size(1))
     elif key == 'embed_mask': x = torch.ones(1, outputs.hidden_states[0].size(1))
     elif key == 'attn_weights': x = rearrange(list(outputs.attentions), 'l 1 n i j -> 1 l n i j')
@@ -688,7 +689,7 @@ def combine_weights(weights, qk=True, with_embedding=False, BA=False):
     if BA: return wk.mm(wqt) if qk else wv.mm(wo)
     return wqt.mm(wk) if qk else wo.mm(wv)
 
-def plot_eigv(w, start_i=1, end_i=None, alpha=0.1, plot=True):
+def plot_eigv(w, start_i=0, end_i=None, alpha=0.1, plot=True):
     # w = w.detach()#.numpy()
     x, y = w[:, 0], w[:, 1]
     eigv_positivity = x.sum() / (x**2 + y**2).sqrt().sum()
@@ -696,10 +697,10 @@ def plot_eigv(w, start_i=1, end_i=None, alpha=0.1, plot=True):
         if start_i is None: start_i = 0
         if end_i is None: end_i = len(w)
         plt.gca().set_aspect('equal', adjustable='box')
-        plt.plot(x[start_i: end_i], y[start_i: end_i], '.', alpha=alpha)
+        plt.plot(x[start_i: end_i], y[start_i: end_i], '.', alpha=alpha); plt.show()
     return eigv_positivity.item()
 
-def get_eigv_pos(m): return plot_eigv(m.eig()[0], plot=False)
+def get_eigv_pos(m): return plot_eigv(m.eig()[0], plot=True)
 
 def compute_eigv_positivity(model, L, H):
     we = model.transformer.wte.weight.data.t()
@@ -770,46 +771,45 @@ def get_qk_affinities(model, l1, wv1, wo1, layer_range):
     return na2
 
 def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity,
-                    heads_1=None, use_ln=False, _e=None, verbose=False):
-    blocks = model.transformer.h
-    eigv_pos012, eigv_pos012_ln = {}, {} #[], []
-    if use_ln: ln1 = blocks[l1].ln_1
-    for l0, h0 in tqdm(heads0):
-        # k_comp0 = k_comp_max[l0, h0].item()
-        # if k_comp0 > k_comp0_thld: continue # gpt2-large's 15-4, 17-5, 18-4 > 0.98
-        wv0, wo0 = get_head_weights(model, l0, h0, transpose=True)[2:]
-        hq0 = wv0 @ wo0 @ wv1 @ wo1
-        if heads_1 is not None:
-            # l_1, h_1 = heads_1[0]
-            # wv_1, wo_1 = get_head_weights(model, l_1, h_1, transpose=True)[2:]
-            ln_1 = blocks[heads_1[0][0]].ln_1
-            wvo_1 = sum(torch.matmul(*get_head_weights(model, l, h, transpose=True)[2:]) for l, h in heads_1)
-            hq0 = wvo_1 @ hq0
-        if use_ln: 
-            ln0 = blocks[l0].ln_1
-            hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if heads_1 is None else \
-                ln1((ln0(ln_1(_e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1
-        eigv_pos_mean = []
-        for l2, h2 in heads2:
-            wq2, wk2 = get_head_weights(model, l2, h2, transpose=True)[:2]
-            q0, k0 = hq0 @ wq2, wk2
-            eigv_pos0 = get_eigv_pos(k0.T @ q0)
-            eigv_pos = eigv_pos0
+                    heads_1=None, use_ln=False, _e=None, verbose=True):
+    with torch.no_grad():
+        blocks = model.transformer.h
+        eigv_pos012, eigv_pos012_ln = {}, {} #[], []
+        if use_ln: ln1 = blocks[l1].ln_1
+        for l0, h0 in tqdm(heads0):
+            # k_comp0 = k_comp_max[l0, h0].item()
+            # if k_comp0 > k_comp0_thld: continue # gpt2-large's 15-4, 17-5, 18-4 > 0.98
+            wv0, wo0 = get_head_weights(model, l0, h0, transpose=True)[2:]
+            hq0 = wv0 @ wo0 @ wv1 @ wo1
+            if heads_1 is not None:
+                # l_1, h_1 = heads_1[0]
+                # wv_1, wo_1 = get_head_weights(model, l_1, h_1, transpose=True)[2:]
+                ln_1 = blocks[heads_1[0][0]].ln_1
+                wvo_1 = sum(torch.matmul(*get_head_weights(model, l, h, transpose=True)[2:]) for l, h in heads_1)
+                hq0 = wvo_1 @ hq0
             if use_ln: 
-                ln2 = blocks[l2].ln_1
-                q, k = ln2(hq) @ wq2, ln2(_e) @ wk2
-                eigv_pos = get_eigv_pos(k.T @ q)
-            # if verbose:
-            #     if heads_1 is not None: print(f'{l_1}-{h_1}', end='\t')
-            #     print(f'{l0}-{h0}, {l1}-{h1}, {l2}-{h2}', eigv_pos, eigv_positivity[l2, h2], k_comp0)
-            # eigv_pos012.append(eigv_pos0)
-            # eigv_pos012_ln.append(eigv_pos)
-            eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
-            # eigv_pos012_ln[(l0, h0, l2, h2)] = eigv_pos
-            eigv_pos_mean.append(eigv_pos)
-        eigv_pos_mean = sum(eigv_pos_mean) / len(eigv_pos_mean)
-        # if eigv_pos_mean < -0.9: print(f'{l0}-{h0}, {l1}-{h1}', eigv_pos_mean, eigv_positivity[l0, h0], k_comp0)
-    return eigv_pos012, eigv_pos012_ln
+                ln0 = blocks[l0].ln_1
+                hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if heads_1 is None else \
+                    ln1((ln0(ln_1(_e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1
+            eigv_pos_mean = []
+            for l2, h2 in heads2:
+                wq2, wk2 = get_head_weights(model, l2, h2, transpose=True)[:2]
+                q0, k0 = hq0 @ wq2, wk2
+                eigv_pos0 = get_eigv_pos(k0.T @ q0)
+                eigv_pos = eigv_pos0
+                if use_ln: 
+                    ln2 = blocks[l2].ln_1
+                    q, k = ln2(hq) @ wq2, ln2(_e) @ wk2
+                    eigv_pos = get_eigv_pos(k.T @ q)
+                if verbose:
+                    # if heads_1 is not None: print(f'{l_1}-{h_1}', end='\t')
+                    print(f'{l0}-{h0}, {l1}-{h1}, {l2}-{h2}', eigv_pos0, eigv_pos, eigv_positivity[l2, h2])
+                eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
+                # eigv_pos012_ln[(l0, h0, l2, h2)] = eigv_pos
+                eigv_pos_mean.append(eigv_pos)
+            eigv_pos_mean = sum(eigv_pos_mean) / len(eigv_pos_mean)
+            # if eigv_pos_mean < -0.9: print(f'{l0}-{h0}, {l1}-{h1}', eigv_pos_mean, eigv_positivity[l0, h0], k_comp0)
+    return eigv_pos012, eigv_pos012_ln, q @ k.T
 
 def get_conductivity(eigv_positivity012, l1, h1, plot=False, figsize=(5, 2)):
     x = eigv_positivity012.get((l1, h1))

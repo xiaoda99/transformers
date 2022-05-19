@@ -7,7 +7,7 @@ def get_examples_middle_end(k):
     ans = []
     for j in range(k):
         stringss =''
-        for i in range(12):
+        for i in range(8):
             listss = random.sample(sets,3)
             stringss += ' '.join(listss)+' -> '+listss[1]+'\n'
         ans.append(stringss)

@@ -4,7 +4,7 @@ import random
 from collections import defaultdict
 import numpy as np
 
-from pattern.en import comparative
+# from pattern.en import comparative
 import torch
 
 # moved to common_utils.py

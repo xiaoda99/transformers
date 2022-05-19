@@ -174,5 +174,6 @@ def traverse(node, fn):
 def reduce_objects(objs, fields, reduce_fn='mean'):
     obj = dataclasses.replace(objs[0])
     for field in fields:
+        if getattr(objs[0], field, None) is None: continue
         setattr(obj, field, sum(getattr(o, field) for o in objs) / (len(objs) if reduce_fn == 'mean' else 1))
     return obj
