@@ -700,7 +700,7 @@ def plot_eigv(w, start_i=0, end_i=None, alpha=0.1, plot=True):
         plt.plot(x[start_i: end_i], y[start_i: end_i], '.', alpha=alpha); plt.show()
     return eigv_positivity.item()
 
-def get_eigv_pos(m): return plot_eigv(m.eig()[0], plot=True)
+def get_eigv_pos(m): return plot_eigv(m.eig()[0], plot=False)
 
 def compute_eigv_positivity(model, L, H):
     we = model.transformer.wte.weight.data.t()
@@ -776,7 +776,7 @@ def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity
         blocks = model.transformer.h
         eigv_pos012, eigv_pos012_ln = {}, {} #[], []
         if use_ln: ln1 = blocks[l1].ln_1
-        for l0, h0 in tqdm(heads0):
+        for l0, h0 in (heads0):
             # k_comp0 = k_comp_max[l0, h0].item()
             # if k_comp0 > k_comp0_thld: continue # gpt2-large's 15-4, 17-5, 18-4 > 0.98
             wv0, wo0 = get_head_weights(model, l0, h0, transpose=True)[2:]
@@ -789,9 +789,10 @@ def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity
                 hq0 = wvo_1 @ hq0
             if use_ln: 
                 ln0 = blocks[l0].ln_1
-                hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if heads_1 is None else \
-                    ln1((ln0(ln_1(_e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1
-            eigv_pos_mean = []
+                # hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if heads_1 is None else \
+                #     ln1((ln0(ln_1(_e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1
+                hq = rearrange([ln1((ln0(e) @ wv0 @ wo0)) @ wv1 @ wo1 for e in _e[: l0 + 1]], 'l v e -> l v e')
+            # eigv_pos_mean = []
             for l2, h2 in heads2:
                 wq2, wk2 = get_head_weights(model, l2, h2, transpose=True)[:2]
                 q0, k0 = hq0 @ wq2, wk2
@@ -799,17 +800,19 @@ def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity
                 eigv_pos = eigv_pos0
                 if use_ln: 
                     ln2 = blocks[l2].ln_1
-                    q, k = ln2(hq) @ wq2, ln2(_e) @ wk2
-                    eigv_pos = get_eigv_pos(k.T @ q)
+                    hk = rearrange(_e[: l0 + 1], 'l v e -> l v e')  # hk = _e
+                    q, k = ln2(hq) @ wq2, ln2(hk) @ wk2
+                    eigv_pos = get_eigv_pos(k.T @ q) if hq.ndim == 2 else \
+                        [get_eigv_pos(_k.T @ _q) for _q, _k in zip(q, k)] # lvd->l*vd
                 if verbose:
                     # if heads_1 is not None: print(f'{l_1}-{h_1}', end='\t')
-                    print(f'{l0}-{h0}, {l1}-{h1}, {l2}-{h2}', eigv_pos0, eigv_pos, eigv_positivity[l2, h2])
+                    print(f'{l0}-{h0}, {l1}-{h1}, {l2}-{h2}', torch.Tensor([eigv_pos0] + eigv_pos), eigv_positivity[l2, h2])
                 eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
                 # eigv_pos012_ln[(l0, h0, l2, h2)] = eigv_pos
-                eigv_pos_mean.append(eigv_pos)
-            eigv_pos_mean = sum(eigv_pos_mean) / len(eigv_pos_mean)
+                # eigv_pos_mean.append(eigv_pos)
+            # eigv_pos_mean = sum(eigv_pos_mean) / len(eigv_pos_mean)
             # if eigv_pos_mean < -0.9: print(f'{l0}-{h0}, {l1}-{h1}', eigv_pos_mean, eigv_positivity[l0, h0], k_comp0)
-    return eigv_pos012, eigv_pos012_ln, q @ k.T
+    return eigv_pos012, eigv_pos012_ln
 
 def get_conductivity(eigv_positivity012, l1, h1, plot=False, figsize=(5, 2)):
     x = eigv_positivity012.get((l1, h1))
