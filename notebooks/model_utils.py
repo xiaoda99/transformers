@@ -702,28 +702,25 @@ def plot_eigv(w, start_i=0, end_i=None, alpha=0.1, plot=True):
 
 def get_eigv_pos(m): return plot_eigv(m.eig()[0], plot=False)
 
-def compute_eigv_positivity(model, L, H):
+@torch.no_grad()
+def compute_eigv_positivity(model, L, H, use_ln=False):
     we = model.transformer.wte.weight.data.t()
     wu = model.lm_head.weight.data
     _e = mlp_forward(model.transformer.h[0], we.T) + we.T
 
-    # eigv_positivity_ov = torch.zeros((L, H, 2)) 
-    eigv_positivity_ov = torch.zeros((L, H)) 
-    eigv_positivity_qk = torch.zeros((L, H))
+    eigv_positivity = torch.zeros((L, H, 3)) 
     for layer in tqdm(range(L)):
-        e = model.transformer.h[layer].ln_1(_e)
+        e = model.transformer.h[layer].ln_1(_e) if use_ln else _e
         for head in range(H):
             wq, wk, wv, wo = get_head_weights(model, layer, head, transpose=True)
             # A, B = wu, ln_f(e @ wv @ wo).T
-            A, B = wu @ wo.T, (e @ wv).T
-            eig_ov = (B @ A).eig()[0]
-            q, k = (e @ wq), (e @ wk).T
-            eig_qk = (k @ q).eig()[0]
-            eigv_positivity_ov[layer, head] = plot_eigv(eig_ov, plot=False)
-            eigv_positivity_qk[layer, head] = plot_eigv(eig_qk, plot=False)
-            # eigv_positivity_ov[layer, head, 0] = plot_eigv(eig_ov, plot=False)
-            # eigv_positivity_ov[layer, head, 1] = plot_eigv(eig_qk, plot=False)
-    return eigv_positivity_ov, eigv_positivity_qk
+            A, B = wu @ wo.T, (e @ wv).T; eig_ov = get_eigv_pos(B @ A)
+            q, k = (we.T @ wq), (we.T @ wk).T
+            # print('in compute_eigv_positivity', k.size(), q.size(), (k @ q).size())
+            eig_qk0 = get_eigv_pos(k @ q)
+            q, k = (e @ wq), (e @ wk).T; eig_qk = get_eigv_pos(k @ q)
+            eigv_positivity[layer, head] = torch.Tensor([eig_qk0, eig_qk, eig_ov])
+    return eigv_positivity
 
 def get_affinities(w1, w2):
     pattern = 'mce,ned->mncd'
@@ -770,49 +767,49 @@ def get_qk_affinities(model, l1, wv1, wo1, layer_range):
     # [(i, f'{l}-{h}', v, eigv_positivity[l, h], k_comp_max[l, h]) for i, (l, h, v) in enumerate(zip(*topk_md(na2, 30)))]
     return na2
 
+Id = lambda x: x
+
+@torch.no_grad()
 def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity,
-                    heads_1=None, use_ln=False, _e=None, verbose=True):
-    with torch.no_grad():
-        blocks = model.transformer.h
-        eigv_pos012, eigv_pos012_ln = {}, {} #[], []
-        if use_ln: ln1 = blocks[l1].ln_1
-        for l0, h0 in (heads0):
-            # k_comp0 = k_comp_max[l0, h0].item()
-            # if k_comp0 > k_comp0_thld: continue # gpt2-large's 15-4, 17-5, 18-4 > 0.98
-            wv0, wo0 = get_head_weights(model, l0, h0, transpose=True)[2:]
-            hq0 = wv0 @ wo0 @ wv1 @ wo1
-            if heads_1 is not None:
-                # l_1, h_1 = heads_1[0]
-                # wv_1, wo_1 = get_head_weights(model, l_1, h_1, transpose=True)[2:]
-                ln_1 = blocks[heads_1[0][0]].ln_1
-                wvo_1 = sum(torch.matmul(*get_head_weights(model, l, h, transpose=True)[2:]) for l, h in heads_1)
-                hq0 = wvo_1 @ hq0
+                    heads_1=None, use_ln=False, _e=None, verbose=False):
+    blocks = model.transformer.h
+    eigv_pos012 = {}
+    if use_ln: ln1 = blocks[l1].ln_1
+    if not verbose and len(heads0) >= 10: heads0 = tqdm(heads0)
+    for l0, h0 in heads0:
+        # if k_comp0 > k_comp0_thld: continue # gpt2-large's 15-4, 17-5, 18-4 > 0.98
+        wv0, wo0 = get_head_weights(model, l0, h0, transpose=True)[2:]
+        hq0 = wv0 @ wo0 @ wv1 @ wo1
+        if heads_1 is not None:
+            # l_1, h_1 = heads_1[0]
+            # wv_1, wo_1 = get_head_weights(model, l_1, h_1, transpose=True)[2:]
+            ln_1 = blocks[heads_1[0][0]].ln_1
+            wvo_1 = sum(torch.matmul(*get_head_weights(model, l, h, transpose=True)[2:]) for l, h in heads_1)
+            hq0 = wvo_1 @ hq0
+        if use_ln: 
+            ln0 = blocks[l0].ln_1
+            ln1 = ln0 = Id
+            # hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if heads_1 is None else \
+            #     ln1((ln0(ln_1(_e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1
+            hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if isinstance(_e, torch.Tensor) else \
+                rearrange([ln1((ln0(e) @ wv0 @ wo0)) @ wv1 @ wo1 for e in _e[: l0 + 1]], 'l v e -> l v e')
+        for l2, h2 in heads2:
+            wq2, wk2 = get_head_weights(model, l2, h2, transpose=True)[:2]
+            q0, k0 = hq0 @ wq2, wk2
+            eigv_pos0 = get_eigv_pos(k0.T @ q0)
+            eigv_pos = eigv_pos0
             if use_ln: 
-                ln0 = blocks[l0].ln_1
-                # hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if heads_1 is None else \
-                #     ln1((ln0(ln_1(_e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1
-                hq = rearrange([ln1((ln0(e) @ wv0 @ wo0)) @ wv1 @ wo1 for e in _e[: l0 + 1]], 'l v e -> l v e')
-            # eigv_pos_mean = []
-            for l2, h2 in heads2:
-                wq2, wk2 = get_head_weights(model, l2, h2, transpose=True)[:2]
-                q0, k0 = hq0 @ wq2, wk2
-                eigv_pos0 = get_eigv_pos(k0.T @ q0)
-                eigv_pos = eigv_pos0
-                if use_ln: 
-                    ln2 = blocks[l2].ln_1
-                    hk = rearrange(_e[: l0 + 1], 'l v e -> l v e')  # hk = _e
-                    q, k = ln2(hq) @ wq2, ln2(hk) @ wk2
-                    eigv_pos = get_eigv_pos(k.T @ q) if hq.ndim == 2 else \
-                        [get_eigv_pos(_k.T @ _q) for _q, _k in zip(q, k)] # lvd->l*vd
-                if verbose:
-                    # if heads_1 is not None: print(f'{l_1}-{h_1}', end='\t')
-                    print(f'{l0}-{h0}, {l1}-{h1}, {l2}-{h2}', torch.Tensor([eigv_pos0] + eigv_pos), eigv_positivity[l2, h2])
-                eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
-                # eigv_pos012_ln[(l0, h0, l2, h2)] = eigv_pos
-                # eigv_pos_mean.append(eigv_pos)
-            # eigv_pos_mean = sum(eigv_pos_mean) / len(eigv_pos_mean)
-            # if eigv_pos_mean < -0.9: print(f'{l0}-{h0}, {l1}-{h1}', eigv_pos_mean, eigv_positivity[l0, h0], k_comp0)
-    return eigv_pos012, eigv_pos012_ln
+                ln2 = Id #blocks[l2].ln_1
+                hk = _e if isinstance(_e, torch.Tensor) else \
+                    rearrange(_e[: l0 + 1], 'l v e -> l v e')
+                q, k = ln2(hq) @ wq2, ln2(hk) @ wk2
+                eigv_pos = get_eigv_pos(k.T @ q) if isinstance(_e, torch.Tensor) else \
+                    [get_eigv_pos(_k.T @ _q) for _q, _k in zip(q, k)] # lvd->l*vd
+            if verbose:
+                # if heads_1 is not None: print(f'{l_1}-{h_1}', end='\t')
+                print(f'{l0}-{h0}, {l1}-{h1}, {l2}-{h2}', eigv_pos0, eigv_pos, eigv_positivity[l2, h2])
+            eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
+    return eigv_pos012
 
 def get_conductivity(eigv_positivity012, l1, h1, plot=False, figsize=(5, 2)):
     x = eigv_positivity012.get((l1, h1))
@@ -828,7 +825,7 @@ def plot_k_comp(heads, k_compositions, pos_heads2val):
 
 def add_attr(head_tuples, attr_dicts):
     if not isinstance(attr_dicts, (tuple, list)): attr_dicts = [attr_dicts]
-    return [[l, h, v] + [attr_dict[l, h] for attr_dict in attr_dicts] for l, h, v in head_tuples]
+    return [[l, h, *v] + [attr_dict[l, h] for attr_dict in attr_dicts] for l, h, *v in head_tuples]
 
 # losses2 = []
 # sum_output = head_outputs * 0
