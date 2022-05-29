@@ -664,7 +664,49 @@ def get_head_rank(head_attr, layer, head, topk=20):
         head2rank = {k: v for k, v in zip(zip(*topk_md(head_attr, topk)[:1]), range(topk))}
         return head2rank.get((layer,), None)
 
-def get_head_weights(model, layer, head=None, transpose=False):
+def data2str(data):
+    i, topk, layer, head, label_type, attribute_k = data.step, data.topk, data.layer, data.head, data.label_type, data.attribute_k
+    # s = f'[{i}] top{topk} {layer}' if head is None else f'[{i}] top{topk} {layer}-{head}'
+    s = f'[{i}] top{topk} '
+    if head is None: s += f'{layer}'
+    elif not isinstance(layer, Iterable): s += f'{layer}-{head}'
+    else: s += ','.join([f'{l}-{h}' for l, h in zip(layer, head)])
+
+    if label_type is not None: s = s + ' ' + label_type
+    if attribute_k: s = s + ' ' + 'attr_k'
+    return s
+
+def get_argmax_attn_labels(o, layer, head):
+    attn_labels = torch.einsum('bnij,bnj->bnij', o.attentions[layer], o.head_inputs[layer].norm(dim=-1)) # bnje->bnj
+    return attn_labels[0, head]  # 1nij->ij
+
+def node2fn(model, node, outputs, labels, attn_attr):
+    d = node.data
+    i, layer, head, label_type, attribute_k = d.step, d.layer, d.head, d.label_type, d.attribute_k
+    if head is None:
+        return partial(mlp_forward, layer=layer) if label_type is None \
+            else partial(mlp_forward, layer=layer, labels=labels)
+    if label_type in ['argmax_attn_labels', 'attn_labels']:
+        def get_attn_labels(layer, head, label_type):
+            return get_argmax_attn_labels(outputs, layer, head) if label_type.startswith('argmax') \
+                else attn_attr[node.parent.name][layer, head]
+        if isinstance(layer, Iterable): # tuple, list or np.ndarray
+            attn_labels = [get_attn_labels(l, h, label_type) for l, h in zip(layer, head)]
+            hidden_states0 = [outputs.hidden_states[l] for l in layer]
+        else:
+            attn_labels = get_attn_labels(layer, head, label_type)
+            # attn_labels = attn_labels / (attn_labels.sum(-1, keepdim=True) + 1e-9)  # ij->i1 # don't normalize attn attr
+            hidden_states0 = outputs.hidden_states[layer]
+        kwargs = {'hidden_states0': hidden_states0, 'attn_labels': attn_labels, 'attribute_k': attribute_k}
+    else:
+        kwargs = {'attn_weights': outputs.attentions[layer]}
+        if label_type == 'labels':
+            kwargs['labels'] = labels
+        elif label_type == 'argmax_labels':
+            kwargs['labels'] = get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels)
+    return partial(head_forward, layer=layer, head=head, **kwargs)
+
+def get_head_weights(model, layer, head=None, transpose=True):
     m = model.transformer.h[layer].attn
     H = m.num_heads
     # wq = m.q_proj.weight.view(H, -1, embed_dim)[head]
@@ -690,17 +732,34 @@ def combine_weights(weights, qk=True, with_embedding=False, BA=False):
     return wqt.mm(wk) if qk else wo.mm(wv)
 
 def plot_eigv(w, start_i=0, end_i=None, alpha=0.1, plot=True):
+    if w.size(0) == w.size(1): w = w.eig()[0]
+    else: assert w.size(1) == 2
     # w = w.detach()#.numpy()
     x, y = w[:, 0], w[:, 1]
     eigv_positivity = x.sum() / (x**2 + y**2).sqrt().sum()
-    if plot:
+    eigv_reality = x.abs().sum() / (x**2 + y**2).sqrt().sum()
+    if plot or eigv_positivity > 0.8:
         if start_i is None: start_i = 0
         if end_i is None: end_i = len(w)
         plt.gca().set_aspect('equal', adjustable='box')
         plt.plot(x[start_i: end_i], y[start_i: end_i], '.', alpha=alpha); plt.show()
-    return eigv_positivity.item()
+    return eigv_positivity.item(), eigv_reality.item()
 
-def get_eigv_pos(m): return plot_eigv(m.eig()[0], plot=False)
+def filter_eigv(w, v, q, verbose=True):
+    from scipy.stats.stats import pearsonr
+    w2 = []
+    for i, (wi, vi) in enumerate(zip(w, v.T)):
+        corrcoef, p_val = pearsonr(q @ vi, range(q.size(0)))
+        if abs(corrcoef) >= 0.1: print(i, wi, round(corrcoef, 3))
+        if corrcoef >= 0.1 and wi[1] == 0: continue
+        w2.append(wi.tolist())
+    w2 = torch.Tensor(w2)
+    def stat(x):
+        return '%.1f * %d - %.1f * %d' % (x[x > 0].mean().item(), (x > 0).sum().item(), x[x < 0].abs().mean().item(), (x < 0).sum().item())
+    if verbose: print(' ->\n'.join([stat(w[:, 0]), stat(w2[:, 0])]))
+    return w2
+
+def get_eigv_pos(m): return plot_eigv(m.eig()[0], plot=True)
 
 @torch.no_grad()
 def compute_eigv_positivity(model, L, H, use_ln=False):
@@ -715,9 +774,7 @@ def compute_eigv_positivity(model, L, H, use_ln=False):
             wq, wk, wv, wo = get_head_weights(model, layer, head, transpose=True)
             # A, B = wu, ln_f(e @ wv @ wo).T
             A, B = wu @ wo.T, (e @ wv).T; eig_ov = get_eigv_pos(B @ A)
-            q, k = (we.T @ wq), (we.T @ wk).T
-            # print('in compute_eigv_positivity', k.size(), q.size(), (k @ q).size())
-            eig_qk0 = get_eigv_pos(k @ q)
+            q, k = (we.T @ wq), (we.T @ wk).T; eig_qk0 = get_eigv_pos(k @ q)
             q, k = (e @ wq), (e @ wk).T; eig_qk = get_eigv_pos(k @ q)
             eigv_positivity[layer, head] = torch.Tensor([eig_qk0, eig_qk, eig_ov])
     return eigv_positivity
@@ -772,45 +829,77 @@ Id = lambda x: x
 @torch.no_grad()
 def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity,
                     heads_1=None, use_ln=False, _e=None, verbose=False):
-    blocks = model.transformer.h
-    eigv_pos012 = {}
-    if use_ln: ln1 = blocks[l1].ln_1
-    if not verbose and len(heads0) >= 10: heads0 = tqdm(heads0)
-    for l0, h0 in heads0:
-        # if k_comp0 > k_comp0_thld: continue # gpt2-large's 15-4, 17-5, 18-4 > 0.98
-        wv0, wo0 = get_head_weights(model, l0, h0, transpose=True)[2:]
-        hq0 = wv0 @ wo0 @ wv1 @ wo1
-        if heads_1 is not None:
-            # l_1, h_1 = heads_1[0]
-            # wv_1, wo_1 = get_head_weights(model, l_1, h_1, transpose=True)[2:]
-            ln_1 = blocks[heads_1[0][0]].ln_1
-            wvo_1 = sum(torch.matmul(*get_head_weights(model, l, h, transpose=True)[2:]) for l, h in heads_1)
-            hq0 = wvo_1 @ hq0
-        if use_ln: 
-            ln0 = blocks[l0].ln_1
-            ln1 = ln0 = Id
-            # hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if heads_1 is None else \
-            #     ln1((ln0(ln_1(_e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1
-            hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if isinstance(_e, torch.Tensor) else \
-                rearrange([ln1((ln0(e) @ wv0 @ wo0)) @ wv1 @ wo1 for e in _e[: l0 + 1]], 'l v e -> l v e')
-        for l2, h2 in heads2:
-            wq2, wk2 = get_head_weights(model, l2, h2, transpose=True)[:2]
-            q0, k0 = hq0 @ wq2, wk2
-            eigv_pos0 = get_eigv_pos(k0.T @ q0)
-            eigv_pos = eigv_pos0
+    # with torch.no_grad():
+    if True:
+        blocks = model.transformer.h
+        eigv_pos012 = {}
+        if use_ln: ln1 = blocks[l1].ln_1
+        if not verbose and len(heads0) >= 10: heads0 = tqdm(heads0)
+        for l0, h0 in heads0:
+            # if k_comp0 > k_comp0_thld: continue # gpt2-large's 15-4, 17-5, 18-4 > 0.98
+            wv0, wo0 = get_head_weights(model, l0, h0, transpose=True)[2:]
+            hq0 = wv0 @ wo0 @ wv1 @ wo1
+            if heads_1 is not None:
+                # l_1, h_1 = heads_1[0]
+                # wv_1, wo_1 = get_head_weights(model, l_1, h_1, transpose=True)[2:]
+                ln_1 = Id #blocks[heads_1[0][0]].ln_1
+                wvo_1 = sum(torch.matmul(*get_head_weights(model, l, h, transpose=True)[2:]) for l, h in heads_1)
+                hq0 = wvo_1 @ hq0
             if use_ln: 
-                ln2 = Id #blocks[l2].ln_1
-                hk = _e if isinstance(_e, torch.Tensor) else \
-                    rearrange(_e[: l0 + 1], 'l v e -> l v e')
-                q, k = ln2(hq) @ wq2, ln2(hk) @ wk2
-                eigv_pos = get_eigv_pos(k.T @ q) if isinstance(_e, torch.Tensor) else \
-                    [get_eigv_pos(_k.T @ _q) for _q, _k in zip(q, k)] # lvd->l*vd
-            if verbose:
-                # if heads_1 is not None: print(f'{l_1}-{h_1}', end='\t')
-                print(f'{l0}-{h0}, {l1}-{h1}, {l2}-{h2}', eigv_pos0, eigv_pos, eigv_positivity[l2, h2])
-            eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
+                ln0 = blocks[l0].ln_1
+                ln1 = ln0 = Id
+                # hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if heads_1 is None else \
+                #     ln1((ln0(ln_1(_e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1
+                if heads_1 is None:
+                    hq = ln1((ln0(_e) @ wv0 @ wo0)) @ wv1 @ wo1 if isinstance(_e, torch.Tensor) else \
+                        rearrange([ln1((ln0(e) @ wv0 @ wo0)) @ wv1 @ wo1 for e in _e[: l0 + 1]], 'l v e -> l v e')
+                else:
+                    hq = ln1((ln0(ln_1(_e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1 if isinstance(_e, torch.Tensor) else \
+                        rearrange([ln1((ln0(ln_1(e) @ wvo_1) @ wv0 @ wo0)) @ wv1 @ wo1 for e in _e[: l0 + 1]], 'l v e -> l v e')
+            for l2, h2 in heads2:
+                wq2, wk2 = get_head_weights(model, l2, h2, transpose=True)[:2]
+                q0, k0 = hq0 @ wq2, wk2
+                eigv_pos0 = get_eigv_pos(k0.T @ q0)
+                eigv_pos = eigv_pos0
+                if use_ln: 
+                    ln2 = Id #blocks[l2].ln_1
+                    hk = _e if isinstance(_e, torch.Tensor) else \
+                        rearrange(_e[: l0 + 1], 'l v e -> l v e')
+                    q, k = ln2(hq) @ wq2, ln2(hk) @ wk2
+                    eigv_pos = get_eigv_pos(k.T @ q) if isinstance(_e, torch.Tensor) else \
+                        [get_eigv_pos(_k.T @ _q) for _q, _k in zip(q, k)] # lvd->l*vd
+                if verbose:
+                    # if heads_1 is not None: print(f'{l_1}-{h_1}', end='\t')
+                    print(f'{l0}-{h0}, {l1}-{h1}, {l2}-{h2}', eigv_pos0, eigv_pos, eigv_positivity[l2, h2])
+                eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
     return eigv_pos012
 
+wn2i = OrderedDict(zip('qkvo', range(4)))  # q:0, k:1, v:2, o:3
+def weightprod(heads, pattern, weA=None, weB=None, use_ln=False):
+    if weA is not None and weB is None: weB = weA
+    pattern = pattern.split()  # e.g. 'vo vo qk' -> ['vo', 'vo', 'qk']
+    assert len(heads) == len(pattern)
+    last_dim = weA.size(-1) if weA is not None else None
+    prod = []
+    for head, wns in zip(heads, pattern):
+        if pattern == 'x':
+            w = head; prod.append(w)
+        else:
+            weights = get_head_weights(model, *head)
+            for wn in wns:
+                w = weights[wn2i[wn]]
+                if last_dim is not None and w.size(0) != last_dim:
+                    w = w.T; assert w.size(0) == last_dim, f'{last_dim}, {w.size()}'
+                prod.append(w)
+                last_dim = w.size(-1)
+    if use_ln:
+        assert False
+    else:
+        A, B = reduce(torch.matmul, prod[:-1]), prod[-1]
+        if weA is not None: A = weA @ A
+        if weB is not None: B = B @ weB.T
+    return A, B, (B @ A).eig(eigenvectors=True)
+    
 def get_conductivity(eigv_positivity012, l1, h1, plot=False, figsize=(5, 2)):
     x = eigv_positivity012.get((l1, h1))
     if x is None: return 0.
