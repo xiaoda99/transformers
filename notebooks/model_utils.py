@@ -7,7 +7,7 @@ from matplotlib import scale  # same as typing.Iterable?
 import numpy as np
 import math
 from dataclasses import dataclass
-from functools import partial
+from functools import reduce, partial
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
@@ -395,6 +395,97 @@ def compute_loss(logits, labels, reduction=None):
             # print('in compute_loss, after loss =', loss)
     return loss
 
+def get_multiplier(block, hidden_states, attentions, head_input, special_head_output, labels, layer,
+        attr_threshold=1, base_multiplier=1.5, verbose=False):
+    H = attentions.size(1)
+    # mask = torch.ones(1, H, L, H + 2, outputs.cat_hidden_states.size(-2)); mask[:, :, layer:] = 0 # bnloi
+    # x = {'mask': mask}
+    
+    # special_head_output: sie
+    x = {'mask': torch.ones(1, H, special_head_output.size(0) + 1, special_head_output.size(-2))}  # bnpi
+
+    attn_labels = torch.einsum('bnij,bnj->bnij', attentions, head_input.norm(dim=-1)) # bnje->bnj
+    # attn_labels = attn_labels / attn_labels.sum(-1, keepdim=True)  # bnij->bni1 
+    fwd_fn = partial(cat_attn_forward, cat_hidden_states=special_head_output, #outputs.cat_hidden_states, 
+                sum_hidden_states=hidden_states, attn_labels=attn_labels)
+    attr, ys, logits = _attribute(fwd_fn, block, x, num_points=3)
+
+    a = attr['mask']  # nloi, nsi
+    # a2 = torch.add(a[:, 8, 1, :]*0, a[:, 12, 10, :]) # ni
+    a2 = a[:, -1, :]  # ni
+
+    labels_mask = (labels != -100).squeeze(0)#.fill_(1)
+    multiplier_mask = (a2 >= attr_threshold) * labels_mask
+    if verbose and multiplier_mask.sum() > 0:
+        for head in range(H):
+            n_multiplied = multiplier_mask[head].sum()
+            if n_multiplied > 0:
+                print(f'{layer}-{head}', n_multiplied, (a2 * labels_mask)[head].topk(min(a2.size(1), n_multiplied + 1)))
+    return base_multiplier * multiplier_mask + 1 * ~multiplier_mask
+
+def forward(model, inputs, labels=None, loss_reduction=None, by_head=False, attribute_layer=None, 
+            head_mask=None, mlp_mask=None, attn_weights=None,
+            hidden_states=None, detach_layer=None,
+            special_head=(None, None), special_head_multiplier=1, #wv=None, wo=None, 
+            multiplied_layers=[], attr_threshold=1., base_multiplier=1.5, with_grad=False):
+    L = len(model.transformer.h)
+    head_mask = fill_list(head_mask, L, attribute_layer)
+    mlp_mask = fill_list(mlp_mask, L, attribute_layer)
+    attn_weights = fill_list(attn_weights, L, attribute_layer)
+    from_layer = attribute_layer if hidden_states is not None else None
+
+    self = model.transformer
+    (hidden_states, inputs_embeds, position_embeds) = embed_forward(self, inputs) \
+        if from_layer is None else (hidden_states, None, None)
+    all_hidden_states, intermediates, mlp_outputs = (), (), ()
+    attn_fwd_outputs = []
+    # hq_extra = None
+    special_head_outputs = None
+    for i, b in enumerate(self.h):
+        torch.set_grad_enabled(with_grad)
+        if from_layer is not None and i < from_layer: continue
+        if i == detach_layer: hidden_states = hidden_states.detach()
+        all_hidden_states += (hidden_states,)
+        hq = hk = hv = b.ln_1(hidden_states)
+        # if hq_extra is not None: hq = b.ln_1(hidden_states + hq_extra)
+        attn_fwd_output = attn_forward(b, hq, hk, hv, by_head=by_head or i in multiplied_layers or i == special_head[0],
+                            compute_head_input=True, head_mask=head_mask[i], attn_weights=attn_weights[i])
+        attn_fwd_outputs.append(attn_fwd_output)
+        attn_output, aw, head_input, head_output = attn_fwd_output
+        if i == special_head[0]:
+            head_output = list(rearrange(head_output, 'b n i e -> n b i e'))  # nbie->n*bie
+            # hq_extra = aw[:, special_head[1]] @ (hv @ wv @ wo) # bnij->bij,bje->bie
+            # attn_output = attn_output + hq_extra
+            head_output[special_head[1]] = head_output[special_head[1]] * special_head_multiplier
+            special_head_outputs = torch.cat([special_head_outputs, head_output[special_head[1]]]) \
+                if special_head_outputs is not None else head_output[special_head[1]] # sie, s in [1, 2] for 8-1, 12-10
+            attn_output = sum(head_output)
+        if i in multiplied_layers:
+            multiplier = get_multiplier(b, hidden_states, aw, head_input, special_head_outputs, labels, i,
+                attr_threshold=attr_threshold, base_multiplier=base_multiplier)
+            attn_output = torch.einsum('bnie,ni->bie', head_output, multiplier)
+        if not my_isinstance(b, GPTJBlock): hidden_states = hidden_states + attn_output
+        mlp_output, intermediate = mlp_forward(b, hidden_states, output_intermediate=True)
+        if mlp_mask[i] is not None: mlp_output = einsum('bie,bi->bie', mlp_output, mlp_mask[i])
+        intermediates += (intermediate,)
+        mlp_outputs += (mlp_output,)
+        if my_isinstance(b, GPTJBlock): hidden_states = hidden_states + attn_output
+        hidden_states = hidden_states + mlp_output
+    attn_outputs, all_attentions, head_inputs, head_outputs = zip(*attn_fwd_outputs)
+    all_hidden_states += (hidden_states,) # both before and after ln_f
+    hidden_states = self.ln_f(hidden_states)
+    all_hidden_states += (hidden_states,)
+
+    logits = model.lm_head(hidden_states)
+    loss = compute_loss(logits, labels, reduction=loss_reduction) if labels is not None else None
+    return Outputs(
+        inputs_embeds=inputs_embeds, position_embeds=position_embeds,
+        attn_outputs=attn_outputs, head_inputs=head_inputs, head_outputs=head_outputs, 
+        intermediates=intermediates, mlp_outputs=mlp_outputs,
+        hidden_states=all_hidden_states, attentions=all_attentions, 
+        logits=logits, loss=loss,
+    )
+
 def get_argmax_labels(model, hidden_states, labels):
     logits = model.lm_head(model.transformer.ln_f(hidden_states))
     argmax_labels = labels.clone()
@@ -713,12 +804,13 @@ def get_head_weights(model, layer, head=None, transpose=True):
     # wk = m.k_proj.weight.view(H, -1, embed_dim)[head]
     # wv = m.v_proj.weight.view(H, -1, embed_dim)[head]
     # wo = m.out_proj.weight.view(embed_dim, H, -1)[:, head]
-    if head is None: head = range(H)
+    # if head is None: head = range(H)
     (qkv_pattern, o_pattern) = ('(n d) e -> n d e', 'e (n d) -> n e d') \
         if not transpose else ('(n d) e -> n e d', 'e (n d) -> n d e')
-    wq, wk, wv = [rearrange(getattr(m, name).weight, qkv_pattern, n=H)[head]
+    wq, wk, wv = [rearrange(getattr(m, name).weight, qkv_pattern, n=H)
                 for name in ['q_proj', 'k_proj', 'v_proj']]
-    wo = rearrange(getattr(m, 'out_proj').weight, o_pattern, n=H)[head]
+    wo = rearrange(getattr(m, 'out_proj').weight, o_pattern, n=H)
+    if head is not None: wq, wk, wv, wo = [w[head] for w in [wq, wk, wv, wo]]
     # if transpose: wq, wk, wv, wo = wq.transpose(-2, -1), wk.transpose(-2, -1), wv.transpose(-2, -1), wo.transpose(-2, -1)
     return wq.data, wk.data, wv.data, wo.data
 
@@ -738,7 +830,7 @@ def plot_eigv(w, start_i=0, end_i=None, alpha=0.1, plot=True):
     x, y = w[:, 0], w[:, 1]
     eigv_positivity = x.sum() / (x**2 + y**2).sqrt().sum()
     eigv_reality = x.abs().sum() / (x**2 + y**2).sqrt().sum()
-    if plot or eigv_positivity > 0.8:
+    if plot:
         if start_i is None: start_i = 0
         if end_i is None: end_i = len(w)
         plt.gca().set_aspect('equal', adjustable='box')
@@ -875,36 +967,67 @@ def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity
     return eigv_pos012
 
 wn2i = OrderedDict(zip('qkvo', range(4)))  # q:0, k:1, v:2, o:3
-def weightprod(heads, pattern, weA=None, weB=None, use_ln=False):
+def weightprod(model, heads, pattern, weA=None, weB=None, weBTA=None, use_ln=False):
     if weA is not None and weB is None: weB = weA
     pattern = pattern.split()  # e.g. 'vo vo qk' -> ['vo', 'vo', 'qk']
     assert len(heads) == len(pattern)
     last_dim = weA.size(-1) if weA is not None else None
     prod = []
     for head, wns in zip(heads, pattern):
-        if pattern == 'x':
-            w = head; prod.append(w)
+        if wns == 'x':
+            w = head; prod.append(w); last_dim = w.size(-1)
         else:
             weights = get_head_weights(model, *head)
             for wn in wns:
                 w = weights[wn2i[wn]]
-                if last_dim is not None and w.size(0) != last_dim:
-                    w = w.T; assert w.size(0) == last_dim, f'{last_dim}, {w.size()}'
-                prod.append(w)
-                last_dim = w.size(-1)
+                if last_dim is not None and w.size(-2) != last_dim:
+                    w = w.transpose(-2, -1)
+                    assert w.size(-2) == last_dim, f'{last_dim}, {w.size()}'
+                prod.append(w); last_dim = w.size(-1)
     if use_ln:
         assert False
     else:
         A, B = reduce(torch.matmul, prod[:-1]), prod[-1]
         if weA is not None: A = weA @ A
         if weB is not None: B = B @ weB.T
-    return A, B, (B @ A).eig(eigenvectors=True)
+        prod = B @ A if weBTA is None else B @ weBTA @ A
+    return A, B, prod #.eig(eigenvectors=False)
+
+def complete_tril(a): return a + (a - torch.eye(a.size(0))).T
+
+def compute_sim_eigv(model, L, H, weA=None, weB=None):
+    # with torch.no_grad():
+    if weA is not None:
+        if weB is None: weB = weA
+        weBTA = weB.T @ weA
+    else:
+        weBTA = None
+    sim_eigv_pos, sim_eigv_real = torch.zeros(L * H, L * H), torch.zeros(L * H, L * H)
+    for l0 in tqdm(range(L)):
+        for h0 in range(H):
+            w = torch.matmul(*weightprod(model, [(l0, h0)], 'vo')[:2])
+            if weBTA is not None: w = weBTA @ w
+            prods = [weightprod(model, [w, (l1, None)], 'x ov')[-1] for l1 in range(l0, L)]
+            prods = torch.cat(prods).to('cpu')[h0:]  # (L-l0)*H d d -> (L-l0)*H-h0 d d.
+            # compute eigv on gpu is slower, so move to cpu first.
+            eigv_pos, eigv_real = zip(*[plot_eigv(p.eig()[0], plot=False) for p in prods]) 
+            sim_eigv_pos[l0 * H + h0, l0 * H + h0 :] = torch.Tensor(eigv_pos)  # (L-l0)*H-h0 eigenvalues
+            sim_eigv_real[l0 * H + h0, l0 * H + h0 :] = torch.Tensor(eigv_real)
+    return complete_tril(sim_eigv_pos), complete_tril(sim_eigv_real)
     
 def get_conductivity(eigv_positivity012, l1, h1, plot=False, figsize=(5, 2)):
     x = eigv_positivity012.get((l1, h1))
     if x is None: return 0.
     if plot: plt.figure(figsize=figsize); plt.hist(x, 20); _ = plt.title(f'{l1}-{h1}'); plt.show()
     return np.abs(np.array(x)).mean()
+
+def get_positional_score(model, qlen=128, offset=-1, substract_null_attn=True):
+    attentions = forward(model, torch.randint(100, 25000, size=(1, qlen))).attentions
+    attentions = torch.cat(attentions)  # l*1nij->lnij
+    null_attn = attentions[:, :, abs(offset):, 0].clone()  # l n i-1
+    if substract_null_attn: null_attn[:, :, 0] = 0
+    else: null_attn[:] = 0
+    return (attentions.diagonal(offset=offset, dim1=-2, dim2=-1) / (1 - null_attn)).mean(-1)
 
 def plot_k_comp(heads, k_compositions, pos_heads2val):
     ls, hs = zip(*heads)
@@ -915,6 +1038,22 @@ def plot_k_comp(heads, k_compositions, pos_heads2val):
 def add_attr(head_tuples, attr_dicts):
     if not isinstance(attr_dicts, (tuple, list)): attr_dicts = [attr_dicts]
     return [[l, h, *v] + [attr_dict[l, h] for attr_dict in attr_dicts] for l, h, *v in head_tuples]
+
+def embed_by_sim_eigv(sim_eigv):
+    distance = 1 - sim_eigv  # 1 - [-1, 1] = [2, 0]. like cosine distance
+    _ = distance.fill_diagonal_(0)
+    distance = distance.clamp(min=0)
+    distance = distance[H:, H:]  # remove layer 0
+    # algo = MDS(n_components=2, dissimilarity='precomputed')
+    algo = TSNE(n_components=2, metric='precomputed', square_distances=True)
+    # squared in TSNE._fit to recovery cosine distance:
+    # https://github.com/scikit-learn/scikit-learn/blob/80598905e/sklearn/manifold/_t_sne.py#L917-L918
+    # TSNE uses squared euclidean distance which is proportional to the cosine distance when data is L2 normalized:
+    # https://stackoverflow.com/questions/36545434/cosine-similarity-tsne-in-sklearn-manifold (search "squared" and "square root")
+    # https://stats.stackexchange.com/questions/146221/is-cosine-similarity-identical-to-l2-normalized-euclidean-distance
+    distance = distance ** .5 
+    result = algo.fit_transform(distance)
+    return result
 
 # losses2 = []
 # sum_output = head_outputs * 0
