@@ -8,6 +8,7 @@ import numpy as np
 import math
 from dataclasses import dataclass
 from functools import reduce, partial
+from itertools import chain, product, combinations, cycle
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
@@ -851,7 +852,7 @@ def filter_eigv(w, v, q, verbose=True):
     if verbose: print(' ->\n'.join([stat(w[:, 0]), stat(w2[:, 0])]))
     return w2
 
-def get_eigv_pos(m): return plot_eigv(m.eig()[0], plot=True)
+def get_eigv(m): return plot_eigv(m.eig()[0], plot=False)
 
 @torch.no_grad()
 def compute_eigv_positivity(model, L, H, use_ln=False):
@@ -966,55 +967,95 @@ def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity
                 eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
     return eigv_pos012
 
+def iterable(item):
+    return isinstance(item, Iterable) and not isinstance(item, (tuple, str, torch.Tensor))
 wn2i = OrderedDict(zip('qkvo', range(4)))  # q:0, k:1, v:2, o:3
-def weightprod(model, heads, pattern, weA=None, weB=None, weBTA=None, use_ln=False):
-    if weA is not None and weB is None: weB = weA
+
+def weightprod(model, heads, pattern, BA=True):
+    # iterables = [head for head in heads if iterable(head)]
+    # assert len(iterables) <= 1, str(iterables)
+    # if len(iterables) == 1:  # yield or generator expression
+    #     iterable_head = iterables[0]
+    #     iterable_heads = zip(*[head if iterable(head) else cycle([head]) for head in heads])
+    #     # assert len(iterable_head) == len(list(zip(*[head if iterable(head) else cycle([head]) for head in heads])))
+    #     for _head, _heads in zip(iterable_head, iterable_heads):
+    #         assert len([h for h in _heads if iterable(h)]) == 0
+    #         prod = weightprod(model, _heads, pattern, BA=BA)
+    #         yield _head, prod
+    #     # return ((_head, weightprod(model, _heads, pattern, use_ln=use_ln)) for _head, _heads in 
+    #     #   zip(iterable_head, zip(*[head if iterable(head) else cycle([head]) for head in heads])))
+    iterables = [head for head in heads if iterable(head)]
+    assert len(iterables) == 0, str(iterables)
     pattern = pattern.split()  # e.g. 'vo vo qk' -> ['vo', 'vo', 'qk']
-    assert len(heads) == len(pattern)
-    last_dim = weA.size(-1) if weA is not None else None
-    prod = []
+    assert len(heads) == len(pattern), f'{len(heads)} != len({pattern})'
+    last_dim = None
+    ws = []
     for head, wns in zip(heads, pattern):
-        if wns == 'x':
-            w = head; prod.append(w); last_dim = w.size(-1)
+        def add_w(w):
+            nonlocal last_dim
+            if last_dim is not None and w.size(-2) != last_dim:
+                w = w.transpose(-2, -1)
+                assert w.size(-2) == last_dim, f'{last_dim}, {w.size()}'
+            ws.append(w); last_dim = w.size(-1)
+        if wns in ['x']:
+            add_w(head)
         else:
             weights = get_head_weights(model, *head)
-            for wn in wns:
-                w = weights[wn2i[wn]]
-                if last_dim is not None and w.size(-2) != last_dim:
-                    w = w.transpose(-2, -1)
-                    assert w.size(-2) == last_dim, f'{last_dim}, {w.size()}'
-                prod.append(w); last_dim = w.size(-1)
-    if use_ln:
-        assert False
-    else:
-        A, B = reduce(torch.matmul, prod[:-1]), prod[-1]
-        if weA is not None: A = weA @ A
-        if weB is not None: B = B @ weB.T
-        prod = B @ A if weBTA is None else B @ weBTA @ A
-    return A, B, prod #.eig(eigenvectors=False)
+            for wn in wns: add_w(weights[wn2i[wn]])
+    for i in reversed(range(len(ws))): # find the cutting point with local minimal dim, e.g. head_dim
+        if ws[i - 1].size(-2) > ws[i].size(-2): break
+    A, B = reduce(torch.matmul, ws[:i]), reduce(torch.matmul, ws[i:])
+    return B @ A if BA else A @ B
 
-def complete_tril(a): return a + (a - torch.eye(a.size(0))).T
+def iweightprod(model, heads, pattern, BA=True):
+    iterables = [head for head in heads if iterable(head)]
+    assert len(iterables) == 1, str(iterables)
+    if len(iterables) == 1:
+        iterable_head = iterables[0]
+        iterable_heads = zip(*[head if iterable(head) else cycle([head]) for head in heads])
+        # assert len(iterable_head) == len(list(zip(*[head if iterable(head) else cycle([head]) for head in heads])))
+        for _head, _heads in zip(iterable_head, iterable_heads):
+            assert len([h for h in _heads if iterable(h)]) == 0
+            prod = weightprod(model, _heads, pattern, BA=BA)
+            yield _head, prod
 
-def compute_sim_eigv(model, L, H, weA=None, weB=None):
-    # with torch.no_grad():
-    if weA is not None:
-        if weB is None: weB = weA
-        weBTA = weB.T @ weA
-    else:
-        weBTA = None
-    sim_eigv_pos, sim_eigv_real = torch.zeros(L * H, L * H), torch.zeros(L * H, L * H)
-    for l0 in tqdm(range(L)):
-        for h0 in range(H):
-            w = torch.matmul(*weightprod(model, [(l0, h0)], 'vo')[:2])
-            if weBTA is not None: w = weBTA @ w
-            prods = [weightprod(model, [w, (l1, None)], 'x ov')[-1] for l1 in range(l0, L)]
-            prods = torch.cat(prods).to('cpu')[h0:]  # (L-l0)*H d d -> (L-l0)*H-h0 d d.
-            # compute eigv on gpu is slower, so move to cpu first.
-            eigv_pos, eigv_real = zip(*[plot_eigv(p.eig()[0], plot=False) for p in prods]) 
-            sim_eigv_pos[l0 * H + h0, l0 * H + h0 :] = torch.Tensor(eigv_pos)  # (L-l0)*H-h0 eigenvalues
-            sim_eigv_real[l0 * H + h0, l0 * H + h0 :] = torch.Tensor(eigv_real)
-    return complete_tril(sim_eigv_pos), complete_tril(sim_eigv_real)
-    
+# def complete_tril(a): return a + (a - torch.eye(a.size(-1))).T
+def complete_tril(a): return a + (a * (1 - torch.eye(a.size(-1)))).tranpose(-2, -1)
+
+def compute_eigvs(model, heads, pattern, weBTA=None, get_l1_start=None):
+    if get_l1_start == None : get_l1_start = lambda l: l + 1
+    blocks = model.transformer.h
+    L, H = len(blocks), blocks[0].attn.num_heads
+    assert len([p for p in pattern.split() if p not in 'eEux']) <= 2, pattern
+    pattern = pattern.split()
+    if pattern[0] in 'eEu':
+        assert pattern[-1] == pattern[0] or pattern[-1] == 'u'
+        assert len(pattern) - len(heads) == 2, f'len({pattern}) - {len(heads)} != 2'
+        assert weBTA is not None
+        heads = [weBTA] + heads
+        pattern[0] = 'x'; del pattern[-1]
+    assert heads[-1] != 'x'
+    heads0, heads1 = heads[:-1], heads[-1:]
+    pattern0, pattern1 = ' '.join(pattern[:-1]), ' '.join(pattern[-1:])
+    assert isinstance(heads0[-1], tuple) or iterable(heads0[-1]), str(heads0[-1])
+    assert iterable(heads1[0]), str(heads1[0])
+    last_layer0 = heads0[-1][0] if isinstance(heads0[-1], tuple) else None
+    eigvs = torch.zeros(L, H, L, H, 2)
+    itotal0 = len([head for head in heads0 if iterable(head)][0])
+    for (l0, h0), prod0 in tqdm(iweightprod(model, heads0, pattern0, BA=False), total=itotal0):
+        last_layer = l0 if last_layer0 is None else last_layer0
+        l1_start = get_l1_start(last_layer)
+        ihead1 = [(l1, None) for l1 in range(l1_start, L)] # layer by layer for fast computation
+        _, prods = zip(*list(iweightprod(model, [prod0] + [ihead1], 'x ' + pattern1))) # generator -> list
+        prods = torch.cat(prods).to('cpu') # compute eigv on gpu is slower, so move to cpu first
+        ihead1 = list(product(range(l1_start, L), range(H)))  # head by head
+        assert len(ihead1) == len(prods), f'{len(ihead1)} != {prods.size()}[0]'
+        for (l1, h1), prod in zip(ihead1, prods):
+            if (l1, h1) in heads1[0]:
+                # print(get_eigv(prod))
+                eigvs[l0, h0, l1, h1] = torch.Tensor(get_eigv(prod)) # (positivity, reality)
+    return eigvs
+
 def get_conductivity(eigv_positivity012, l1, h1, plot=False, figsize=(5, 2)):
     x = eigv_positivity012.get((l1, h1))
     if x is None: return 0.

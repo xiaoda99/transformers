@@ -35,14 +35,14 @@ def show_topk(values, indices, values_fn=lambda x: numpy(x, decimals=3), indices
         indices_fn = show_topk.indices_fn if getattr(show_topk, 'indices_fn', None) is not None else lambda x: x
     return dict(OrderedDict(zip(indices_fn(indices), values_fn(values))))
 
-def topk_md(tensor, k, largest=True, zipped=False):
+def topk_md(tensor, k, largest=True, transpose=False):
     if tensor.ndim == 1:
         values, indices = tensor.topk(k, largest=largest)
         return indices.numpy(), values.numpy()
     values, indices = tensor.flatten().topk(k, largest=largest)
     # https://stackoverflow.com/questions/64241325/top-k-indices-of-a-multi-dimensional-tensor
     rows, cols = np.unravel_index(indices.numpy(), tensor.shape)
-    return (rows, cols, values.numpy()) if not zipped else list(zip(rows, cols, values.numpy()))
+    return (rows, cols, values.numpy()) if not transpose else list(zip(rows, cols, values.numpy()))
 
 def to_df(*args): return pd.DataFrame(list(zip(*args)))
 
