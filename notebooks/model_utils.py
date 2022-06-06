@@ -13,6 +13,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
 
+from sklearn.manifold import TSNE, MDS
+from sklearn.decomposition import PCA
+
 import torch
 import torch.nn as nn
 import einops
@@ -26,7 +29,7 @@ from transformers.models.xglm.modeling_xglm import XGLMAttention, XGLMDecoderLay
 # from sklearn.decomposition import PCA
 # from sklearn.cluster import KMeans
 
-from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, equal, join_lists
+from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, equal, join_lists, iterable
 
 @dataclass
 class Outputs:
@@ -60,6 +63,10 @@ class AttrData:
     label_type: str = None
     attribute_k: bool = False
     attr: Attributions = None
+
+@dataclass
+class Eigovs:
+    ov: torch.FloatTensor = None
 
 def fill_list(e, length, i, default_e=None): # fill e to ith position of a list of default_es
     if type(e) == list: assert len(e) == length, f'{len(e)} != {length}'; return e
@@ -967,26 +974,18 @@ def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity
                 eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
     return eigv_pos012
 
-def iterable(item):
-    return isinstance(item, Iterable) and not isinstance(item, (tuple, str, torch.Tensor))
 wn2i = OrderedDict(zip('qkvo', range(4)))  # q:0, k:1, v:2, o:3
 
-def weightprod(model, heads, pattern, BA=True):
-    # iterables = [head for head in heads if iterable(head)]
-    # assert len(iterables) <= 1, str(iterables)
-    # if len(iterables) == 1:  # yield or generator expression
-    #     iterable_head = iterables[0]
-    #     iterable_heads = zip(*[head if iterable(head) else cycle([head]) for head in heads])
-    #     # assert len(iterable_head) == len(list(zip(*[head if iterable(head) else cycle([head]) for head in heads])))
-    #     for _head, _heads in zip(iterable_head, iterable_heads):
-    #         assert len([h for h in _heads if iterable(h)]) == 0
-    #         prod = weightprod(model, _heads, pattern, BA=BA)
-    #         yield _head, prod
-    #     # return ((_head, weightprod(model, _heads, pattern, use_ln=use_ln)) for _head, _heads in 
-    #     #   zip(iterable_head, zip(*[head if iterable(head) else cycle([head]) for head in heads])))
+def weightprod(model, heads, pattern, weBTA=None, BA=True):
     iterables = [head for head in heads if iterable(head)]
     assert len(iterables) == 0, str(iterables)
     pattern = pattern.split()  # e.g. 'vo vo qk' -> ['vo', 'vo', 'qk']
+    if pattern[0] in 'eEu':
+        assert pattern[-1] == pattern[0] or pattern[-1] == 'u'
+        assert len(pattern) - len(heads) == 2, f'len({pattern}) - {len(heads)} != 2'
+        assert weBTA is not None
+        heads = [weBTA] + heads
+        pattern[0] = 'x'; del pattern[-1]
     assert len(heads) == len(pattern), f'{len(heads)} != len({pattern})'
     last_dim = None
     ws = []
@@ -1005,6 +1004,8 @@ def weightprod(model, heads, pattern, BA=True):
     for i in reversed(range(len(ws))): # find the cutting point with local minimal dim, e.g. head_dim
         if ws[i - 1].size(-2) > ws[i].size(-2): break
     A, B = reduce(torch.matmul, ws[:i]), reduce(torch.matmul, ws[i:])
+    # print('A:', [w.size() for w in ws[:i]], A.size())
+    # print('B:', [w.size() for w in ws[i:]], B.size())
     return B @ A if BA else A @ B
 
 def iweightprod(model, heads, pattern, BA=True):
@@ -1080,11 +1081,11 @@ def add_attr(head_tuples, attr_dicts):
     if not isinstance(attr_dicts, (tuple, list)): attr_dicts = [attr_dicts]
     return [[l, h, *v] + [attr_dict[l, h] for attr_dict in attr_dicts] for l, h, *v in head_tuples]
 
-def embed_by_sim_eigv(sim_eigv):
-    distance = 1 - sim_eigv  # 1 - [-1, 1] = [2, 0]. like cosine distance
+def embed_by_pairwise_eigvs(meigvs):
+    distance = 1 - meigvs  # 1 - [-1, 1] = [2, 0]. like cosine distance
     _ = distance.fill_diagonal_(0)
     distance = distance.clamp(min=0)
-    distance = distance[H:, H:]  # remove layer 0
+    # distance = distance[H:, H:]  # remove layer 0
     # algo = MDS(n_components=2, dissimilarity='precomputed')
     algo = TSNE(n_components=2, metric='precomputed', square_distances=True)
     # squared in TSNE._fit to recovery cosine distance:
@@ -1095,6 +1096,17 @@ def embed_by_sim_eigv(sim_eigv):
     distance = distance ** .5 
     result = algo.fit_transform(distance)
     return result
+
+def get_knn(pairwise_sim, heads, src_left=True, topk=10, sim_threshold=0.9):
+    if isinstance(heads, tuple): heads = [heads]  # (2, 11) -> [(2, 11)]
+    knn = {}
+    for l0, h0 in heads:
+        neighbours = pairwise_sim[l0, h0, :, :] if src_left else pairwise_sim[:, :, l0, h0]
+        for l1, h1, sim in topk_md(neighbours, k=topk, transpose=True):
+            if sim >= sim_threshold: knn[(l1, h1)] = max(knn.get((l1, h1), -1), sim)
+    return knn
+
+def rescale(a, threshold, upper_bound=1): return (a - threshold) * upper_bound / (upper_bound - threshold)
 
 # losses2 = []
 # sum_output = head_outputs * 0

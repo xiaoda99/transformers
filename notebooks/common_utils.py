@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from functools import partial
 from collections import defaultdict, OrderedDict, Counter
+from collections.abc import Iterable
 import types
 import math
 from itertools import chain
@@ -177,3 +178,6 @@ def reduce_objects(objs, fields, reduce_fn='mean'):
         if getattr(objs[0], field, None) is None: continue
         setattr(obj, field, sum(getattr(o, field) for o in objs) / (len(objs) if reduce_fn == 'mean' else 1))
     return obj
+
+def iterable(item):
+    return isinstance(item, Iterable) and not isinstance(item, (tuple, str, torch.Tensor))
