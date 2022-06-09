@@ -808,18 +808,12 @@ def node2fn(model, node, outputs, labels, attn_attr):
 def get_head_weights(model, layer, head=None, transpose=True):
     m = model.transformer.h[layer].attn
     H = m.num_heads
-    # wq = m.q_proj.weight.view(H, -1, embed_dim)[head]
-    # wk = m.k_proj.weight.view(H, -1, embed_dim)[head]
-    # wv = m.v_proj.weight.view(H, -1, embed_dim)[head]
-    # wo = m.out_proj.weight.view(embed_dim, H, -1)[:, head]
-    # if head is None: head = range(H)
     (qkv_pattern, o_pattern) = ('(n d) e -> n d e', 'e (n d) -> n e d') \
         if not transpose else ('(n d) e -> n e d', 'e (n d) -> n d e')
     wq, wk, wv = [rearrange(getattr(m, name).weight, qkv_pattern, n=H)
                 for name in ['q_proj', 'k_proj', 'v_proj']]
     wo = rearrange(getattr(m, 'out_proj').weight, o_pattern, n=H)
     if head is not None: wq, wk, wv, wo = [w[head] for w in [wq, wk, wv, wo]]
-    # if transpose: wq, wk, wv, wo = wq.transpose(-2, -1), wk.transpose(-2, -1), wv.transpose(-2, -1), wo.transpose(-2, -1)
     return wq.data, wk.data, wv.data, wo.data
 
 def combine_weights(weights, qk=True, with_embedding=False, BA=False):
@@ -976,7 +970,7 @@ def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity
 
 wn2i = OrderedDict(zip('qkvo', range(4)))  # q:0, k:1, v:2, o:3
 
-def weightprod(model, heads, pattern, weBTA=None, BA=True):
+def weightprod(model, heads, pattern, weBTA=None, BA=True, use_frobenius=False, return_ws=False):
     iterables = [head for head in heads if iterable(head)]
     assert len(iterables) == 0, str(iterables)
     pattern = pattern.split()  # e.g. 'vo vo qk' -> ['vo', 'vo', 'qk']
@@ -1001,6 +995,19 @@ def weightprod(model, heads, pattern, weBTA=None, BA=True):
         else:
             weights = get_head_weights(model, *head)
             for wn in wns: add_w(weights[wn2i[wn]])
+    if return_ws: return ws
+    if use_frobenius:
+        assert weBTA is None
+        i = -2
+        A, B = reduce(torch.matmul, ws[:i]), reduce(torch.matmul, ws[i:])
+        B0, B1 = ws[i:]  # A @ B0 @ B1 is much faster than A @ B!
+        r1 = (A * B.transpose(-2, -1)).sum(dim=(-2, -1))  # frobenius inner product
+        r2 = (A @ B0 @ B1).norm(dim=(-2, -1)) # (A @ B).norm(dim=(-2, -1))
+        denorm = A.norm(dim=(-2, -1)) * B.norm(dim=(-2, -1))
+        assert r1.size() == r2.size() == denorm.size()
+        r1, r2 = r1 / denorm, r2 / denorm
+        if r1.ndim == 0: r1, r2 = r1.view(1), r2.view(1)
+        return torch.stack([r1, r2], -1) # fro inner product and fro norm, size b2 (b>=1)
     for i in reversed(range(len(ws))): # find the cutting point with local minimal dim, e.g. head_dim
         if ws[i - 1].size(-2) > ws[i].size(-2): break
     A, B = reduce(torch.matmul, ws[:i]), reduce(torch.matmul, ws[i:])
@@ -1008,7 +1015,7 @@ def weightprod(model, heads, pattern, weBTA=None, BA=True):
     # print('B:', [w.size() for w in ws[i:]], B.size())
     return B @ A if BA else A @ B
 
-def iweightprod(model, heads, pattern, BA=True):
+def iweightprod(model, heads, pattern, **kwargs):
     iterables = [head for head in heads if iterable(head)]
     assert len(iterables) == 1, str(iterables)
     if len(iterables) == 1:
@@ -1017,17 +1024,20 @@ def iweightprod(model, heads, pattern, BA=True):
         # assert len(iterable_head) == len(list(zip(*[head if iterable(head) else cycle([head]) for head in heads])))
         for _head, _heads in zip(iterable_head, iterable_heads):
             assert len([h for h in _heads if iterable(h)]) == 0
-            prod = weightprod(model, _heads, pattern, BA=BA)
+            prod = weightprod(model, _heads, pattern, **kwargs)
             yield _head, prod
+ 
+def compute_eigvs(model, heads, pattern, weBTA=None, get_l1_start=None, **kwargs):
+    iterables = [head for head in heads if iterable(head)]
+    assert len(iterables) in [1, 2], pattern
+    if len(iterables) == 1:
+        eigvs = torch.Tensor([[get_eigv(prod) for prod in prods.to('cpu')]
+                        for _, prods in tqdm(iweightprod(model, heads, pattern))])
+        return eigvs
 
-# def complete_tril(a): return a + (a - torch.eye(a.size(-1))).T
-def complete_tril(a): return a + (a * (1 - torch.eye(a.size(-1)))).tranpose(-2, -1)
-
-def compute_eigvs(model, heads, pattern, weBTA=None, get_l1_start=None):
-    if get_l1_start == None : get_l1_start = lambda l: l + 1
+    if get_l1_start == None : get_l1_start = lambda l0: l0 + 1
     blocks = model.transformer.h
     L, H = len(blocks), blocks[0].attn.num_heads
-    assert len([p for p in pattern.split() if p not in 'eEux']) <= 2, pattern
     pattern = pattern.split()
     if pattern[0] in 'eEu':
         assert pattern[-1] == pattern[0] or pattern[-1] == 'u'
@@ -1042,21 +1052,44 @@ def compute_eigvs(model, heads, pattern, weBTA=None, get_l1_start=None):
     assert iterable(heads1[0]), str(heads1[0])
     last_layer0 = heads0[-1][0] if isinstance(heads0[-1], tuple) else None
     eigvs = torch.zeros(L, H, L, H, 2)
+    use_frobenius = kwargs.get('use_frobenius', False)
+    if use_frobenius: eigvs = eigvs.to(blocks[0].attn.k_proj.weight.device) # cuda
     itotal0 = len([head for head in heads0 if iterable(head)][0])
     for (l0, h0), prod0 in tqdm(iweightprod(model, heads0, pattern0, BA=False), total=itotal0):
         last_layer = l0 if last_layer0 is None else last_layer0
         l1_start = get_l1_start(last_layer)
         ihead1 = [(l1, None) for l1 in range(l1_start, L)] # layer by layer for fast computation
-        _, prods = zip(*list(iweightprod(model, [prod0] + [ihead1], 'x ' + pattern1))) # generator -> list
-        prods = torch.cat(prods).to('cpu') # compute eigv on gpu is slower, so move to cpu first
+        _, prods = zip(*list(iweightprod(model, [prod0] + [ihead1], 'x ' + pattern1, **kwargs))) # generator -> list
+        prods = torch.cat(prods)
+        if not use_frobenius: prods = prods.to(eigvs.device) # compute eigv on gpu is slower, so move to cpu first
         ihead1 = list(product(range(l1_start, L), range(H)))  # head by head
         assert len(ihead1) == len(prods), f'{len(ihead1)} != {prods.size()}[0]'
         for (l1, h1), prod in zip(ihead1, prods):
             if (l1, h1) in heads1[0]:
-                # print(get_eigv(prod))
-                eigvs[l0, h0, l1, h1] = torch.Tensor(get_eigv(prod)) # (positivity, reality)
+                if prod.ndim == 2 and prod.size(0) == prod.size(1):
+                    eigvs[l0, h0, l1, h1] = torch.Tensor(get_eigv(prod)) # (positivity, reality)
+                else:  # use_frobenius
+                    assert prod.size() == torch.Size([2])
+                    eigvs[l0, h0, l1, h1] = prod # (fro inner product, fro norm)
+    if use_frobenius: eigvs = eigvs.to('cpu')
     return eigvs
 
+def T(input): return input.transpose(-2, -1)
+
+def is_tril_empty(a):
+    assert a.ndim in [2, 3] and a.size(-2) == a.size(-1)  # (ln)(ln) or k(ln)(ln)
+    tril_mask = torch.ones(a.size()[-2:]).tril() - torch.eye(a.size(-1))
+    return (a[(torch.ones_like(a) * tril_mask).bool()] == 0).float().mean() > 0.6
+
+def complete_tril(a):
+    if a.ndim in [2, 3]:  # (ln)(ln) or k(ln)(ln)
+        assert a.size(-2) == a.size(-1)
+        return a - a.tril() + T(a).tril() if is_tril_empty(a) else a
+    assert a.ndim == 5, str(a.size())  # lnln2
+    L, H = a.size()[:2]
+    return rearrange(complete_tril(rearrange(a, 'l0 n0 l1 n1 k -> k (l0 n0) (l1 n1)')),
+            'k (l0 n0) (l1 n1) -> l0 n0 l1 n1 k', l0=L, n0=H, l1=L, n1=H)
+   
 def get_conductivity(eigv_positivity012, l1, h1, plot=False, figsize=(5, 2)):
     x = eigv_positivity012.get((l1, h1))
     if x is None: return 0.
@@ -1081,7 +1114,7 @@ def add_attr(head_tuples, attr_dicts):
     if not isinstance(attr_dicts, (tuple, list)): attr_dicts = [attr_dicts]
     return [[l, h, *v] + [attr_dict[l, h] for attr_dict in attr_dicts] for l, h, *v in head_tuples]
 
-def embed_by_pairwise_eigvs(meigvs):
+def embed_by_pairwise_eigvs_matrix(meigvs):
     distance = 1 - meigvs  # 1 - [-1, 1] = [2, 0]. like cosine distance
     _ = distance.fill_diagonal_(0)
     distance = distance.clamp(min=0)
@@ -1106,7 +1139,7 @@ def get_knn(pairwise_sim, heads, src_left=True, topk=10, sim_threshold=0.9):
             if sim >= sim_threshold: knn[(l1, h1)] = max(knn.get((l1, h1), -1), sim)
     return knn
 
-def rescale(a, threshold, upper_bound=1): return (a - threshold) * upper_bound / (upper_bound - threshold)
+def rescale(a, threshold, upper_bound=1): return (a - threshold) * 1. / (upper_bound - threshold)
 
 # losses2 = []
 # sum_output = head_outputs * 0
