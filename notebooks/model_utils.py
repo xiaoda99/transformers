@@ -68,6 +68,10 @@ class AttrData:
 class Eigovs:
     ov: torch.FloatTensor = None
 
+@dataclass
+class Heads:
+    ov: torch.FloatTensor = None
+
 def fill_list(e, length, i, default_e=None): # fill e to ith position of a list of default_es
     if type(e) == list: assert len(e) == length, f'{len(e)} != {length}'; return e
     l = [default_e for _ in range(length)]
@@ -835,6 +839,10 @@ def plot_eigv(w, start_i=0, end_i=None, alpha=0.1, plot=True):
     if plot:
         if start_i is None: start_i = 0
         if end_i is None: end_i = len(w)
+        start_i = 0
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.plot(x[start_i: end_i], y[start_i: end_i], '.', alpha=alpha); plt.show()
+        start_i = 1
         plt.gca().set_aspect('equal', adjustable='box')
         plt.plot(x[start_i: end_i], y[start_i: end_i], '.', alpha=alpha); plt.show()
     return eigv_positivity.item(), eigv_reality.item()
@@ -973,7 +981,7 @@ wn2i = OrderedDict(zip('qkvo', range(4)))  # q:0, k:1, v:2, o:3
 def weightprod(model, heads, pattern, weBTA=None, BA=True, use_frobenius=False, return_ws=False):
     iterables = [head for head in heads if iterable(head)]
     assert len(iterables) == 0, str(iterables)
-    pattern = pattern.split()  # e.g. 'vo vo qk' -> ['vo', 'vo', 'qk']
+    if isinstance(pattern, str): pattern = pattern.split()  # e.g. 'vo vo qk' -> ['vo', 'vo', 'qk']
     if pattern[0] in 'eEu':
         assert pattern[-1] == pattern[0] or pattern[-1] == 'u'
         assert len(pattern) - len(heads) == 2, f'len({pattern}) - {len(heads)} != 2'
@@ -1024,28 +1032,32 @@ def iweightprod(model, heads, pattern, **kwargs):
         # assert len(iterable_head) == len(list(zip(*[head if iterable(head) else cycle([head]) for head in heads])))
         for _head, _heads in zip(iterable_head, iterable_heads):
             assert len([h for h in _heads if iterable(h)]) == 0
-            prod = weightprod(model, _heads, pattern, **kwargs)
+            prod = weightprod(model, list(_heads), pattern, **kwargs)
             yield _head, prod
- 
-def compute_eigvs(model, heads, pattern, weBTA=None, get_l1_start=None, **kwargs):
-    iterables = [head for head in heads if iterable(head)]
-    assert len(iterables) in [1, 2], pattern
-    if len(iterables) == 1:
-        eigvs = torch.Tensor([[get_eigv(prod) for prod in prods.to('cpu')]
-                        for _, prods in tqdm(iweightprod(model, heads, pattern))])
-        return eigvs
 
-    if get_l1_start == None : get_l1_start = lambda l0: l0 + 1
-    blocks = model.transformer.h
-    L, H = len(blocks), blocks[0].attn.num_heads
+def get_iter_len(heads): return len([head for head in heads if iterable(head)][0])
+
+@torch.no_grad() 
+def compute_eigvs(model, heads, pattern, weBTA=None, l1_range_fn=None, **kwargs):
     pattern = pattern.split()
     if pattern[0] in 'eEu':
         assert pattern[-1] == pattern[0] or pattern[-1] == 'u'
         assert len(pattern) - len(heads) == 2, f'len({pattern}) - {len(heads)} != 2'
         assert weBTA is not None
         heads = [weBTA] + heads
-        pattern[0] = 'x'; del pattern[-1]
-    assert heads[-1] != 'x'
+        pattern = ['x'] + pattern[1:-1]
+    assert pattern[-1] != 'x'
+
+    iterables = [head for head in heads if iterable(head)]
+    assert len(iterables) in [1, 2], pattern if isinstance(pattern, str) else ' '.join(pattern)
+    if len(iterables) == 1:
+        eigvs = torch.Tensor([[get_eigv(prod) for prod in prods.to('cpu')]
+            for _, prods in tqdm(iweightprod(model, heads, pattern), total=get_iter_len(heads))])
+        return eigvs
+
+    blocks = model.transformer.h
+    L, H = len(blocks), blocks[0].attn.num_heads
+    if l1_range_fn == None : l1_range_fn = lambda l0: range(l0 + 1, L)
     heads0, heads1 = heads[:-1], heads[-1:]
     pattern0, pattern1 = ' '.join(pattern[:-1]), ' '.join(pattern[-1:])
     assert isinstance(heads0[-1], tuple) or iterable(heads0[-1]), str(heads0[-1])
@@ -1054,15 +1066,15 @@ def compute_eigvs(model, heads, pattern, weBTA=None, get_l1_start=None, **kwargs
     eigvs = torch.zeros(L, H, L, H, 2)
     use_frobenius = kwargs.get('use_frobenius', False)
     if use_frobenius: eigvs = eigvs.to(blocks[0].attn.k_proj.weight.device) # cuda
-    itotal0 = len([head for head in heads0 if iterable(head)][0])
-    for (l0, h0), prod0 in tqdm(iweightprod(model, heads0, pattern0, BA=False), total=itotal0):
+    # itotal0 = len([head for head in heads0 if iterable(head)][0])
+    for (l0, h0), prod0 in tqdm(iweightprod(model, heads0, pattern0, BA=False), total=get_iter_len(heads0)):
         last_layer = l0 if last_layer0 is None else last_layer0
-        l1_start = get_l1_start(last_layer)
-        ihead1 = [(l1, None) for l1 in range(l1_start, L)] # layer by layer for fast computation
+        l1_range = l1_range_fn(last_layer)
+        ihead1 = [(l1, None) for l1 in l1_range] # layer by layer for fast computation
         _, prods = zip(*list(iweightprod(model, [prod0] + [ihead1], 'x ' + pattern1, **kwargs))) # generator -> list
         prods = torch.cat(prods)
         if not use_frobenius: prods = prods.to(eigvs.device) # compute eigv on gpu is slower, so move to cpu first
-        ihead1 = list(product(range(l1_start, L), range(H)))  # head by head
+        ihead1 = list(product(l1_range, range(H)))  # head by head
         assert len(ihead1) == len(prods), f'{len(ihead1)} != {prods.size()}[0]'
         for (l1, h1), prod in zip(ihead1, prods):
             if (l1, h1) in heads1[0]:
@@ -1110,12 +1122,17 @@ def plot_k_comp(heads, k_compositions, pos_heads2val):
     _ = sns.heatmap(torch.cat([k_compositions[list(ls), list(hs)], torch.Tensor(list(pos_heads2val.values())).unsqueeze(0)]), cbar=False,
         xticklabels=[f'{l}-{h}' for l, h in pos_heads2val.keys()], yticklabels=[f'{l}-{h}' for l, h in heads])
 
-def add_attr(head_tuples, attr_dicts):
+def add_cols(head_tuples, attr_dicts):
     if not isinstance(attr_dicts, (tuple, list)): attr_dicts = [attr_dicts]
     return [[l, h, *v] + [attr_dict[l, h] for attr_dict in attr_dicts] for l, h, *v in head_tuples]
 
-def embed_by_pairwise_eigvs_matrix(meigvs):
-    distance = 1 - meigvs  # 1 - [-1, 1] = [2, 0]. like cosine distance
+def add_rows(head_rows, attr_dicts):
+    if not isinstance(attr_dicts, (tuple, list)): attr_dicts = [attr_dicts]
+    return head_rows + tuple([np.array([attr_dict.numpy()[l, h] for l, h, _ in zip(*head_rows)])
+                            for attr_dict in attr_dicts])
+
+def embed_by_pairwise_sim_matrix(sim):
+    distance = 1 - sim  # 1 - [-1, 1] = [2, 0]. like cosine distance
     _ = distance.fill_diagonal_(0)
     distance = distance.clamp(min=0)
     # distance = distance[H:, H:]  # remove layer 0
@@ -1128,6 +1145,24 @@ def embed_by_pairwise_eigvs_matrix(meigvs):
     # https://stats.stackexchange.com/questions/146221/is-cosine-similarity-identical-to-l2-normalized-euclidean-distance
     distance = distance ** .5 
     result = algo.fit_transform(distance)
+    return result
+
+def small_to_big_pairwise_sim_tensor(t00, t01, t11):
+    def T(eigvs): return rearrange(eigvs, 'l0 n0 l1 n1 k -> l1 n1 l0 n0 k')
+    return rearrange([
+        rearrange([t00, t01], 'b l0 n0 l1 n1 k -> l0 n0 b l1 n1 k'),
+        rearrange([T(t01), t11], 'b l0 n0 l1 n1 k -> l0 n0 b l1 n1 k')
+    ], 'B l0 n0 b l1 n1 k -> B l0 n0 b l1 n1 k')
+
+def embed_by_pairwise_sim_tensor(sim4, mask):
+    # einsum is the simpliest way of doing this
+    _sim4 = sim4[torch.einsum('akg,blh->akgblh', mask, mask)]  # bLNbLN->(blnbln), b=2
+    lh = int(math.sqrt(_sim4.size(0)))
+    _sim4 = _sim4.view(lh, lh) # (bln) (bln)
+
+    _result = embed_by_pairwise_sim_matrix(_sim4) # bln2
+    result = torch.ones(sim4.size()[:3] + (2,)) * float('nan')  # bLN2
+    result[mask] = torch.Tensor(_result)
     return result
 
 def get_knn(pairwise_sim, heads, src_left=True, topk=10, sim_threshold=0.9):
