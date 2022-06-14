@@ -130,6 +130,26 @@ def scaled_ln(ln, x, scaled=True):
 
 def scaled_ln_wrapper(ln): return lambda x: scaled_ln(ln, x)
 
+def custom_ln(ln, x, mean=None, std=None):
+    self = ln
+    if mean is None:
+        mean = x.mean(dim=-1, keepdim=True)
+        var = ((x - mean) ** 2).mean(dim=-1, keepdim=True)
+        std = (var + self.eps).sqrt()
+    y = (x - mean) / std * self.weight + self.bias
+    return y, mean.detach(), std.detach()
+
+def ln2statefulfn(ln):
+    def fn(x):
+        self = ln
+        if getattr(fn, 'mean', None) is None:
+            fn.mean = x.mean(dim=-1, keepdim=True); print('set state')
+        if getattr(fn, 'std', None) is None:
+            fn.std = (((x - fn.mean) ** 2).mean(dim=-1, keepdim=True) + self.eps).sqrt()
+        y = (x - fn.mean) / fn.std * self.weight + self.bias
+        return y 
+    return fn
+
 def embed_forward(transformer, inputs, output_embeds=True): # gptneo
     self = transformer
     input_ids = inputs if isinstance(inputs, torch.Tensor) else inputs.input_ids
@@ -407,39 +427,83 @@ def compute_loss(logits, labels, reduction=None):
             # print('in compute_loss, after loss =', loss)
     return loss
 
-def get_multiplier(block, hidden_states, attentions, head_input, special_head_output, labels, layer,
+def cat_attn_forward(block, hidden_states0, cat_hidden_states, mask=None, attn_labels=None, scaled=True):
+# def cat_attn_forward(block, cat_hidden_states, hidden_states0, mask=None, attn_labels=None, scaled=True):
+    # cat_hidden_states = special_head_outputs  sie
+    # cat_hidden_states = torch.cat([hidden_states0 - cat_hidden_states.sum(0), cat_hidden_states]) # cat(1ie - sie->ie, sie) -> (1+s)ie
+    # cat_hidden_states = torch.cat([cat_hidden_states, hidden_states0 - cat_hidden_states.sum(0)]) # cat(sie, 1ie - sie->ie) -> (s+1)ie
+    # hidden_states = torch.einsum('bnpi,pie->bnie', mask, cat_hidden_states) # p=1+s
+    hidden_states = torch.einsum('bnmri,mrie->bnie', mask, cat_hidden_states) # m=m+1, r=r+1
+
+    # hidden_states = torch.einsum('bnloi,loie->bnie', mask, cat_hidden_states) # o=n+2
+    hq, hk, hv = scaled_ln(block.ln_1, hidden_states, scaled=scaled), block.ln_1(hidden_states0), None
+    self = block.attn
+    assert self.q_proj.bias is None
+    wq = rearrange(block.attn.q_proj.weight, '(n d) e -> n e d', n=self.num_heads)
+    query = hq @ wq  # bnie,ned->bnid, the most important line
+    attn_logits = attn_forward(block, query, hk, hv)[1]
+    loss = None
+    if attn_labels is not None:
+        loss = -torch.einsum('bnij->b', attn_logits.log_softmax(-1) * attn_labels)
+    return Outputs(hidden_states=(hidden_states), logits=attn_logits, loss=loss)
+
+def get_multiplier(block, hidden_states0, cat_hidden_states, attentions, head_input, labels, layer, predicting_heads,
         attr_threshold=1, base_multiplier=1.5, verbose=False):
-    H = attentions.size(1)
-    # mask = torch.ones(1, H, L, H + 2, outputs.cat_hidden_states.size(-2)); mask[:, :, layer:] = 0 # bnloi
-    # x = {'mask': mask}
-    
-    # special_head_output: sie
-    x = {'mask': torch.ones(1, H, special_head_output.size(0) + 1, special_head_output.size(-2))}  # bnpi
+    # cat_hidden_states: (m+1)(r+1)ie
+    x = {'mask': torch.ones(1, attentions.size(1), *cat_hidden_states.size()[:-1])}  # bn(m+1)(r+1)i
 
     attn_labels = torch.einsum('bnij,bnj->bnij', attentions, head_input.norm(dim=-1)) # bnje->bnj
     # attn_labels = attn_labels / attn_labels.sum(-1, keepdim=True)  # bnij->bni1 
-    fwd_fn = partial(cat_attn_forward, cat_hidden_states=special_head_output, #outputs.cat_hidden_states, 
-                sum_hidden_states=hidden_states, attn_labels=attn_labels)
+    fwd_fn = partial(cat_attn_forward, hidden_states0=hidden_states0,
+                cat_hidden_states=cat_hidden_states, attn_labels=attn_labels)
     attr, ys, logits = _attribute(fwd_fn, block, x, num_points=3)
 
-    a = attr['mask']  # nloi, nsi
-    # a2 = torch.add(a[:, 8, 1, :]*0, a[:, 12, 10, :]) # ni
-    a2 = a[:, -1, :]  # ni
+    a = attr['mask']  # nloi, nsi, n(m+1)(r+1)i
+    # a = torch.add(a[:, 8, 1, :]*0, a[:, 12, 10, :]) # ni
 
     labels_mask = (labels != -100).squeeze(0)#.fill_(1)
-    multiplier_mask = (a2 >= attr_threshold) * labels_mask
-    if verbose and multiplier_mask.sum() > 0:
-        for head in range(H):
-            n_multiplied = multiplier_mask[head].sum()
-            if n_multiplied > 0:
-                print(f'{layer}-{head}', n_multiplied, (a2 * labels_mask)[head].topk(min(a2.size(1), n_multiplied + 1)))
-    return base_multiplier * multiplier_mask + 1 * ~multiplier_mask
+    return torch.einsum('nmri,i->nmr', a, labels_mask.float()) / labels_mask.sum()
+    # multiplier_mask = (a >= attr_threshold) * labels_mask
+    # if verbose and multiplier_mask.sum() > 0:
+    #     for head in range(H):
+    #         n_multiplied = multiplier_mask[head].sum()
+    #         if n_multiplied > 0:
+    #             print(f'{layer}-{head}', n_multiplied, (a * labels_mask)[head].topk(min(a.size(1), n_multiplied + 1)))
+    # return base_multiplier * multiplier_mask + 1 * ~multiplier_mask
+
+# def get_multiplier(block, hidden_states, attentions, head_input, special_head_output, labels, layer,
+#         attr_threshold=1, base_multiplier=1.5, verbose=False):
+#     H = attentions.size(1)
+#     # mask = torch.ones(1, H, L, H + 2, outputs.cat_hidden_states.size(-2)); mask[:, :, layer:] = 0 # bnloi
+#     # x = {'mask': mask}
+    
+#     # special_head_output: sie
+#     x = {'mask': torch.ones(1, H, special_head_output.size(0) + 1, special_head_output.size(1))}  # bnpi
+
+#     attn_labels = torch.einsum('bnij,bnj->bnij', attentions, head_input.norm(dim=-1)) # bnje->bnj
+#     # attn_labels = attn_labels / attn_labels.sum(-1, keepdim=True)  # bnij->bni1 
+#     fwd_fn = partial(cat_attn_forward, cat_hidden_states=special_head_output, #outputs.cat_hidden_states, 
+#                 sum_hidden_states=hidden_states, attn_labels=attn_labels)
+#     attr, ys, logits = _attribute(fwd_fn, block, x, num_points=3)
+
+#     a = attr['mask']  # nloi, nsi
+#     # a = torch.add(a[:, 8, 1, :]*0, a[:, 12, 10, :]) # ni
+#     a = a[:, -1, :]  # ni
+
+#     labels_mask = (labels != -100).squeeze(0)#.fill_(1)
+#     multiplier_mask = (a >= attr_threshold) * labels_mask
+#     if verbose and multiplier_mask.sum() > 0:
+#         for head in range(H):
+#             n_multiplied = multiplier_mask[head].sum()
+#             if n_multiplied > 0:
+#                 print(f'{layer}-{head}', n_multiplied, (a * labels_mask)[head].topk(min(a.size(1), n_multiplied + 1)))
+#     return base_multiplier * multiplier_mask + 1 * ~multiplier_mask
 
 def forward(model, inputs, labels=None, loss_reduction=None, by_head=False, attribute_layer=None, 
             head_mask=None, mlp_mask=None, attn_weights=None,
             hidden_states=None, detach_layer=None,
             special_head=(None, None), special_head_multiplier=1, #wv=None, wo=None, 
-            multiplied_layers=[], attr_threshold=1., base_multiplier=1.5, with_grad=False):
+            multiplied_layers=[], attr_threshold=1., base_multiplier=1.5):
     L = len(model.transformer.h)
     head_mask = fill_list(head_mask, L, attribute_layer)
     mlp_mask = fill_list(mlp_mask, L, attribute_layer)
@@ -454,7 +518,6 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False, attr
     # hq_extra = None
     special_head_outputs = None
     for i, b in enumerate(self.h):
-        torch.set_grad_enabled(with_grad)
         if from_layer is not None and i < from_layer: continue
         if i == detach_layer: hidden_states = hidden_states.detach()
         all_hidden_states += (hidden_states,)
@@ -608,24 +671,6 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         logits = model.lm_head(ln_output)
         loss = compute_loss(logits, labels, reduction=loss_reduction)
     return Outputs(hidden_states=(output,), logits=logits, loss=loss)
-
-def cat_attn_forward(block, cat_hidden_states, sum_hidden_states, mask=None, attn_labels=None, scaled=True):
-    # cat_hidden_states = special_head_outputs  sie
-    cat_hidden_states = torch.cat([sum_hidden_states - cat_hidden_states.sum(0), cat_hidden_states]) # cat(1ie - sie->ie, sie) -> (1+s)ie
-    hidden_states = torch.einsum('bnpi,pie->bnie', mask, cat_hidden_states) # p=1+s
-
-    # hidden_states = torch.einsum('bnloi,loie->bnie', mask, cat_hidden_states) # o=n+2
-    # print(equal(hidden_states[-1:, 0], sum_hidden_states))  # bnie->1ie
-    hq, hk, hv = scaled_ln(block.ln_1, hidden_states, scaled=scaled), block.ln_1(sum_hidden_states), None
-    self = block.attn
-    assert self.q_proj.bias is None
-    wq = rearrange(block.attn.q_proj.weight, '(n d) e -> n e d', n=self.num_heads)
-    query = hq @ wq  # bnie,ned->bnid, the most important line
-    attn_logits = attn_forward(block, query, hk, hv)[1]
-    loss = None
-    if attn_labels is not None:
-        loss = -torch.einsum('bnij->b', attn_logits.log_softmax(-1) * attn_labels)
-    return Outputs(hidden_states=(hidden_states), logits=attn_logits, loss=loss)
 
 def scaled_input(input, num_points, baseline=None, requires_grad=True):
     assert input.size(0) == 1
