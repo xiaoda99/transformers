@@ -98,7 +98,7 @@ def my_isinstance(obj, type):  # to cope with autoreload
     return obj.__class__.__name__ == type.__name__ 
 
 def equal(a, b):
-    assert a.size() == b.size()
+    assert a.size() == b.size(), f'{a.size()} != {b.size()}'
     return (a - b).abs().mean(), a.abs().mean(), b.abs().mean()
 
 def einsum(
@@ -181,3 +181,8 @@ def reduce_objects(objs, fields, reduce_fn='mean'):
 
 def iterable(item):
     return isinstance(item, Iterable) and not isinstance(item, (tuple, str, torch.Tensor))
+
+def sum_except(input, dims):
+    if isinstance(dims, int): dims = [dims]
+    dims = [d for d in range(input.ndim) if d not in dims]
+    return input.sum(dims) if len(dims) > 0 else input
