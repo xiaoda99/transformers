@@ -549,7 +549,7 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
             head_output2 = head_output
             if multipliers[1] > 0:
                 hs = intm_hs * hq_multiplier + hidden_states
-                hq = custom_ln(b.ln_1, hs, ln_mean, ln_std, bias=False)[0]
+                hq = b.ln_1(hs) # custom_ln(b.ln_1, hs, ln_mean, ln_std, bias=False)[0]
                 head_output2 = attn_forward(b, hq, hk, hv)[-1]
             if multipliers[0] > 0 or multipliers[1] > 0:
                 a = a[:, :-1, :max(1, a.size(2) - 2), :].amax((1, 2))  # n(m+1)(r+1)i->ni or n(m+1)1i->ni
