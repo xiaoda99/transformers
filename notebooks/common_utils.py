@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F 
 # torch.nn.LayerNorm
 # from transformers import GPT2Tokenizer
 
@@ -181,6 +182,11 @@ def reduce_objects(objs, fields, reduce_fn='mean'):
 
 def iterable(item):
     return isinstance(item, Iterable) and not isinstance(item, (tuple, str, torch.Tensor))
+
+def pad(input, dim, to_len, pad_left=False, **kwargs):
+    padding = [0] * ((input.ndim - dim) * 2)
+    padding[-1-int(pad_left)] = to_len - input.size(dim)
+    return F.pad(input, tuple(padding), **kwargs)
 
 def sum_except(input, dims):
     if isinstance(dims, int): dims = [dims]
