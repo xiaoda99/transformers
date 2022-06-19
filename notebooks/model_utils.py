@@ -199,16 +199,16 @@ def apply_rotary_pos_emb(x, sincos, offset=0):
     return (x * cos) + (rotate_every_two(x) * sin)
 
 def _attn(self, query, key, value, attention_mask=None):
-    # bias and masked_bias copied from GPTNeoSelfAttention.__init__
-    max_positions = 1024  # config.max_position_embeddings
-    bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
-        1, 1, max_positions, max_positions)
-    if isinstance(self, GPTNeoSelfAttention):
-        assert self.attention_type in ['global', 'local']
-        if self.attention_type == 'local': # GPTNeoSelfAttention
-            bias = torch.bitwise_xor(bias, torch.tril(bias, -256)) # config.window_size
-    _attn.bias = bias
-    _attn.masked_bias = torch.tensor(-1e9)
+    # if not hasattr(_attn, 'bias'): # bias and masked_bias copied from GPTNeoSelfAttention.__init__
+    #     max_positions = 1024  # config.max_position_embeddings
+    #     bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
+    #         1, 1, max_positions, max_positions)
+    #     if isinstance(self, GPTNeoSelfAttention):
+    #         assert self.attention_type in ['global', 'local']
+    #         if self.attention_type == 'local': # GPTNeoSelfAttention
+    #             bias = torch.bitwise_xor(bias, torch.tril(bias, -256)) # config.window_size
+    #     _attn.bias = bias
+    #     _attn.masked_bias = torch.tensor(-1e9)
     
     if isinstance(self, GPTNeoSelfAttention) or isinstance(self, GPTJAttention):
         # Keep the attention weights computation in fp32 to avoid overflow issues
@@ -224,8 +224,10 @@ def _attn(self, query, key, value, attention_mask=None):
 
     # mask handling copied from GPTNeoSelfAttention._attn
     query_length, key_length = query.size(-2), key.size(-2)
-    causal_mask = _attn.bias[:, :, key_length - query_length : key_length, :key_length].bool()
-    attn_weights = torch.where(causal_mask, attn_weights, _attn.masked_bias.to(attn_weights.dtype))
+    # causal_mask = _attn.bias[:, :, key_length - query_length : key_length, :key_length].bool()
+    # attn_weights = torch.where(causal_mask, attn_weights, _attn.masked_bias.to(attn_weights.dtype))
+    causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length].bool()
+    attn_weights = torch.where(causal_mask, attn_weights, self.masked_bias.to(attn_weights.dtype))
     if attention_mask is not None: attn_weights = attn_weights + attention_mask
     if value is None: return None, attn_weights
 
@@ -322,10 +324,11 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=True, compute_h
         head_output = self.resid_dropout(head_output)
         if self.num_heads < getattr(self, 'num_heads0', 0): compute_head_input = False
         head_input = self.resid_dropout(value @ w_o) if compute_head_input else None
-        
-    attn_output = _merge_heads(attn_output, self.num_heads, self.head_dim)
-    attn_output = self.out_proj(attn_output)
-    attn_output = self.resid_dropout(attn_output)
+        attn_output = head_output.sum(1)  # bnie->bie
+    else:
+        attn_output = _merge_heads(attn_output, self.num_heads, self.head_dim)
+        attn_output = self.out_proj(attn_output)
+        attn_output = self.resid_dropout(attn_output)
     # if output_by_head:
     #     print(equal(head_output.sum(1) + self.resid_dropout(self.out_proj.bias), attn_output))
     return attn_output, attn_weights, head_input, head_output
@@ -449,20 +452,40 @@ def cat_attn_forward(block, hidden_states0, cat_hidden_states, mask=None, attn_l
         if attn_labels is not None else None
     return Outputs(hidden_states=(hidden_states), logits=attn_logits, loss=loss)
 
-def get_self_attr(block, hidden_states0, cat_hidden_states, attn_labels):
+def get_self_attr(block, hidden_states0, cat_hidden_states, attn_labels, device='cpu'):
     H = block.attn.num_heads
     # cat_hidden_states: (m+1)(r+1)ie
-    x = {'mask': torch.ones(1, H, *cat_hidden_states.size()[:-1])}  # bn(m+1)(r+1)i
+    x = {'mask': torch.ones(1, H, *cat_hidden_states.size()[:-1]).to(device)}  # bn(m+1)(r+1)i
 
-    
+    # if device is not None:
+    #     x = {k: v.to(device) for k, v in x.items()}
+    #     cat_hidden_states = cat_hidden_states.to(device)
+    #     hidden_states0, attn_labels = hidden_states0.to(device), attn_labels.to(device)
+    #     for name in ['ln_1', 'attn']: setattr(block, name, getattr(block, name + '_gpu'))
+
+
     fwd_fn = partial(cat_attn_forward, hidden_states0=hidden_states0,
                 cat_hidden_states=cat_hidden_states, attn_labels=attn_labels)
-    attr, ys, logits = _attribute(fwd_fn, block, x, num_points=3)
+    attr, _, _ = _attribute(fwd_fn, block, x, num_points=3)
 
     a = attr['mask']  # nloi, nsi, n(m+1)(r+1)i
     # return torch.einsum('nmri,i->nmr', a, labels_mask.float()) / labels_mask.sum()
     # a = a[:, :-1, :max(1, a.size(2) - 2), :].sum((1, 2))  # n(m+1)(r+1)i->ni or n(m+1)1i->ni
+
+    # if device is not None:
+    #     a = a.to('cpu')
+    #     for name in ['ln_1', 'attn']: setattr(block, name, getattr(block, name + '_cpu'))
     return a
+
+def block2gpu(block, mlp_to_gpu=False):
+    names = ['ln_1', 'attn']
+    if mlp_to_gpu: names += ['ln_2', 'mlp']
+    for name in names: setattr(block, name, getattr(block, name + '_gpu'))
+
+def block2cpu(block, mlp_to_gpu=False):
+    names = ['ln_1', 'attn']
+    if mlp_to_gpu: names += ['ln_2', 'mlp']
+    for name in names: setattr(block, name, getattr(block, name + '_cpu'))
 
 def get_multiplier_old(block, hidden_states, attentions, head_input, special_head_output, labels, layer,
         attr_threshold=1, base_multiplier=1.5, verbose=False):
@@ -497,7 +520,7 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
             attribute_layer=None, hidden_states=None, detach_layer=None,
             relating_heads=[], intermediary_heads=[], predicting_heads=[],
             intm_head_multipliers=[], hq_multiplier=0., multipliers=[0, 0],
-            self_attr_threshold=5., #base_multiplier=1.5,
+            self_attr_threshold=5., device='cpu', mlp_to_gpu=False,
             ):
     L = len(model.transformer.h)
     if head_mask is None:
@@ -513,9 +536,12 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
         if from_layer is None else (hidden_states, None, None)
     all_hidden_states, intermediates, mlp_outputs = (), (), ()
     attn_fwd_outputs = []
-    relating_head_outputs, intermediary_head_outputs, self_attrs = [], [], []
-    hidden_states_attn = torch.zeros_like(hidden_states)
-    hidden_states_mlp = hidden_states  # init hidden_states_mlp with embed_output
+    relating_head_outputs, self_attrs, all_attentions2 = [], [], []
+    intermediary_head_outputs = None
+    all_attentions2 = []
+    if len(relating_heads) > 0:
+        hidden_states_attn = torch.zeros_like(hidden_states)
+        hidden_states_mlp = hidden_states  # init hidden_states_mlp with embed_output
     for i, b in enumerate(self.h):
         if from_layer is not None and i < from_layer: continue
         if i == detach_layer: hidden_states = hidden_states.detach()
@@ -525,40 +551,48 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
         intm_heads = [(head, mul) for head, mul in zip(intermediary_heads, intm_head_multipliers) if head[0] == i]
         pred_heads = [head[1] for head in predicting_heads if head[0] == i]
         _by_head = by_head or len(rel_heads) > 0 or len(intm_heads) > 0 or len(pred_heads) > 0
-        compute_head_input = len(pred_heads) > 0 and len(intermediary_head_outputs) > 0
-        (hs, ln_mean, ln_std) = custom_ln(b.ln_1, hidden_states) \
-            if len(intm_heads) > 0 else (b.ln_1(hidden_states), None, None)
-        hq = hk = hv = hs
+        multiply = len(pred_heads) > 0 and intermediary_head_outputs is not None
 
-        attn_fwd_output = attn_forward(b, hq, hk, hv, by_head=_by_head, compute_head_input=compute_head_input,
+        _device = 'cpu'
+        to_gpu = (multiply or len(intm_heads) > 0) and device != 'cpu'
+        if to_gpu: block2gpu(b, mlp_to_gpu); _device = device
+        # (hs, ln_mean, ln_std) = custom_ln(b.ln_1, hidden_states) \
+        #     if len(intm_heads) > 0 else (b.ln_1(hidden_states), None, None)
+        hidden_states0 = hidden_states.to(_device)
+        if mlp_to_gpu: hidden_states = hidden_states0
+        hq = hk = hv = b.ln_1(hidden_states0)
+
+        attn_fwd_output = attn_forward(b, hq, hk, hv, by_head=_by_head, compute_head_input=multiply,
             head_mask=head_mask[i], attn_weights=attn_weights[i])
-        attn_fwd_outputs.append(attn_fwd_output)
+        if device == 'cpu': attn_fwd_outputs.append(attn_fwd_output)
         attn_output, aw, head_input, head_output = attn_fwd_output
-        label_mask = labels != -100
-        if len(pred_heads) > 0 and len(intermediary_head_outputs) > 0:
-            cat_hs = torch.stack(intermediary_head_outputs)  # m(r+2)ie, m <= n_intm_heads
+        label_mask = (labels != -100).to(_device)
+        if multiply:
+            cat_hs = intermediary_head_outputs # m(r+2)ie, m <= n_intm_heads
             intm_hs = cat_hs.sum(dim=(0, 1))  # ie
             cat_hs = pad(cat_hs, dim=0, to_len=len(intermediary_heads) + 1)
-            if cat_hs.size(1) == 1:
-                cat_hs[-1, -1] = hidden_states[0] - intm_hs
+            if len(relating_heads) == 0: #assert cat_hs.size(1) == 1, str(cat_hs.size(1))
+                cat_hs[-1, -1] = hidden_states0[0] - intm_hs
             else:
                 cat_hs[-1, -1] = hidden_states_attn[0] - intm_hs # m(r+1)ie->ie
                 cat_hs[-1, -2] = hidden_states_mlp[0]
             attn_labels = torch.einsum('bnij,bnj->bnij', aw, head_input.norm(dim=-1)) # bnje->bnj
-            a = get_self_attr(b, hidden_states, cat_hs, attn_labels)  # ni  n(m+1)(r+1)i
-            self_attrs.append(a[..., label_mask[0]])
+            a = get_self_attr(b, hidden_states0, cat_hs, attn_labels, device=_device)  # ni  n(m+1)(r+1)i
+            self_attrs.append(a[..., label_mask[0]].to('cpu'))
             
-            head_output2 = head_output
-            if multipliers[1] > 0:
-                hs = intm_hs * hq_multiplier + hidden_states
-                hq = b.ln_1(hs) # custom_ln(b.ln_1, hs, ln_mean, ln_std, bias=False)[0]
-                head_output2 = attn_forward(b, hq, hk, hv)[-1]
-            if multipliers[0] > 0 or multipliers[1] > 0:
-                a = a[:, :-1, :max(1, a.size(2) - 2), :].amax((1, 2))  # n(m+1)(r+1)i->ni or n(m+1)1i->ni
-                a = (a > self_attr_threshold) * label_mask
-                head_output = sum(torch.einsum('bnie,ni->bnie', ho, m.float()) for ho, m in
-                    [(head_output, ~a), (head_output, a*multipliers[0]), (head_output2, a*multipliers[1])])
-                attn_output = head_output.sum(1) # bnie->bie
+            a = a[:, :-1, :max(1, a.size(2) - 2), :].amax((-3, -2))  # n(m+1)(r+1)i->ni or n(m+1)1i->ni
+            a = (a > self_attr_threshold) * label_mask
+            if a.any():
+                head_output2 = head_output
+                if multipliers[1] > 0:
+                    hs = intm_hs * hq_multiplier + hidden_states0
+                    hq = b.ln_1(hs) # custom_ln(b.ln_1, hs, ln_mean, ln_std, bias=False)[0]
+                    _, aw2, _, head_output2 = attn_forward(b, hq, hk, hv, by_head=True, compute_head_input=False)
+                    if device == 'cpu': all_attentions2.append(aw2)
+                if multipliers[0] > 0 or multipliers[1] > 0:
+                    head_output = sum(torch.einsum('bnie,ni->bnie', ho, m.float()) for ho, m in
+                        [(head_output, ~a), (head_output, a*multipliers[0]), (head_output2, a*multipliers[1])])
+                    attn_output = head_output.sum(1) # bnie->bie
         if len(intm_heads) > 0:
             for intm_head, mul in intm_heads:
                 cat_intm_head_out = intm_head_output = head_output[:, intm_head[1]] # 1nie->1ie
@@ -575,23 +609,29 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
                     cat_intm_head_out = cat_intm_head_out.roll(-2, dims=0)  # (2+r)ie->(r+2)ie
                     # print(i, 'intm_head 2', equal(intm_head_output[0], cat_intm_head_out.sum(0)))
                 cat_intm_head_out = cat_intm_head_out * mul
-                intermediary_head_outputs.append(cat_intm_head_out)
-                head_output[:, intm_head[1]] = cat_intm_head_out.sum(0, keepdim=True) # rie->1ie
-                head_output[:, intm_head[1]][label_mask] = cat_intm_head_out.sum(0, keepdim=True)[label_mask]
-            attn_output = head_output.sum(1) # bnie->bie
+                intermediary_head_outputs = cat_intm_head_out.unsqueeze(0) if intermediary_head_outputs is None \
+                    else torch.cat([intermediary_head_outputs, cat_intm_head_out.unsqueeze(0)])  # mrie or m1ie
+                if mul != 1:
+                    head_output[:, intm_head[1]] = cat_intm_head_out.sum(0, keepdim=True) # rie->1ie
+                    attn_output = head_output.sum(1) # bnie->bie
         if len(rel_heads) > 0:
             relating_head_outputs.append(head_output[0, rel_heads]) # nje
+        if to_gpu and not mlp_to_gpu: block2cpu(b, mlp_to_gpu); attn_output = attn_output.to('cpu')
+
         if not my_isinstance(b, GPTJBlock): hidden_states = hidden_states + attn_output
         mlp_output, intermediate = mlp_forward(b, hidden_states, output_intermediate=True)
         if mlp_mask[i] is not None: mlp_output = einsum('bie,bi->bie', mlp_output, mlp_mask[i])
-        intermediates += (intermediate,)
-        mlp_outputs += (mlp_output,)
+        if device == 'cpu':
+            intermediates += (intermediate,)
+            mlp_outputs += (mlp_output,)
         if my_isinstance(b, GPTJBlock): hidden_states = hidden_states + attn_output
         hidden_states = hidden_states + mlp_output
-        hidden_states_attn = hidden_states_attn + attn_output
-        hidden_states_mlp = hidden_states_mlp + mlp_output
+        if len(relating_heads) > 0:
+            hidden_states_attn += attn_output; hidden_states_mlp += mlp_output
+        if to_gpu and mlp_to_gpu: block2cpu(b, mlp_to_gpu); hidden_states = hidden_states.to('cpu')
 
-    attn_outputs, all_attentions, head_inputs, head_outputs = zip(*attn_fwd_outputs)
+    (attn_outputs, all_attentions, head_inputs, head_outputs) = zip(*attn_fwd_outputs) \
+        if device == 'cpu' else (None, None, None, None)
     all_hidden_states += (hidden_states,) # both before and after ln_f
     hidden_states = self.ln_f(hidden_states)
     all_hidden_states += (hidden_states,)
@@ -604,8 +644,8 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
         intermediates=intermediates, mlp_outputs=mlp_outputs,
         hidden_states=all_hidden_states, attentions=all_attentions, 
         logits=logits, loss=loss)
-    if len(self_attrs) > 0: self_attrs = torch.stack(self_attrs)  # l*ni->lni
-    o.self_attrs = self_attrs
+    if len(self_attrs) > 0: o.self_attrs = torch.stack(self_attrs)  # l*ni->lni
+    if len(all_attentions2) > 0: o.all_attentions2 = torch.cat(all_attentions2) # l*1nij->lnij
     return o
 
 def get_argmax_labels(model, hidden_states, labels):
