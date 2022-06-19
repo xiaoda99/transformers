@@ -322,7 +322,7 @@ def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=True, compute_h
         head_output = self.resid_dropout(head_output)
         if self.num_heads < getattr(self, 'num_heads0', 0): compute_head_input = False
         head_input = self.resid_dropout(value @ w_o) if compute_head_input else None
-
+        
     attn_output = _merge_heads(attn_output, self.num_heads, self.head_dim)
     attn_output = self.out_proj(attn_output)
     attn_output = self.resid_dropout(attn_output)
@@ -435,10 +435,10 @@ def cat_attn_forward(block, hidden_states0, cat_hidden_states, mask=None, attn_l
     # cat_hidden_states = torch.cat([hidden_states0 - cat_hidden_states.sum(0), cat_hidden_states]) # cat(1ie - sie->ie, sie) -> (1+s)ie
     # cat_hidden_states = torch.cat([cat_hidden_states, hidden_states0 - cat_hidden_states.sum(0)]) # cat(sie, 1ie - sie->ie) -> (s+1)ie
     # hidden_states = torch.einsum('bnpi,pie->bnie', mask, cat_hidden_states) # p=1+s
-    hidden_states = torch.einsum('bnmri,mrie->bnie', mask, cat_hidden_states) # m=m+1, r=r+1
-    # print('in cat_attn_forward', equal(hidden_states.sum(1)[-1:] / 16, hidden_states0))
-
+    # hidden_states is replicated n times to keep track of grad for each head
+    hidden_states = torch.einsum('bnmri,mrie->bnie', mask, cat_hidden_states) # m=m+1
     # hidden_states = torch.einsum('bnloi,loie->bnie', mask, cat_hidden_states) # o=n+2
+
     hq, hk, hv = scaled_ln(block.ln_1, hidden_states, scaled=scaled), block.ln_1(hidden_states0), None
     self = block.attn
     assert self.q_proj.bias is None
@@ -520,14 +520,17 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
         if from_layer is not None and i < from_layer: continue
         if i == detach_layer: hidden_states = hidden_states.detach()
         all_hidden_states += (hidden_states,)
-        hs, ln_mean, ln_std = custom_ln(b.ln_1, hidden_states)
-        hq = hk = hv = hs
+
         rel_heads = [head[1] for head in relating_heads if head[0] == i]
         intm_heads = [(head, mul) for head, mul in zip(intermediary_heads, intm_head_multipliers) if head[0] == i]
         pred_heads = [head[1] for head in predicting_heads if head[0] == i]
         _by_head = by_head or len(rel_heads) > 0 or len(intm_heads) > 0 or len(pred_heads) > 0
+        compute_head_input = len(pred_heads) > 0 and len(intermediary_head_outputs) > 0
+        (hs, ln_mean, ln_std) = custom_ln(b.ln_1, hidden_states) \
+            if len(intm_heads) > 0 else (b.ln_1(hidden_states), None, None)
+        hq = hk = hv = hs
 
-        attn_fwd_output = attn_forward(b, hq, hk, hv, by_head=_by_head, compute_head_input=True,
+        attn_fwd_output = attn_forward(b, hq, hk, hv, by_head=_by_head, compute_head_input=compute_head_input,
             head_mask=head_mask[i], attn_weights=attn_weights[i])
         attn_fwd_outputs.append(attn_fwd_output)
         attn_output, aw, head_input, head_output = attn_fwd_output
@@ -541,9 +544,8 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
             else:
                 cat_hs[-1, -1] = hidden_states_attn[0] - intm_hs # m(r+1)ie->ie
                 cat_hs[-1, -2] = hidden_states_mlp[0]
-            # print(i, 'pred_head', equal(hidden_states[0], cat_hs.sum((0, 1))))
             attn_labels = torch.einsum('bnij,bnj->bnij', aw, head_input.norm(dim=-1)) # bnje->bnj
-            a = get_self_attr(b, hidden_states, cat_hs, attn_labels)  # ni
+            a = get_self_attr(b, hidden_states, cat_hs, attn_labels)  # ni  n(m+1)(r+1)i
             self_attrs.append(a[..., label_mask[0]])
             
             head_output2 = head_output
@@ -574,11 +576,8 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
                     # print(i, 'intm_head 2', equal(intm_head_output[0], cat_intm_head_out.sum(0)))
                 cat_intm_head_out = cat_intm_head_out * mul
                 intermediary_head_outputs.append(cat_intm_head_out)
-                # if len(intermediary_head_outputs) == len(intermediary_heads):
-                #     print(i, 'norm0', [iho.norm(dim=-1).mean() for iho in intermediary_head_outputs])
-                #     print(i, 'norm1', [iho[label_mask].norm(dim=-1).mean() for iho in intermediary_head_outputs])
                 head_output[:, intm_head[1]] = cat_intm_head_out.sum(0, keepdim=True) # rie->1ie
-                # head_output[:, intm_head[1]][label_mask] = cat_intm_head_out.sum(0, keepdim=True)[label_mask]
+                head_output[:, intm_head[1]][label_mask] = cat_intm_head_out.sum(0, keepdim=True)[label_mask]
             attn_output = head_output.sum(1) # bnie->bie
         if len(rel_heads) > 0:
             relating_head_outputs.append(head_output[0, rel_heads]) # nje
@@ -605,10 +604,8 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
         intermediates=intermediates, mlp_outputs=mlp_outputs,
         hidden_states=all_hidden_states, attentions=all_attentions, 
         logits=logits, loss=loss)
-    if len(self_attrs) > 0:
-        # self_attrs = torch.cat(self_attrs)  # l*n(m+1)(r+1)->(ln)(m+1)(r+1)=p(m+1)(r+1), p=n_pred_heads
-        self_attrs = torch.stack(self_attrs)  # l*ni->lni
-        o.self_attrs = self_attrs
+    if len(self_attrs) > 0: self_attrs = torch.stack(self_attrs)  # l*ni->lni
+    o.self_attrs = self_attrs
     return o
 
 def get_argmax_labels(model, hidden_states, labels):
