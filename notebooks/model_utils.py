@@ -520,16 +520,14 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
             attribute_layer=None, hidden_states=None, detach_layer=None,
             relating_heads=[], intermediary_heads=[], predicting_heads=[],
             intm_head_multipliers=[], hq_multiplier=0., multipliers=[0, 0],
-            self_attr_threshold=5., device='cpu', mlp_to_gpu=False,
+            self_attr_threshold=5., device='cpu', to_gpu_layer=math.inf, mlp_to_gpu=False,
             ):
     L = len(model.transformer.h)
-    if head_mask is None:
-        head_mask, mlp_mask, attn_weights = [fill_list(mask, L, attribute_layer)
-            for mask in [head_mask, mlp_mask, attn_weights]]
-    else:
-        mlp_mask, attn_weights = [fill_list(mask, L, attribute_layer)
-            for mask in [mlp_mask, attn_weights]]
+    mlp_mask = fill_list(mlp_mask, L, attribute_layer)
+    attn_weights = fill_list(attn_weights, L, attribute_layer)
+    
     from_layer = attribute_layer if hidden_states is not None else None
+    if intm_head_multipliers is None: intm_head_multipliers = [1.] * len(intermediary_heads)
 
     self = model.transformer
     (hidden_states, inputs_embeds, position_embeds) = embed_forward(self, inputs) \
@@ -554,7 +552,7 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
         multiply = len(pred_heads) > 0 and intermediary_head_outputs is not None
 
         _device = 'cpu'
-        to_gpu = (multiply or len(intm_heads) > 0) and device != 'cpu'
+        to_gpu = (i >= to_gpu_layer or multiply or len(intm_heads) > 0) and device != 'cpu'
         if to_gpu: block2gpu(b, mlp_to_gpu); _device = device
         # (hs, ln_mean, ln_std) = custom_ln(b.ln_1, hidden_states) \
         #     if len(intm_heads) > 0 else (b.ln_1(hidden_states), None, None)
@@ -581,18 +579,15 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
             self_attrs.append(a[..., label_mask[0]].to('cpu'))
             
             a = a[:, :-1, :max(1, a.size(2) - 2), :].amax((-3, -2))  # n(m+1)(r+1)i->ni or n(m+1)1i->ni
-            a = (a > self_attr_threshold) * label_mask
-            if a.any():
-                head_output2 = head_output
-                if multipliers[1] > 0:
-                    hs = intm_hs * hq_multiplier + hidden_states0
-                    hq = b.ln_1(hs) # custom_ln(b.ln_1, hs, ln_mean, ln_std, bias=False)[0]
+            a = ((a > self_attr_threshold) * label_mask).float()
+            if a.sum() > 0:
+                if multipliers[1] != 0:
+                    hq = b.ln_1(intm_hs * hq_multiplier + hidden_states0)
                     _, aw2, _, head_output2 = attn_forward(b, hq, hk, hv, by_head=True, compute_head_input=False)
                     if device == 'cpu': all_attentions2.append(aw2)
-                if multipliers[0] > 0 or multipliers[1] > 0:
-                    head_output = sum(torch.einsum('bnie,ni->bnie', ho, m.float()) for ho, m in
-                        [(head_output, ~a), (head_output, a*multipliers[0]), (head_output2, a*multipliers[1])])
-                    attn_output = head_output.sum(1) # bnie->bie
+                attn_output = torch.einsum('bnie,ni->bie', head_output, 1 - a)
+                if multipliers[0] != 0: attn_output += torch.einsum('bnie,ni->bie', head_output, a) * multipliers[0]
+                if multipliers[1] != 0: attn_output += torch.einsum('bnie,ni->bie', head_output2, a) * multipliers[1]
         if len(intm_heads) > 0:
             for intm_head, mul in intm_heads:
                 cat_intm_head_out = intm_head_output = head_output[:, intm_head[1]] # 1nie->1ie
@@ -600,7 +595,6 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
                     wv, wo = get_head_weights(model, *intm_head)[2:]
                     cat_hs = torch.cat(relating_head_outputs) # rje, r <= n_rel_heads
                     cat_hs = torch.cat([hidden_states_mlp, hidden_states_attn - cat_hs.sum(0), cat_hs]) # (2+r)je
-                    # print(i, 'intm_head', equal(hidden_states[0], cat_hs.sum(0)))
                     cat_hs = custom_ln(b.ln_1, cat_hs, ln_mean, ln_std, bias=False)[0]
                     # disable bias during cat ln forward and then add it back to hidden_states_mlp to pass equal test. Tricky!
                     cat_hs[0] = cat_hs[0] - ln_mean / ln_std * b.ln_1.weight + b.ln_1.bias # bie, b=1
