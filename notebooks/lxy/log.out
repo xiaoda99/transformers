@@ -1,0 +1,73 @@
+[I 07:39:26.290 NotebookApp] The port 8888 is already in use, trying another port.
+[I 07:39:26.290 NotebookApp] The port 8889 is already in use, trying another port.
+[W 07:39:26.292 NotebookApp] Error loading server extension jupyter_nbextensions_configurator
+    Traceback (most recent call last):
+      File "/home/xd/.local/lib/python3.8/site-packages/notebook/notebookapp.py", line 2033, in init_server_extensions
+        mod = importlib.import_module(modulename)
+      File "/home/kf/miniconda3/envs/pytorch1.7.1/lib/python3.8/importlib/__init__.py", line 127, in import_module
+        return _bootstrap._gcd_import(name[level:], package, level)
+      File "<frozen importlib._bootstrap>", line 1014, in _gcd_import
+      File "<frozen importlib._bootstrap>", line 991, in _find_and_load
+      File "<frozen importlib._bootstrap>", line 973, in _find_and_load_unlocked
+    ModuleNotFoundError: No module named 'jupyter_nbextensions_configurator'
+[I 07:39:26.294 NotebookApp] Serving notebooks from local directory: /nas/xd/projects/transformers/notebooks
+[I 07:39:26.294 NotebookApp] Jupyter Notebook 6.3.0 is running at:
+[I 07:39:26.294 NotebookApp] http://localhost:8890/?token=c3ae446acc25e674fa3dfc865cc8369bd6247620dec82072
+[I 07:39:26.294 NotebookApp]  or http://127.0.0.1:8890/?token=c3ae446acc25e674fa3dfc865cc8369bd6247620dec82072
+[I 07:39:26.294 NotebookApp] Use Control-C to stop this server and shut down all kernels (twice to skip confirmation).
+[W 07:39:26.298 NotebookApp] No web browser found: could not locate runnable browser.
+[C 07:39:26.298 NotebookApp] 
+    
+    To access the notebook, open this file in a browser:
+        file:///home/xd/.local/share/jupyter/runtime/nbserver-58399-open.html
+    Or copy and paste one of these URLs:
+        http://localhost:8890/?token=c3ae446acc25e674fa3dfc865cc8369bd6247620dec82072
+     or http://127.0.0.1:8890/?token=c3ae446acc25e674fa3dfc865cc8369bd6247620dec82072
+[I 07:43:25.298 NotebookApp] Creating new notebook in /
+[I 07:43:25.441 NotebookApp] Kernel started: dc3c94ed-d035-487b-ae06-17806b5e7e20, name: xyliwaf
+[W 07:43:25.464 NotebookApp] delete /default-c2718fa7-9363-410f-a845-4b6a516bccc2.ipynb
+[W 07:43:25.503 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/default-c2718fa7-9363-410f-a845-4b6a516bccc2.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
+[I 07:43:25.969 NotebookApp] Kernel shutdown: dc3c94ed-d035-487b-ae06-17806b5e7e20
+[I 07:43:40.354 NotebookApp] Creating new notebook in /
+[I 07:43:40.415 NotebookApp] Kernel started: b4a8ea45-3dee-49ff-af85-f64f3b0d9900, name: xyliwaf
+[W 07:43:40.436 NotebookApp] delete /default-6868511b-8e48-4d4e-851a-ec44020c0447.ipynb
+[W 07:43:40.438 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/default-6868511b-8e48-4d4e-851a-ec44020c0447.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
+[I 07:43:41.004 NotebookApp] Kernel shutdown: b4a8ea45-3dee-49ff-af85-f64f3b0d9900
+[I 07:48:33.076 NotebookApp] Creating new notebook in /
+[I 07:48:33.142 NotebookApp] Kernel started: 4c46c637-99e3-478a-8890-f91d59fc2cae, name: python3
+[W 07:48:33.162 NotebookApp] delete /child_analysis-Copy1-1a3eaed6-7879-4b6b-94a4-c472090f5a7b.ipynb
+[W 07:48:33.163 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/child_analysis-Copy1-1a3eaed6-7879-4b6b-94a4-c472090f5a7b.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
+[I 07:48:33.894 NotebookApp] Creating new notebook in /
+[I 07:48:33.958 NotebookApp] Kernel started: ebcf6815-d4ea-41a6-9064-23c75ee82863, name: python3
+[W 07:48:33.979 NotebookApp] delete /child_analysis-Copy1-9561bf12-8132-48e9-aca5-e23e26922e1a.ipynb
+[W 07:48:33.981 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/child_analysis-Copy1-9561bf12-8132-48e9-aca5-e23e26922e1a.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
+[I 07:54:52.485 NotebookApp] Kernel interrupted: 4c46c637-99e3-478a-8890-f91d59fc2cae
+[I 05:25:54.705 NotebookApp] Starting buffering for 4c46c637-99e3-478a-8890-f91d59fc2cae:b3da1cff-e320-4294-ac9d-8a26ba65ef47
+[I 05:25:54.735 NotebookApp] Kernel shutdown: ebcf6815-d4ea-41a6-9064-23c75ee82863
+[W 11:15:42.126 NotebookApp] zmq message arrived on closed channel
+[W 11:15:42.127 NotebookApp] Got events for closed stream None
+[I 09:55:52.686 NotebookApp] Creating new notebook in /
+[I 09:55:52.764 NotebookApp] Kernel started: 2acbc30d-1a26-491d-80f8-74a9fc5e14e3, name: xyliwaf
+[W 09:55:52.785 NotebookApp] delete /default-f681f1e5-c0c9-4dce-94ff-b8b0cd3d4104.ipynb
+[W 09:55:52.839 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/default-f681f1e5-c0c9-4dce-94ff-b8b0cd3d4104.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
+[I 09:55:53.248 NotebookApp] Kernel shutdown: 2acbc30d-1a26-491d-80f8-74a9fc5e14e3
+[I 10:47:39.912 NotebookApp] Creating new notebook in /
+[I 10:47:40.059 NotebookApp] Kernel started: 19547ebc-0f73-4e10-a86b-137f4dbb4c18, name: python3
+[W 10:47:40.079 NotebookApp] delete /child_analysis-Copy1-1bb528fc-5d00-4bce-a60a-fae9440885d1.ipynb
+[W 10:47:40.142 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/child_analysis-Copy1-1bb528fc-5d00-4bce-a60a-fae9440885d1.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
+[I 10:47:40.809 NotebookApp] Creating new notebook in /
+[I 10:47:40.868 NotebookApp] Kernel started: b8caa870-db29-4c6c-bf3f-98ce0ef35206, name: python3
+[W 10:47:40.879 NotebookApp] delete /child_analysis-Copy1-3b417d0b-14fa-4f63-99bf-2a6c7b133e2c.ipynb
+[W 10:47:40.881 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/child_analysis-Copy1-3b417d0b-14fa-4f63-99bf-2a6c7b133e2c.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
+[I 10:06:03.823 NotebookApp] Starting buffering for 19547ebc-0f73-4e10-a86b-137f4dbb4c18:fbadd681-b12c-4eaa-af34-0efa7aa6412e
+[I 10:06:03.847 NotebookApp] Kernel shutdown: b8caa870-db29-4c6c-bf3f-98ce0ef35206
+[I 17:13:12.797 NotebookApp] Creating new notebook in /
+[I 17:13:12.907 NotebookApp] Kernel started: f2f0a5ac-dd9f-4a39-8a7c-62da23aa61ef, name: xyliwaf
+[W 17:13:12.929 NotebookApp] delete /default-07802639-e74d-442a-8790-a77129018116.ipynb
+[W 17:13:12.931 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/default-07802639-e74d-442a-8790-a77129018116.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
+[I 17:13:13.460 NotebookApp] Kernel shutdown: f2f0a5ac-dd9f-4a39-8a7c-62da23aa61ef
+[I 18:17:46.484 NotebookApp] Creating new notebook in /
+[I 18:17:46.582 NotebookApp] Kernel started: 03358ba7-e9ca-42d8-a10c-ef1aa926552f, name: xyliwaf
+[W 18:17:46.605 NotebookApp] delete /default-f3053dbb-36d3-4540-b362-f21e49c6c09c.ipynb
+[W 18:17:46.658 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/default-f3053dbb-36d3-4540-b362-f21e49c6c09c.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
+[I 18:17:47.056 NotebookApp] Kernel shutdown: 03358ba7-e9ca-42d8-a10c-ef1aa926552f

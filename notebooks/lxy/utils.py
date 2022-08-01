@@ -26,6 +26,20 @@ def get_examples_behind(k):
         ans.append(stringss)
     return ans
 
+def get_examples_behind2(k):
+    sets = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
+    ans = []
+    for j in range(k):
+        stringss =''
+        for i in range(8):
+            listss = random.sample(sets,3)
+            index = random.randint(0, 2)
+            listss.insert(index,'[')
+            listss.insert(index + 2,']')
+            stringss += ' ' + ' '.join(listss)+' -> '+listss[index+1]+'\n'
+        ans.append(stringss)
+    return ans
+
 def get_examples_before(k):
     sets = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
     ans = []
@@ -48,6 +62,18 @@ def get_examples_query_before(k):
         for i in range(8):
             listss = random.sample(sets,4)
             index = random.randint(1, 3)
+            stringss += ' ' + ' '.join(listss)+' , '+listss[index] + ' -> '+listss[index-1]+'\n'
+        ans.append(stringss)
+    return ans
+
+def get_examples_query_before2(k):
+    sets = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9']
+    ans = []
+    for j in range(k):
+        stringss =''
+        for i in range(16):
+            listss = random.sample(sets,8)
+            index = random.randint(1, 7)
             stringss += ' ' + ' '.join(listss)+' , '+listss[index] + ' -> '+listss[index-1]+'\n'
         ans.append(stringss)
     return ans
@@ -587,5 +613,5 @@ def readfileSST2(filepath, k):
     return ans111
 from captum.attr import visualization as viz
 if __name__ == '__main__':
-    get_exmaples_number_English(8)
+    print(get_examples_middle_end(8)[0])
         
