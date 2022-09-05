@@ -35,7 +35,7 @@ import optax
 from datasets import Dataset, load_dataset
 from flax.core.frozen_dict import freeze, unfreeze
 from flax.training.common_utils import onehot, stack_forest
-from jax.experimental.maps import mesh
+from jax.experimental.maps import Mesh
 from jax.experimental.pjit import pjit
 from partitions import set_partitions
 from tqdm import tqdm
@@ -52,6 +52,7 @@ from transformers import (
     is_tensorboard_available,
 )
 from transformers.testing_utils import CaptureLogger
+from common_utils import Timer
 
 
 logger = logging.getLogger(__name__)
@@ -225,6 +226,75 @@ def create_learning_rate_fn(
     schedule_fn = optax.join_schedules(schedules=[warmup_fn, decay_fn], boundaries=[num_warmup_steps])
     return schedule_fn
 
+import tensorflow as tf  # XD
+def _parse_function(example_proto): # https://zhuanlan.zhihu.com/p/552951305  # XD
+    feature_desc = {"input_ids": tf.io.VarLenFeature(tf.int64)}
+    example = tf.io.parse_single_example(example_proto, feature_desc)
+    for name in list(example.keys()):
+        t = example[name]
+        if t.dtype == tf.int64: t = tf.cast(t, dtype=tf.int32)
+        example[name] = tf.sparse.to_dense(t, default_value=0)
+        # example[name] = tf.sparse.to_dense(tf.sparse.reorder(t)) # mesh-transformer-jax
+    return example
+
+def shard(data, batch_size=None):  # XD
+    return jax.tree_map(lambda x: x.numpy().reshape(batch_size + x.shape[1:]), data)  # mtj
+
+def load_tfrecord_dataset(index_fname, batch_size, seq_len, with_labels=False, restore_state=None):  # XD
+    # adapted from gpt-neo
+    fnames = [index_fname] if index_fname.endswith('.tfrecords') else open(index_fname).read().splitlines()
+    ds = tf.data.Dataset.from_tensor_slices(fnames)#.repeat()
+    ds = ds.apply(tf.data.TFRecordDataset)
+    # fp = index_fname; ds = tf.data.TFRecordDataset(fp)
+    # # ds = ds.shuffle(buffer_size=min(1000, len(sequences))) # flaxmodels, https://zhuanlan.zhihu.com/p/552951305
+    ds = ds.map(_parse_function, num_parallel_calls=tf.data.AUTOTUNE)
+    # gradient_accumulation_steps = 8
+    # mp_size, dp_size = 8, 1
+    # train_mbs_per_replica = 2 # train_micro_batch_size_per_gpu in deepspeed
+    # train_batch_size = (gradient_accumulation_steps, train_mbs_per_replica * dp_size)
+    # seq_len = 80  # max(len(s) for s in sequences) == 78
+    # ds = ds.apply(tf.data.experimental.dense_to_ragged_batch(np.prod(self.bs), drop_remainder=True)) # mtj
+    ds = ds.padded_batch(batch_size=np.prod(batch_size), padded_shapes={'input_ids': [seq_len]},
+                        padding_values={'input_ids': 0}, drop_remainder=True)
+    ds = ds.prefetch(10)  # mesh-transformer-jax
+    # ds = ds.repeat()  # gpt-neo/inputs.py
+    # map shard directly over ds won't work, getting AttributeError: 'Tensor' object has no attribute 'numpy'
+    # because inside tf.function?, see e.g.:
+    # 1) https://stackoverflow.com/questions/34097281/convert-a-tensor-to-numpy-array-in-tensorflow
+    # 2) https://github.com/tensorflow/tensorflow/issues/27519
+    # ds = ds.map(partial(shard, batch_size=batch_size), num_parallel_calls=tf.data.AUTOTUNE)
+    # matthias-wright/flaxmodels/training/stylegan2/data_pipeline.py
+    ds = iter(ds)
+    ds = map(lambda x: shard(x, batch_size=batch_size), ds)
+    if with_labels: ds = map(lambda x: dict(x, labels=x["input_ids"].copy()), ds)
+    return ds
+
+# XD: from mesh-transformer-jax
+def to_f32(t): return jax.tree_map(lambda x: x.astype(jnp.float32) if x.dtype == jnp.bfloat16 else x, t)
+def to_bf16(t): return jax.tree_map(lambda x: x.astype(jnp.bfloat16) if x.dtype == jnp.float32 else x, t)
+def to_f16(t): return jax.tree_map(lambda x: x.astype(jnp.float16) if x.dtype == jnp.float32 else x, t)
+
+from typing import Any, Callable
+from flax import core, struct
+
+class TrainState(struct.PyTreeNode):  # XD
+    step: int
+    apply_fn: Callable = struct.field(pytree_node=False)
+    params: core.FrozenDict[str, Any]
+    tx: optax.GradientTransformation = struct.field(pytree_node=False)
+    opt_state: optax.OptState
+    dropout_rng: jnp.ndarray = None
+
+    def apply_gradients(self, *, grads, **kwargs):
+        updates, new_opt_state = self.tx.update(grads, self.opt_state, self.params)
+        new_params = optax.apply_updates(self.params, to_f32(updates))  # XD: to_f32 from mesh-transformer-jax
+        return self.replace(step=self.step + 1, params=new_params, opt_state=new_opt_state, **kwargs)
+
+    @classmethod
+    def create(cls, *, apply_fn, params, tx, **kwargs):
+        opt_state = tx.init(params)
+        return cls(step=0, apply_fn=apply_fn, params=params, tx=tx, opt_state=opt_state, **kwargs)
+
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -266,7 +336,7 @@ def main():
         transformers.utils.logging.set_verbosity_error()
 
     # Set the verbosity to info of the Transformers logger (on main process only):
-    logger.info(f"Training/evaluation parameters {training_args}")
+    # logger.info(f"Training/evaluation parameters {training_args}")  # XD
 
     # Get the datasets: you can either provide your own CSV/JSON/TXT training and evaluation files (see below)
     # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
@@ -274,11 +344,11 @@ def main():
     #
     # For CSV/JSON files, this script will use the column called 'text' or the first column if no column called
     # 'text' is found. You can easily tweak this behavior (see below).
-    if data_args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        dataset = load_dataset(
-            data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir, keep_in_memory=False
-        )
+    # if data_args.dataset_name is not None:  # XD
+    #     # Downloading and loading a dataset from the hub.
+    #     dataset = load_dataset(
+    #         data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir, keep_in_memory=False
+    #     )
 
         if "validation" not in dataset.keys():
             dataset["validation"] = load_dataset(
@@ -330,96 +400,103 @@ def main():
             "You can do it from another script, save it, and load it from here, using --tokenizer_name."
         )
 
-    if training_args.do_train:
-        column_names = dataset["train"].column_names
-    else:
-        column_names = dataset["validation"].column_names
-    text_column_name = "text" if "text" in column_names else column_names[0]
+    # if training_args.do_train:
+    #     column_names = dataset["train"].column_names
+    # else:
+    #     column_names = dataset["validation"].column_names
+    # text_column_name = "text" if "text" in column_names else column_names[0]
 
-    # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
-    tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
+    # # since this will be pickled to avoid _LazyModule error in Hasher force logger loading before tokenize_function
+    # tok_logger = transformers.utils.logging.get_logger("transformers.tokenization_utils_base")
 
-    def tokenize_function(examples):
-        with CaptureLogger(tok_logger) as cl:
-            output = tokenizer(examples[text_column_name])
-        # clm input could be much much longer than block_size
-        if "Token indices sequence length is longer than the" in cl.out:
-            tok_logger.warning(
-                "^^^^^^^^^^^^^^^^ Please ignore the warning above - this long input will be chunked into smaller bits"
-                " before being passed to the model."
-            )
-        return output
+    # def tokenize_function(examples):
+    #     with CaptureLogger(tok_logger) as cl:
+    #         output = tokenizer(examples[text_column_name])
+    #     # clm input could be much much longer than block_size
+    #     if "Token indices sequence length is longer than the" in cl.out:
+    #         tok_logger.warning(
+    #             "^^^^^^^^^^^^^^^^ Please ignore the warning above - this long input will be chunked into smaller bits"
+    #             " before being passed to the model."
+    #         )
+    #     return output
 
-    tokenized_datasets = dataset.map(
-        tokenize_function,
-        batched=True,
-        num_proc=data_args.preprocessing_num_workers,
-        remove_columns=column_names,
-        load_from_cache_file=not data_args.overwrite_cache,
-    )
+    # tokenized_datasets = dataset.map(
+    #     tokenize_function,
+    #     batched=True,
+    #     num_proc=data_args.preprocessing_num_workers,
+    #     remove_columns=column_names,
+    #     load_from_cache_file=not data_args.overwrite_cache,
+    # )
 
-    if data_args.block_size is None:
-        block_size = tokenizer.model_max_length
-        if block_size > config.max_position_embeddings:
-            logger.warning(
-                f"The tokenizer picked seems to have a very large `model_max_length` ({tokenizer.model_max_length}). "
-                f"Using block_size={min(1024, config.max_position_embeddings)} instead. You can change that default value by passing --block_size xxx."
-            )
-            block_size = min(1024, config.max_position_embeddings)
-    else:
-        if data_args.block_size > tokenizer.model_max_length:
-            logger.warning(
-                f"The block_size passed ({data_args.block_size}) is larger than the maximum length for the model "
-                f"({tokenizer.model_max_length}). Using block_size={tokenizer.model_max_length}."
-            )
-        block_size = min(data_args.block_size, tokenizer.model_max_length)
+    # if data_args.block_size is None:
+    #     block_size = tokenizer.model_max_length
+    #     if block_size > config.max_position_embeddings:
+    #         logger.warning(
+    #             f"The tokenizer picked seems to have a very large `model_max_length` ({tokenizer.model_max_length}). "
+    #             "Picking 1024 instead. You can change that default value by passing --block_size xxx."
+    #         )
+    #         block_size = 1024
+    # else:
+    #     if data_args.block_size > tokenizer.model_max_length:
+    #         logger.warning(
+    #             f"The block_size passed ({data_args.block_size}) is larger than the maximum length for the model"
+    #             f"({tokenizer.model_max_length}). Using block_size={tokenizer.model_max_length}."
+    #         )
+    #     block_size = min(data_args.block_size, tokenizer.model_max_length)
 
-    # Main data processing function that will concatenate all texts from our dataset and generate chunks of block_size.
-    def group_texts(examples):
-        # Concatenate all texts.
-        concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
-        # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
-        # customize this part to your needs.
-        if total_length >= block_size:
-            total_length = (total_length // block_size) * block_size
-        # Split by chunks of max_len.
-        result = {
-            k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
-            for k, t in concatenated_examples.items()
-        }
-        result["labels"] = result["input_ids"].copy()
-        return result
+    # # Main data processing function that will concatenate all texts from our dataset and generate chunks of block_size.
+    # def group_texts(examples):
+    #     # Concatenate all texts.
+    #     concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
+    #     total_length = len(concatenated_examples[list(examples.keys())[0]])
+    #     # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
+    #     # customize this part to your needs.
+    #     if total_length >= block_size:
+    #         total_length = (total_length // block_size) * block_size
+    #     # Split by chunks of max_len.
+    #     result = {
+    #         k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
+    #         for k, t in concatenated_examples.items()
+    #     }
+    #     result["labels"] = result["input_ids"].copy()
+    #     return result
 
-    # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a remainder
-    # for each of those groups of 1,000 texts. You can adjust that batch_size here but a higher value might be slower
-    # to preprocess.
-    #
-    # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
-    # https://huggingface.co/docs/datasets/process#map
+    # # Note that with `batched=True`, this map processes 1,000 texts together, so group_texts throws away a remainder
+    # # for each of those groups of 1,000 texts. You can adjust that batch_size here but a higher value might be slower
+    # # to preprocess.
+    # #
+    # # To speed up this part, we use multiprocessing. See the documentation of the map method for more information:
+    # # https://huggingface.co/docs/datasets/package_reference/main_classes.html#datasets.Dataset.map
 
-    lm_datasets = tokenized_datasets.map(
-        group_texts,
-        batched=True,
-        num_proc=data_args.preprocessing_num_workers,
-        load_from_cache_file=not data_args.overwrite_cache,
-    )
+    # lm_datasets = tokenized_datasets.map(
+    #     group_texts,
+    #     batched=True,
+    #     num_proc=data_args.preprocessing_num_workers,
+    #     load_from_cache_file=not data_args.overwrite_cache,
+    # )
 
-    if training_args.do_train:
-        if "train" not in tokenized_datasets:
-            raise ValueError("--do_train requires a train dataset")
-        train_dataset = lm_datasets["train"]
-        if data_args.max_train_samples is not None:
-            max_train_samples = min(len(train_dataset), data_args.max_train_samples)
-            train_dataset = train_dataset.select(range(max_train_samples))
+    # if training_args.do_train:
+    #     if "train" not in tokenized_datasets:
+    #         raise ValueError("--do_train requires a train dataset")
+    #     train_dataset = lm_datasets["train"]
+    #     if data_args.max_train_samples is not None:
+    #         max_train_samples = min(len(train_dataset), data_args.max_train_samples)
+    #         train_dataset = train_dataset.select(range(max_train_samples))
 
-    if training_args.do_eval:
-        if "validation" not in tokenized_datasets:
-            raise ValueError("--do_eval requires a validation dataset")
-        eval_dataset = lm_datasets["validation"]
-        if data_args.max_eval_samples is not None:
-            max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
-            eval_dataset = eval_dataset.select(range(max_eval_samples))
+    # if training_args.do_eval:
+    #     if "validation" not in tokenized_datasets:
+    #         raise ValueError("--do_eval requires a validation dataset")
+    #     eval_dataset = lm_datasets["validation"]
+    #     if data_args.max_eval_samples is not None:
+    #         max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
+    #         eval_dataset = eval_dataset.select(range(max_eval_samples))
+    # XD
+    gradient_accumulation_steps, per_replica_batch, dp_size = 2, 8, 1
+    train_batch_size = (gradient_accumulation_steps, per_replica_batch * dp_size)
+    train_dataset = load_tfrecord_dataset(
+        f"/nas/xd/projects/mesh-transformer-jax/data/{data_args.dataset_name}",
+        batch_size=train_batch_size, seq_len=data_args.block_size, with_labels=True)
+    train_dataset_len = int(data_args.dataset_name.split('.')[0].split('_')[-1])  # e.g. rotten_tomatoes_train_8530.tfrecords
 
     # Enable tensorboard only on the master node
     has_tensorboard = is_tensorboard_available()
@@ -445,21 +522,28 @@ def main():
 
     # Store some constant
     num_epochs = int(training_args.num_train_epochs)
-    train_batch_size = int(training_args.per_device_train_batch_size) * jax.device_count()
+    # train_batch_size = int(training_args.per_device_train_batch_size) * jax.device_count() # XD: wrong!
+    train_batch_size = np.prod(train_batch_size)
     eval_batch_size = int(training_args.per_device_eval_batch_size) * jax.device_count()
-    steps_per_epoch = len(train_dataset) // train_batch_size
+    steps_per_epoch = train_dataset_len // train_batch_size  # XD: len(train_dataset) -> train_dataset_len
     total_train_steps = steps_per_epoch * num_epochs
 
     # TODO: weights should be initialized in pjitted fun, this won't work for REALLY large models
     # TODO: when loading from pre-trained model we need to make sure the vocab is divisible by num_partitions
     # GPT2's vocab is odd, we need to resize it for fine-tuning
-    model = FlaxAutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, seed=training_args.seed, dtype=getattr(jnp, model_args.dtype)
-    )
+    # model = FlaxAutoModelForCausalLM.from_pretrained(
+    #     model_args.model_name_or_path, seed=training_args.seed, dtype=getattr(jnp, model_args.dtype)
+    # )
+    with Timer('loading model'):  # XD
+        model = FlaxAutoModelForCausalLM.from_config(config, _do_init=False)
+        # params = model.init_weights(model.key, model.input_shape)
+        # static_argnums setting from https://huggingface.co/spaces/dalle-mini/dalle-mini/commit/12f323d7f80887ac0be14c310630f4a26241724f
+        params = jax.jit(model.init_weights, static_argnums=(1,), backend='cpu')(model.key, model.input_shape)
+        params = model.to_fp16(params)
 
     # Create learning rate schedule
     linear_decay_lr_schedule_fn = create_learning_rate_fn(
-        len(train_dataset),
+        train_dataset_len,  # XD: len(train_dataset) -> train_dataset_len
         train_batch_size,
         training_args.num_train_epochs,
         training_args.warmup_steps,
@@ -476,13 +560,13 @@ def main():
 
     def get_initial_state(params):
         state = optimizer.init(params)
-        return tuple(state), params
+        return state, params  # XD: tuple(state) -> state
 
     # Get PartitionSpec for model params
-    param_spec = set_partitions(unfreeze(model.params))
+    param_spec = set_partitions(unfreeze(params))  # XD: model.params -> params
 
     # Get the PyTree for opt_state, we don't actually initialize the opt_state yet.
-    params_shapes = jax.tree_util.tree_map(lambda x: x.shape, model.params)
+    params_shapes = jax.tree_map(lambda x: x.shape, params)  # XD: model.params -> params
     state_shapes = jax.eval_shape(get_initial_state, params_shapes)
 
     # get PartitionSpec for opt_state, this is very specific to adamw
@@ -496,25 +580,34 @@ def main():
     opt_state_spec, param_spec = jax.tree_util.tree_map(
         get_opt_spec, state_shapes, is_leaf=lambda x: isinstance(x, (dict, optax.EmptyState))
     )
+    # XD
+    state_spec = TrainState(params=param_spec, opt_state=opt_state_spec,
+        dropout_rng=None, step=None, apply_fn=model.__call__, tx=optimizer)
+    def get_initial_state(params):
+        return TrainState.create(apply_fn=model.__call__, tx=optimizer, params=params, dropout_rng=dropout_rng)
 
     # pjit the get_initial_state function to shard params and init
     # optimizer state in sharded way
     p_get_initial_state = pjit(
         get_initial_state,
-        in_axis_resources=None,
-        out_axis_resources=(opt_state_spec, param_spec),
+        # in_axis_resources=None,
+        # out_axis_resources=(opt_state_spec, param_spec),
+        in_axis_resources=(param_spec,), out_axis_resources=state_spec,  # XD
     )
 
     # hack: move the inital params to CPU to free up device memory
     # TODO: allow loading weights on CPU in pre-trained model
-    model.params = jax.tree_util.tree_map(lambda x: np.asarray(x), model.params)
+    # model.params = jax.tree_map(lambda x: np.asarray(x), model.params)  # XD
 
     # mesh defination
     mesh_devices = np.array(jax.devices()).reshape(1, jax.local_device_count())
 
     # actually initialize the opt_state
-    with mesh(mesh_devices, ("dp", "mp")):
-        opt_state, params = p_get_initial_state(freeze(model.params))
+    with Mesh(mesh_devices, ("dp", "mp")):
+        with Timer('init state'):
+            # opt_state, params = p_get_initial_state(freeze(model.params))
+            state = p_get_initial_state(freeze(params))  # XD: model.params -> params
+    del params  # XD: free CPU memory
 
     # cross-entropy with z loss
     def loss_fn(logits, labels, z_loss=0):
@@ -534,21 +627,69 @@ def main():
 
     # Define gradient update step fn
     # TODO: try to use TrainState instead of passing params and opt_state individually
-    def train_step(params, opt_state, dropout_rng, batch, step):
-        dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
+    # def train_step(params, opt_state, dropout_rng, batch, step):
+    #     dropout_rng, new_dropout_rng = jax.random.split(dropout_rng)
 
-        def compute_loss(params):
+    #     def compute_loss(params, batch):  # XD add batch arg
+    #         labels = batch.pop("labels")
+    #         logits = model(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
+    #         loss = loss_fn(logits, labels, z_loss=1.0)
+    #         return loss
+
+    #     def microbatch(old_grad, batch):  # XD
+    #         grad_fn = jax.value_and_grad(compute_loss)#, allow_int=True)
+    #         loss, grad = grad_fn(params, batch)
+    #         new_grad = jax.tree_multimap(lambda a, b: a + b, old_grad, grad)
+    #         return new_grad, loss
+
+    #     if batch['input_ids'].shape[0] == 1:
+    #         batch = jax.tree_map(lambda x: x[0], batch)
+    #         grad_fn = jax.value_and_grad(compute_loss)
+    #         loss, grads = grad_fn(params, batch)  # XD: add batch arg
+    #     else:  # XD: adapted from mesh-transformer-jax
+    #         grads, loss = jax.lax.scan(microbatch,
+    #             jax.tree_map(lambda x: jnp.zeros_like(x), params),
+    #             batch)
+    #         loss = loss.mean()  # to be a metric, loss should be scalar
+
+    #     updates, new_opt_state = optimizer.update(grads, opt_state, params)
+    #     new_params = optax.apply_updates(params, updates)
+
+    #     metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(step)}
+    #     return new_params, tuple(new_opt_state), new_dropout_rng, metrics, step + 1
+
+    # def train_step(params, opt_state, dropout_rng, batch, step):
+    def train_step(state, batch):
+        dropout_rng, new_dropout_rng = jax.random.split(state.dropout_rng)
+
+        def compute_loss(params, batch):  # XD: add batch arg
             labels = batch.pop("labels")
-            logits = model(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
+            logits = state.apply_fn(**batch, params=params, dropout_rng=dropout_rng, train=True)[0]
             loss = loss_fn(logits, labels, z_loss=1.0)
             return loss
 
-        grad_fn = jax.value_and_grad(compute_loss)
-        loss, grads = grad_fn(params)
+        def microbatch(old_grad, batch):  # XD
+            grad_fn = jax.value_and_grad(compute_loss)#, allow_int=True)
+            loss, grad = grad_fn(state.params, batch)
+            new_grad = jax.tree_multimap(lambda a, b: a + b, old_grad, grad)
+            return new_grad, loss
 
+        if batch['input_ids'].shape[0] == 1:
+            batch = jax.tree_map(lambda x: x[0], batch)
+            grad_fn = jax.value_and_grad(compute_loss)
+            loss, grads = grad_fn(state.params, batch)  # XD: add batch arg
+        else:  # XD: adapted from mesh-transformer-jax
+            grads, loss = jax.lax.scan(microbatch,
+                jax.tree_map(lambda x: jnp.zeros_like(x), state.params),
+                batch)
+            loss = loss.mean()  # to be a metric, loss should be scalar
+
+        # XD
+        state = state.apply_gradients(grads=grads, dropout_rng=new_dropout_rng)
+        metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(state.step)}
+        return state, metrics
         updates, new_opt_state = optimizer.update(grads, opt_state, params)
         new_params = optax.apply_updates(params, updates)
-
         metrics = {"loss": loss, "learning_rate": linear_decay_lr_schedule_fn(step)}
         return new_params, tuple(new_opt_state), new_dropout_rng, metrics, step + 1
 
@@ -561,9 +702,13 @@ def main():
 
     p_train_step = pjit(
         train_step,
-        in_axis_resources=(param_spec, opt_state_spec, None, None, None),
-        out_axis_resources=(param_spec, opt_state_spec, None, None, None),
-        donate_argnums=(0, 1),
+        # in_axis_resources=(param_spec, opt_state_spec, None, None, None),
+        # out_axis_resources=(param_spec, opt_state_spec, None, None, None),
+        # donate_argnums=(0, 1),
+        # XD
+        in_axis_resources=(state_spec, None),
+        out_axis_resources=(state_spec, None),
+        donate_argnums=(0,),  # donote state, from mesh-transformer-jax and dalle-mini, though I don't really understand.
     )
 
     p_eval_step = pjit(
@@ -573,7 +718,7 @@ def main():
     )
 
     logger.info("***** Running training *****")
-    logger.info(f"  Num examples = {len(train_dataset)}")
+    logger.info(f"  Num examples = {train_dataset_len}")  # XD: len(train_dataset) -> train_dataset_len
     logger.info(f"  Num Epochs = {num_epochs}")
     logger.info(f"  Instantaneous batch size per device = {training_args.per_device_train_batch_size}")
     logger.info(f"  Total train batch size (w. parallel & distributed) = {train_batch_size}")
@@ -584,7 +729,7 @@ def main():
     epochs = tqdm(range(num_epochs), desc=f"Epoch ... (1/{num_epochs})", position=0)
     global_step = 0
     # we are not doing 2D parallelism (yet!), this just does model parallelism
-    with mesh(mesh_devices, ("dp", "mp")):
+    with Mesh(mesh_devices, ("dp", "mp")):
         for _ in epochs:
             # ======================== Training ================================
             train_start = time.time()
@@ -594,21 +739,23 @@ def main():
 
             # Generate an epoch by shuffling sampling indices from the train dataset
             train_metrics = []
-            train_loader = data_loader(input_rng, train_dataset, train_batch_size, shuffle=True)
-            steps_per_epoch = len(train_dataset) // train_batch_size
+            # train_loader = data_loader(input_rng, train_dataset, train_batch_size, shuffle=True) # XD
+            train_loader = train_dataset
+            steps_per_epoch = train_dataset_len // train_batch_size  # XD: len(train_dataset) -> train_dataset_len
 
             # train
+            # with Timer('compile train fn'):
+            #     p_train_step(params, opt_state, dropout_rng, next(train_loader), global_step)  # XD
             for _ in tqdm(range(steps_per_epoch), desc="Training...", position=1, leave=False):
                 batch = next(train_loader)
-                params, opt_state, dropout_rng, train_metric, global_step = p_train_step(
-                    params,
-                    opt_state,
-                    dropout_rng,
-                    batch,
-                    global_step,
-                )
+                # print('batch:', jax.tree_map(lambda x: x.shape, batch))
+                with Timer('train_step'):
+                    # params, opt_state, dropout_rng, train_metric, global_step = p_train_step(
+                    # params, opt_state, dropout_rng, batch, global_step)
+                    state, train_metric = p_train_step(state, batch)  # XD
                 train_metrics.append(train_metric)
 
+                global_step += 1  # XD: local copy of state.step
                 cur_step = global_step
 
                 if cur_step % training_args.logging_steps == 0 and cur_step > 0:
@@ -624,7 +771,7 @@ def main():
 
                     train_metrics = []
 
-                if cur_step % training_args.eval_steps == 0 and cur_step > 0:
+                if training_args.do_eval and cur_step % training_args.eval_steps == 0 and cur_step > 0:
                     # ======================== Evaluating ==============================
                     eval_metrics = []
                     eval_loader = data_loader(input_rng, eval_dataset, eval_batch_size)
@@ -632,7 +779,7 @@ def main():
 
                     for _ in tqdm(range(eval_steps), desc="Evaluating...", position=2, leave=False):
                         batch = next(eval_loader)
-                        metrics = p_eval_step(batch["input_ids"], batch["labels"], params)
+                        metrics = p_eval_step(batch["input_ids"], batch["labels"], state.params)  # XD: params->state.params
                         eval_metrics.append(metrics)
 
                     # normalize eval metrics

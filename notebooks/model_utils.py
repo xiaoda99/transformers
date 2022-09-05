@@ -750,45 +750,96 @@ def get_argmax_labels(model, hidden_states, labels):
     argmax_labels[labels != -100] = logits.argmax(-1)[labels != -100]
     return argmax_labels
 
-def get_prob_dist(d, topk=5):
-    return {k: round(math.exp(v), 3) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]}
+def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows=None):
+    assert input_ids.size(0) == 1  # bsz == 1
+    bos_id = tokenizer.convert_tokens_to_ids(bos_token)
+    bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()
+    # print(bos_indices)
+    if nrows is not None:
+        assert nrows == len(bos_indices)
+    else:
+        nrows = len(bos_indices)
+    if eos_token is not None:
+        eos_id = tokenizer.convert_tokens_to_ids(eos_token)
+        eos_indices = (input_ids[0] == eos_id).nonzero()[-nrows:].squeeze(1).tolist()
+    else:
+        # eos_indices = bos_indices[1:] + [input_ids.size(1)]
+        eos_indices = [bos_i + 2 for bos_i in bos_indices]
+    # labels = torch.ones(input_ids.size(0), input_ids.size(1) - 1).long() * (-100)
+    labels = torch.ones_like(input_ids) * (-100)
+    answers = []
+    for bos_i, eos_i in zip(bos_indices, eos_indices):
+        # eos_i = bos_i + 2  # show only the first answer token
+        ans_ids = input_ids[0, bos_i + 1: eos_i]
+        labels[0, bos_i: eos_i - 1] = ans_ids
+        answers.append(ans_ids.numpy())
+    return bos_indices, eos_indices, answers, labels
 
-def show_predictions(text, examples, tokenizer, logits, bos_indices, eos_indices, answers, labels, 
-        mask_logits_fn=None, topk=5, loss_reduction='mean', show_range=None, sep='\t', verbose=True):
-    # use_openai_api = isinstance(model, types.FunctionType)
-    use_openai_api = hasattr(logits, 'token_logprobs')
+# bos_token='▁is'; eos_token='</s>' for s2s
+def make_data_tuple(text, tokenizer, k_shot=3, bos_token='Ġ->', eos_token='Ċ', s2s=False):
+    examples = text.strip().split('\n')
+    # print(text)
+    # inputs = tokenizer.encode_plus(text, return_tensors='pt')
+    # input_ids = inputs.input_ids
+    input_ids = tokenizer.encode(text, return_tensors='pt')
+    tokens = tokenizer.tokenize(text)
+    # # tokenize without tokenization artifact -> needed for visualization, from unseal
+    # tokens = list(map(tokenizer.convert_tokens_to_string, map(lambda x: [x], tokens)))
+
+    bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_token=bos_token, eos_token=eos_token)
+    if s2s:  # for t5 models
+        bos_i, eos_i = bos_indices[-1], eos_indices[-1]
+        assert eos_i == input_ids.size(1) - 1, f'{eos_i} != {input_ids.size()}[1] - 1'
+        assert tokenizer.convert_ids_to_tokens(input_ids[0, -1].item()) == eos_token == '</s>', \
+            f"{tokenizer.convert_ids_to_tokens(input_ids[0, -1].item())} != '</s>'"
+        input_ids = torch.cat([input_ids[:, : bos_i + 1], input_ids[:, -1:]], dim=1) # append trailing '</s>'
+        answers, labels = answers[-1:], labels[:, bos_i: eos_i - 1]
+        bos_indices, eos_indices = [bos_i - bos_i], [eos_i - bos_i]
+    else:
+        labels[:, :bos_indices[k_shot]] = -100  # 只算k_shot个示例后的loss
+    # inputs = {'input_ids': input_ids, 'labels': labels}
+    return examples, input_ids, tokens, bos_indices, eos_indices, answers, labels
+
+def get_prob_dist(d, topk=5, digits=3):
+    return {k: round(math.exp(v), digits) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]}
+
+def show_predictions(examples, tokenizer, logits, bos_indices, eos_indices, answers, labels, candidates=None,
+        mask_logits_fn=None, k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True):
+    use_openai_api = hasattr(logits, 'token_logprobs')  # isinstance(model, types.FunctionType)
     if use_openai_api: ans_nlls = []
     if not use_openai_api and mask_logits_fn is not None: logits = mask_logits_fn(logits)
     
-    bi = 0
     assert len(bos_indices) == len(examples), '%d != %d' % (len(bos_indices), len(examples))
-    if show_range is None: show_range = range(len(examples))
-    top1_corrects = []  # True
+    top1_corrects, answer_probs, candidate_probs = [], [], []
+    convert_fn = tokenizer.convert_ids_to_tokens if True else partial(convert_ids_to_tokens, tokenizer=tokenizer)
     for i, (example, bos_i, eos_i, ans_ids) in enumerate(zip(examples, bos_indices, eos_indices, answers)):
-        # eos_i = bos_i + 2  # show only the first answer token
-        if i not in show_range: continue
+        eos_i = bos_i + 2  # show only the first answer token
         if use_openai_api:
             ans_prob_dist = [get_prob_dist(d, topk=topk) for d in logits.top_logprobs[bos_i + 1: eos_i]]
-            ans_probs = [math.exp(lp) for lp in logits.token_logprobs[bos_i + 1: eos_i]]
-            ans_nlls += [-lp for lp in logits.token_logprobs[bos_i + 1: eos_i]]
+            ans_probs = [round(math.exp(lp), 3) for lp in logits.token_logprobs[bos_i + 1: eos_i]]
+            if i >= k_shot: ans_nlls += [-lp for lp in logits.token_logprobs[bos_i + 1: eos_i]]
         else:
-            ans_prob_dist = logits[bi, bos_i: eos_i - 1].softmax(-1)
-            ans_probs = ans_prob_dist[torch.arange(ans_prob_dist.size(0)), ans_ids]
-        ans_tokens = convert_ids_to_tokens(ans_ids, tokenizer)
-        for ans_id, ans_token, ans_prob, dist in zip(ans_ids, ans_tokens, numpy(ans_probs, decimals=3), ans_prob_dist):
+            ans_prob_dist = logits[0, bos_i: eos_i - 1].softmax(-1)
+            # ans_probs = ans_prob_dist[np.arange(ans_prob_dist.shape[0]), ans_ids]
+            ans_probs = numpy(ans_prob_dist[torch.arange(ans_prob_dist.size(0)), ans_ids], decimals=3)
+        ans_tokens = convert_fn(ans_ids)
+        for ans_id, ans_token, ans_prob, dist in zip(ans_ids, ans_tokens, ans_probs, ans_prob_dist):
             top1_correct = max(dist.items(), key=lambda x: x[1])[0] == ans_token.replace('Ġ', ' ') \
-                if use_openai_api else (dist.argmax() == ans_id).item()
+                if use_openai_api else dist.argmax() == ans_id  # (dist.argmax() == ans_id).item()
             top1_corrects.append(top1_correct)
-            indices_fn = partial(convert_ids_to_tokens, tokenizer=tokenizer)
+            answer_probs.append(ans_prob)
+            if candidates is not None:
+                # candidates_i = [token.replace('Ġ', ' ') for token in convert_fn(candidates[i])] \
+                #     if use_openai_api else candidates[i]
+                # candidate_probs.append([dist.get(cand, 0.) if use_openai_api else dist[cand].item() for cand in candidates_i])
+                candidate_probs.append([dist[cand].item() for cand in candidates[i]] if not use_openai_api else
+                    [dist.get(cand, 0.) for cand in [t.replace('Ġ', ' ') for t in convert_fn(candidates[i])]])
             if verbose: 
                 print(('*' if top1_correct else ' ') + ans_token, ans_prob, dist if use_openai_api 
-                    else show_topk(*dist.topk(topk), indices_fn=indices_fn), sep, example) 
-    if use_openai_api:
-        loss = ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls)
-    else:
-        loss = compute_loss(logits, labels, reduction=loss_reduction)
-    # all_top1_correct = sum(not correct for correct in all_top1_correct) < 1
-    return loss, top1_corrects
+                    else show_topk(*dist.topk(topk), indices_fn=convert_fn), sep, example) 
+    loss = (ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls)) \
+        if use_openai_api else compute_loss(logits, labels, reduction=loss_reduction)
+    return loss, top1_corrects, answer_probs, candidate_probs
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
         embed_mask=None, mlp_mask=None, head_mask=None, neuron_mask=None, attn_weights=None, 

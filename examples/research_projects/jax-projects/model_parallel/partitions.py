@@ -75,6 +75,29 @@ def _get_partition_rules():
         (("ln_f", "scale"), None),
     ]
 
+def _get_partition_rules(): # XD: for gpt-j
+    return [
+        # embeddings
+        # (("transformer", "wpe", "embedding"), P("mp", None)),
+        (("transformer", "wte", "embedding"), P("mp", None)),
+        # atention
+        (("attn", "(q_proj|k_proj|v_proj|out_proj)", "kernel"), P(None, "mp")),
+        # (("attn", "out_proj", "kernel"), P("mp", None)),
+        # (("attn", "out_proj", "bias"), None),
+        # mlp
+        (("mlp", "fc_in", "kernel"), P(None, "mp")),
+        (("mlp", "fc_in", "bias"), P("mp")),
+        (("mlp", "fc_out", "kernel"), P("mp", None)),
+        (("mlp", "fc_out", "bias"), None),
+        # layer norms
+        ((r"ln_\d+", "bias"), None),
+        ((r"\d+", r"ln_\d+", "scale"), None),
+        (("ln_f", "bias"), None),
+        (("ln_f", "scale"), None),
+        # lm head
+        (("lm_head", "kernel"), P(None, "mp")),
+        (("lm_head", "bias"), P("mp")),
+    ]
 
 def set_partitions(in_dict):
     rules = _get_partition_rules()
@@ -82,4 +105,5 @@ def set_partitions(in_dict):
     initd = {k: _unmatched for k in flatten_dict(in_dict)}
     result = {k: replace(k, v) for k, v in initd.items()}
     assert _unmatched not in result.values(), "Incomplete partition spec."
-    return freeze(unflatten_dict(result))
+    # return freeze(unflatten_dict(result))  # XD
+    return unflatten_dict(result)

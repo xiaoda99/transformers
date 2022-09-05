@@ -3,12 +3,18 @@ import os
 import json
 from collections import defaultdict, OrderedDict, Counter
 import string
-from random import choice, choices, shuffle, sample, randint
+from random import choice, choices, shuffle, sample, randint, random
+from dataclasses import dataclass
+from typing import Callable, Any
 
-from transformers import GPT2Tokenizer
-cache_dir = '/nas/xd/.cache/torch/transformers/'
+from common_utils import join_lists
+
+# from transformers import GPT2Tokenizer
+# cache_dir = '/nas/xd/.cache/torch/transformers/'
 # _tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
 
+uppercase = list(string.ascii_uppercase)
+lowercase = list(string.ascii_lowercase)
 digits = list(string.digits[1:])
 cardinals = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']
 ordinals = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth']
@@ -18,6 +24,54 @@ digit2ordinal = OrderedDict(zip(digits, ordinals))
 # uppercases = [l for l in string.ascii_uppercase if len(_tokenizer.tokenize('%s %s' % (l*2, l*2))) == 2]
 # lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
 # full_vocab = uppercases + digits
+
+# polygons = ['triangle', 'quadrangle', 'pentagon', 'hexagon', 'heptagon', 'octagon', 'nonagon', 'decagon',]# 'undecagon', 'dodecagon']
+times_of_day = ['dawn', 'morning', 'noon', 'afternoon', 'evening', 'night',]# 'midnight']
+clock_of_day = [f"{i} o'clock" for i in range (1, 13)]
+years = [f'{i}' for i in range(2010, 2020)]
+days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+seasons = ['spring', 'summer', 'autumn', 'winter']
+# ages_of_life = ['baby', 'child', 'teenager', 'young', 'adult', 'elder']
+ages_of_life = ['baby', 'child', 'adolescent', 'adult']
+times_of_history = ['ancient', 'medieval', 'modern', 'contemporary'] #'renaissance', 
+# units_of_time = ['nanosecond', 'microsecond', 'millisecond', ][:0] + ['second', 'minute', 'hour', 'day', 'week', 'month', 'year', 'decade', 'century', 'millennium'] # first 3 multi-token
+units_of_length = ['nanometer', 'micrometer', 'millimeter', 'meter', 'kilometer', 'mile']
+units_of_mass = ['nanogram', 'microgram', 'milligram', 'gram', 'kilogram', 'ton']
+# SI_prefixes_small = ['pico', 'nana', 'micro', 'milli', 'centi', 'deci']
+# SI_prefixes_large = ['kilo', 'mega', 'giga', 'tera', 'peta', 'exa', 'zetta', 'yotta']
+
+things = ['atom', 'molecule', 'cell', 'tissue', 'organ', 'system', 'person', 'community', 'city', 'state', 'country', 'continent', 'planet', 'star', 'galaxy', 'universe']
+sizes = ['tiny', 'small', 'large', 'huge',]# 'medium', 'gigantic']
+# degrees = ['bachelor', 'master', 'doctor', 'postdoc']
+posets = [list(string.ascii_uppercase)[:14], list(string.ascii_lowercase)[:14], list(string.ascii_uppercase)[14:], list(string.ascii_lowercase)[14:], digits, cardinals, ordinals,
+    times_of_day, days_of_week, months, seasons, ages_of_life, times_of_history, #units_of_time, 
+    things, sizes]# units_of_length, units_of_mass, SI_prefixes_small, SI_prefixes_large]
+closed_posets = [list(string.ascii_uppercase)[:7], list(string.ascii_lowercase)[:7],][:] + [digits, cardinals, #ordinals[:5], 
+    days_of_week, months, ]#seasons, times_of_history, ages_of_life, sizes]
+open_posets = [times_of_day, ages_of_life, times_of_history, units_of_length, units_of_mass, things, sizes, ]
+
+# from https://eslyes.com/namesdict/popular_names.htm
+boys = [
+    'James', 'David',  'Christopher',  'George',  'Ronald',
+    'John', 'Richard',  'Daniel',  'Kenneth',  'Anthony',
+    'Robert', 'Charles',  'Paul',  'Steven',  'Kevin',
+    'Michael', 'Joseph',  'Mark',  'Edward',  'Jason',
+    'William',  'Thomas',  'Donald',  'Brian',  'Jeff',]
+girls = [
+    'Mary','Jennifer', 'Lisa', 'Sandra', 'Michelle',
+    'Patricia','Maria', 'Nancy', 'Donna', 'Laura',
+    'Linda','Susan', 'Karen', 'Carol', 'Sarah',
+    'Barbara','Margaret', 'Betty', 'Ruth', 'Kimberly',
+    'Elizabeth', 'Dorothy', 'Helen', 'Sharon', 'Deborah',]
+
+# https://www.verywellfamily.com/top-1000-baby-boy-names-2757618
+# https://www.verywellfamily.com/top-1000-baby-girl-names-2757832
+boys = [l.strip() for l in open('boy_names_1000.txt').readlines()]
+girls = [l.strip() for l in open('girl_names_1000.txt').readlines()]
+persons = boys + girls
+
+
 
 noun2adj = [  # The adjective form of x is y
     ('rain','rainy'),
@@ -238,6 +292,102 @@ remove_two = [
     ('0, 1, 18, 9, 9, 0, 15, 6, 1', '18, 15, 6'),
     ('0, 17, 4, 8, 4, 10, 1', '0, 17, 8, 10, 1'),
 ]
+
+# @dataclass
+# class Relation:
+#     _dict: dict = None
+#     f: Callable[[Any], list] = None
+#     dom: Callable[[], set] = None
+#     codom: Callable[[], set] = None
+#     b: Callable[[Any, Any], bool] = None
+
+class Relation(object):
+    def __init__(self, _dict): self._dict = _dict
+    def f(self, x): return self._dict.get(x, [])
+    # def el(self): return self._el
+    def dom(self, xs=None): return set(self._dict.keys())
+    def codom(self, ys=None): return set(join_lists(self._dict.values()))
+    def b(self, x0, x1): return x1 in self._dict.get(x0, [])
+    
+# def to_list(e): return e if isinstance(e, list) else [e]
+class Set(object):
+    def __init__(self, data):
+        self.set_data(data)
+        # self.set_functions()
+
+    def set_functions(self):
+        for rel_name in self.rel_names:
+            rel = getattr(self, rel_name)
+            d = rel._dict
+            rel.f = lambda e, d=d: d.get(e, [])
+            rel.dom = lambda d=d: set(d.keys())
+            rel.codom = lambda d=d: set(d.values())
+            rel.b = lambda e, e2, d=d: e2 in d.get(e, [])
+
+            # d = getattr(self, rel_name + '_dict')
+            # setattr(self, rel_name, lambda e, d=d: d.get(e, []))
+            # setattr(self, rel_name + '_dom', lambda d=d: set(d.keys()))
+            # setattr(self, rel_name + '_codom', lambda d=d: set(d.values()))
+            # setattr(self, 'is_' + rel_name, lambda e, e2, d=d: e2 in d.get(e, []))
+
+    # def get_rel_fns(self, rel_name):
+    #     return [getattr(self, name) for name in
+    #         [rel_name, rel_name + '_dom', rel_name + '_codom', 'is_' + rel_name]]
+
+    # def el(self):
+    #     return self.data
+
+class EqSet(Set):
+    def set_data(self, data):
+        self.data = data
+        self.rel_names = ['equal']
+        for rel_name, d in zip(self.rel_names, [{data[i]: [data[i]] for i in range(0, len(data))}]):
+            # setattr(self, rel_name + '_dict', d)
+            setattr(self, rel_name, Relation(_dict=d))
+
+class PoSet(Set):
+    def set_data(self, data):
+        self.data = data
+        self.rel_names = ['prev', 'next', 'equal']
+        for rel_name, d in zip(self.rel_names, [{data[i]: data[i - 1] for i in range(1, len(data))},
+                                                {data[i]: data[i + 1] for i in range(0, len(data) - 1)},
+                                                {data[i]: data[i] for i in range(0, len(data))}]):
+            # setattr(self, rel_name + '_dict', d)
+            setattr(self, rel_name, Relation(_dict=d))
+
+    #     for rel_name in self.rel_names:
+    #         d = getattr(self, rel_name + '_dict')
+    #         # default args for lambda function are evaluated when the function is created rather than called
+    #         # https://stackoverflow.com/questions/10452770/python-lambdas-binding-to-local-values
+    #         setattr(self, rel_name, lambda e, d=d: to_list(d.get(e, [])))
+    #         setattr(self, rel_name + '_dom', lambda d=d: set(d.keys()))
+    #         setattr(self, rel_name + '_codom', lambda d=d: set(d.values()))
+    #         setattr(self, 'is_' + rel_name, lambda e, e2, d=d: e2 in to_list(d.get(e, [])))
+    
+    # def get_fns(self, rel_name):
+    #     return [getattr(self, name) for name in
+    #         [rel_name, rel_name + '_dom', rel_name + '_codom', 'is_' + rel_name]]
+
+class SymSet(Set):
+    def set_data(self, data):
+        self.data = data
+        # el = join_lists([pair[0] + pair[1] for pair in data])
+        self.rel_names = ['similar', 'opposite', 'equal']
+        for rel_name in self.rel_names:
+            # setattr(self, rel_name + '_dict', defaultdict(list))
+            setattr(self, rel_name, Relation(_dict=defaultdict(list)))
+        for pair in data:
+            for similars, opposites in [(pair[0], pair[1]), (pair[1], pair[0])]:
+                for e in similars:
+                    # self.equal_dict[e] = [e]
+                    # if len(similars) > 1: self.similar_dict[e] += list(set(similars) - {e})
+                    # self.opposite_dict[e] += opposites
+                    self.equal._dict[e] = [e]
+                    if len(similars) > 1: self.similar._dict[e] += list(set(similars) - {e})
+                    self.opposite._dict[e] += opposites
+
+    # def el(self): return self._el
+        
 
 def inc(token):
     assert len(token) == 1 or token in ['->'], token

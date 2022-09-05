@@ -25,6 +25,9 @@ from flax.linen import combine_masks, make_causal_mask
 from flax.linen.attention import dot_product_attention_weights
 from flax.traverse_util import flatten_dict, unflatten_dict
 from jax import lax
+# XD: from t5x
+from flax.linen import partitioning as nn_partitioning
+remat = nn_partitioning.remat
 
 from ...modeling_flax_outputs import FlaxBaseModelOutput, FlaxCausalLMOutput
 from ...modeling_flax_utils import ACT2FN, FlaxPreTrainedModel, append_call_sample_docstring
@@ -378,6 +381,7 @@ class FlaxGPTJPreTrainedModel(FlaxPreTrainedModel):
         module = self.module_class(config=config, dtype=dtype, **kwargs)
         super().__init__(config, module, input_shape=input_shape, seed=seed, dtype=dtype, _do_init=_do_init)
 
+    # @partial(jax.jit, static_argnums=(0,), backend='cpu')  # XD
     def init_weights(self, rng: jax.random.PRNGKey, input_shape: Tuple, params: FrozenDict = None) -> FrozenDict:
         # init input tensors
         input_ids = jnp.zeros(input_shape, dtype="i4")
@@ -530,6 +534,7 @@ class FlaxGPTJBlockCollection(nn.Module):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
+            block = remat(block)  # XD
             layer_outputs = block(
                 hidden_states,
                 attention_mask,
