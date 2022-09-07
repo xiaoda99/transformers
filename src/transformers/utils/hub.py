@@ -408,6 +408,7 @@ def cached_file(
             resume_download=resume_download,
             token=token,
             local_files_only=local_files_only,
+            legacy_cache_layout=True,  # XD
         )
     except GatedRepoError as e:
         resolved_file = _get_cache_file_to_return(path_or_repo_id, full_filename, cache_dir, revision)
@@ -1262,7 +1263,7 @@ else:
 
 cache_is_not_empty = os.path.isdir(TRANSFORMERS_CACHE) and len(os.listdir(TRANSFORMERS_CACHE)) > 0
 
-if cache_version < 1 and cache_is_not_empty:
+if False and cache_version < 1:  # XD: disable migrating old cache
     if is_offline_mode():
         logger.warning(
             "You are offline and the cache for model files in Transformers v4.22.0 has been updated while your local "
