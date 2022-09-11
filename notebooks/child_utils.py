@@ -3,7 +3,7 @@ import os
 import json
 from collections import defaultdict, OrderedDict, Counter
 import string
-from random import choice, choices, shuffle, sample, randint, random
+from random import choice, choices, shuffle, sample, randint, seed
 from dataclasses import dataclass
 from typing import Callable, Any
 

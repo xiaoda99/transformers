@@ -198,6 +198,7 @@ class GPTNeoXAttention(nn.Module):
         query, key = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
         query = torch.cat((query, query_pass), dim=-1)
         key = torch.cat((key, key_pass), dim=-1)
+        # del query_rot, query_pass, key_rot, key_pass; torch.cuda.empty_cache()  # XD
 
         # Cache QKV values
         if has_layer_past:
@@ -286,6 +287,10 @@ class GPTNeoXAttention(nn.Module):
 
         attn_weights = nn.functional.softmax(attn_scores, dim=-1)
         attn_weights = attn_weights.to(value.dtype)
+        # XD: output attn_weights -> attn_scores
+        # attn_weights = None; attn_scores = nn.functional.softmax(attn_scores, dim=-1)
+        # attn_scores = attn_scores.to(value.dtype)
+        # return torch.matmul(attn_scores, value), attn_weights
 
         # Mask heads if we want to
         if head_mask is not None:
@@ -932,6 +937,7 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
                     output_attentions=output_attentions,
                 )
             hidden_states = outputs[0]
+            # print(f'layer {i} mem usage:', torch.cuda.memory_allocated(), torch.cuda.memory_reserved())  # XD
             if use_cache is True:
                 presents = presents + (outputs[1],)
             if output_attentions:

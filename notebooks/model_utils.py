@@ -813,32 +813,31 @@ def show_predictions(examples, tokenizer, logits, bos_indices, eos_indices, answ
     top1_corrects, answer_probs, candidate_probs = [], [], []
     convert_fn = tokenizer.convert_ids_to_tokens if True else partial(convert_ids_to_tokens, tokenizer=tokenizer)
     for i, (example, bos_i, eos_i, ans_ids) in enumerate(zip(examples, bos_indices, eos_indices, answers)):
-        eos_i = bos_i + 2  # show only the first answer token
+        # eos_i = bos_i + 2  # show only the first answer token
         if use_openai_api:
             ans_prob_dist = [get_prob_dist(d, topk=topk) for d in logits.top_logprobs[bos_i + 1: eos_i]]
             ans_probs = [round(math.exp(lp), 3) for lp in logits.token_logprobs[bos_i + 1: eos_i]]
             if i >= k_shot: ans_nlls += [-lp for lp in logits.token_logprobs[bos_i + 1: eos_i]]
         else:
             ans_prob_dist = logits[0, bos_i: eos_i - 1].softmax(-1)
-            # ans_probs = ans_prob_dist[np.arange(ans_prob_dist.shape[0]), ans_ids]
             ans_probs = numpy(ans_prob_dist[torch.arange(ans_prob_dist.size(0)), ans_ids], decimals=3)
         ans_tokens = convert_fn(ans_ids)
         for ans_id, ans_token, ans_prob, dist in zip(ans_ids, ans_tokens, ans_probs, ans_prob_dist):
             top1_correct = max(dist.items(), key=lambda x: x[1])[0] == ans_token.replace('Ġ', ' ') \
-                if use_openai_api else dist.argmax() == ans_id  # (dist.argmax() == ans_id).item()
+                if use_openai_api else (dist.argmax() == ans_id).item()
             top1_corrects.append(top1_correct)
             answer_probs.append(ans_prob)
             if candidates is not None:
-                # candidates_i = [token.replace('Ġ', ' ') for token in convert_fn(candidates[i])] \
-                #     if use_openai_api else candidates[i]
-                # candidate_probs.append([dist.get(cand, 0.) if use_openai_api else dist[cand].item() for cand in candidates_i])
                 candidate_probs.append([dist[cand].item() for cand in candidates[i]] if not use_openai_api else
                     [dist.get(cand, 0.) for cand in [t.replace('Ġ', ' ') for t in convert_fn(candidates[i])]])
             if verbose: 
                 print(('*' if top1_correct else ' ') + ans_token, ans_prob, dist if use_openai_api 
                     else show_topk(*dist.topk(topk), indices_fn=convert_fn), sep, example) 
-    loss = (ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls)) \
-        if use_openai_api else compute_loss(logits, labels, reduction=loss_reduction)
+    if use_openai_api:
+        loss = (ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls))
+    else:
+        loss = compute_loss(logits, labels, reduction=loss_reduction)
+        loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100].tolist()  # 'none'
     return loss, top1_corrects, answer_probs, candidate_probs
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 

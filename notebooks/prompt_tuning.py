@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-
+from torch.utils.data.dataset import Dataset
 
 class CHILDDataset(Dataset):
     def __init__(self, input_strs, tokenizer):
