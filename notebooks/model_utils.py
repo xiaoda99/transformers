@@ -825,7 +825,7 @@ def show_predictions(examples, tokenizer, logits, bos_indices, eos_indices, answ
         for ans_id, ans_token, ans_prob, dist in zip(ans_ids, ans_tokens, ans_probs, ans_prob_dist):
             top1_correct = max(dist.items(), key=lambda x: x[1])[0] == ans_token.replace('Ġ', ' ') \
                 if use_openai_api else (dist.argmax() == ans_id).item()
-            if i >= k_shot: top1_corrects.append(top1_correct)
+            top1_corrects.append(top1_correct)
             answer_probs.append(ans_prob)
             if candidates is not None:
                 candidate_probs.append([dist[cand].item() for cand in candidates[i]] if not use_openai_api else
