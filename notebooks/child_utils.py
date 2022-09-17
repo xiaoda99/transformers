@@ -3,7 +3,7 @@ import os
 import json
 from collections import defaultdict, OrderedDict, Counter
 import string
-from random import choice, choices, shuffle, sample, randint, seed
+from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass
 from typing import Callable, Any
 
@@ -23,7 +23,7 @@ digit2ordinal = OrderedDict(zip(digits, ordinals))
 
 # uppercases = [l for l in string.ascii_uppercase if len(_tokenizer.tokenize('%s %s' % (l*2, l*2))) == 2]
 # lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
-# full_vocab = uppercases + digits
+full_vocab = uppercase + digits
 
 # polygons = ['triangle', 'quadrangle', 'pentagon', 'hexagon', 'heptagon', 'octagon', 'nonagon', 'decagon',]# 'undecagon', 'dodecagon']
 times_of_day = ['dawn', 'morning', 'noon', 'afternoon', 'evening', 'night',]# 'midnight']
@@ -160,6 +160,29 @@ antonyms = [
     ('true', 'false'),
 ]
 
+'''gpt-3 prompt
+Types of tools: hammer, screwdriver, saw, drill, wrench
+Types of clothes: shirt, pants, dress, coat, shoes
+Types of fruits: apple, grape, pear, banana, orage
+Types of animals: dog, cat, horse, rabbit, pig'''
+types_of_things = {
+    'animal': ['chicken', 'duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'bear', 'tiger', 'cat', 
+            'zebra', 'pig', 'giraffe', 'monkey', 'rabbit', 'elephant', 'wolf', 'lion', 'deer', 'fox', 'gorilla', 'kangaroo'],
+    'insect': ['bee', 'ant', 'fly', 'mosquito', 'wasp', 'butterfly', 'beetle', 'spider'],
+    'plant': ['rose', 'tulip', 'lily', 'daisy', 'sunflower', 'tree', 'grass', 'bush', 'weed', 'vine'],
+    'fruit': ['apple', 'banana', 'pear', 'grape', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'Mango', 'blackberry',
+            'blueberry', 'strawberry', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'],
+    'vehicle': ['car', 'bus', 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage', 
+                'subway', 'taxi', 'van', 'boat'],
+    'furniture': ['sofa', 'couch', 'desk', 'chair', 'table', 'bed', 'bookshelf', 'closet', 'wardrobe'],
+    'electronics': ['computer', 'laptop', 'iPad', 'phone', 'smartphone', 'television', 'camera', 'printer'],
+    'tool': ['hammer', 'spanner', 'awl', 'scissors', 'axe', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'],
+    'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
+    'clothes': ['shirt', 'pants', 'dress', 'coat', 'shoes', 'socks', 'hat', 'tie', 'jacket', 'skirt', 'trousers', 'jeans'],
+    'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
+    'appliance': ['microwave', 'oven', 'fridge', 'washer', 'dryer', 'washing machine'],
+    'weapons': ['gun', 'rifle', 'sword', 'pistol', 'dagger', 'bomb', 'grenade', 'cannon'],
+}
 # A list of words with their types:
 # big small -> size
 # blue red -> color
@@ -293,14 +316,6 @@ remove_two = [
     ('0, 17, 4, 8, 4, 10, 1', '0, 17, 8, 10, 1'),
 ]
 
-# @dataclass
-# class Relation:
-#     _dict: dict = None
-#     f: Callable[[Any], list] = None
-#     dom: Callable[[], set] = None
-#     codom: Callable[[], set] = None
-#     b: Callable[[Any, Any], bool] = None
-
 class Relation(object):
     def __init__(self, _dict): self._dict = _dict
     def f(self, x): return self._dict.get(x, [])
@@ -309,7 +324,6 @@ class Relation(object):
     def codom(self, ys=None): return set(join_lists(self._dict.values()))
     def b(self, x0, x1): return x1 in self._dict.get(x0, [])
     
-# def to_list(e): return e if isinstance(e, list) else [e]
 class Set(object):
     def __init__(self, data):
         self.set_data(data)
@@ -324,25 +338,11 @@ class Set(object):
             rel.codom = lambda d=d: set(d.values())
             rel.b = lambda e, e2, d=d: e2 in d.get(e, [])
 
-            # d = getattr(self, rel_name + '_dict')
-            # setattr(self, rel_name, lambda e, d=d: d.get(e, []))
-            # setattr(self, rel_name + '_dom', lambda d=d: set(d.keys()))
-            # setattr(self, rel_name + '_codom', lambda d=d: set(d.values()))
-            # setattr(self, 'is_' + rel_name, lambda e, e2, d=d: e2 in d.get(e, []))
-
-    # def get_rel_fns(self, rel_name):
-    #     return [getattr(self, name) for name in
-    #         [rel_name, rel_name + '_dom', rel_name + '_codom', 'is_' + rel_name]]
-
-    # def el(self):
-    #     return self.data
-
 class EqSet(Set):
     def set_data(self, data):
         self.data = data
         self.rel_names = ['equal']
         for rel_name, d in zip(self.rel_names, [{data[i]: [data[i]] for i in range(0, len(data))}]):
-            # setattr(self, rel_name + '_dict', d)
             setattr(self, rel_name, Relation(_dict=d))
 
 class PoSet(Set):
@@ -352,42 +352,31 @@ class PoSet(Set):
         for rel_name, d in zip(self.rel_names, [{data[i]: data[i - 1] for i in range(1, len(data))},
                                                 {data[i]: data[i + 1] for i in range(0, len(data) - 1)},
                                                 {data[i]: data[i] for i in range(0, len(data))}]):
-            # setattr(self, rel_name + '_dict', d)
             setattr(self, rel_name, Relation(_dict=d))
-
-    #     for rel_name in self.rel_names:
-    #         d = getattr(self, rel_name + '_dict')
-    #         # default args for lambda function are evaluated when the function is created rather than called
-    #         # https://stackoverflow.com/questions/10452770/python-lambdas-binding-to-local-values
-    #         setattr(self, rel_name, lambda e, d=d: to_list(d.get(e, [])))
-    #         setattr(self, rel_name + '_dom', lambda d=d: set(d.keys()))
-    #         setattr(self, rel_name + '_codom', lambda d=d: set(d.values()))
-    #         setattr(self, 'is_' + rel_name, lambda e, e2, d=d: e2 in to_list(d.get(e, [])))
-    
-    # def get_fns(self, rel_name):
-    #     return [getattr(self, name) for name in
-    #         [rel_name, rel_name + '_dom', rel_name + '_codom', 'is_' + rel_name]]
 
 class SymSet(Set):
     def set_data(self, data):
         self.data = data
-        # el = join_lists([pair[0] + pair[1] for pair in data])
         self.rel_names = ['similar', 'opposite', 'equal']
         for rel_name in self.rel_names:
-            # setattr(self, rel_name + '_dict', defaultdict(list))
             setattr(self, rel_name, Relation(_dict=defaultdict(list)))
         for pair in data:
             for similars, opposites in [(pair[0], pair[1]), (pair[1], pair[0])]:
-                for e in similars:
-                    # self.equal_dict[e] = [e]
-                    # if len(similars) > 1: self.similar_dict[e] += list(set(similars) - {e})
-                    # self.opposite_dict[e] += opposites
-                    self.equal._dict[e] = [e]
-                    if len(similars) > 1: self.similar._dict[e] += list(set(similars) - {e})
-                    self.opposite._dict[e] += opposites
-
-    # def el(self): return self._el
+                for i, e in enumerate(similars):
+                    self.equal._dict[e] = list(set(similars) - {e}) + [e]
+                    if i == 0: self.opposite._dict[e] = opposites[:1]
         
+
+class TreeSet(Set):
+    def set_data(self, data):
+        self.data = data
+        self.rel_names = ['subclass', 'superclass']
+        for rel_name in self.rel_names:
+            setattr(self, rel_name, Relation(_dict=defaultdict(list)))
+        for superclass, subclasses in data.items():
+            self.subclass._dict[superclass] = subclasses
+            for subclass in subclasses:
+                self.superclass._dict[subclass] = [superclass]
 
 def inc(token):
     assert len(token) == 1 or token in ['->'], token
