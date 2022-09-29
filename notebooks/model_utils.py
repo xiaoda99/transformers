@@ -24,14 +24,16 @@ import einops
 from einops import rearrange
 
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
-from transformers.models.gpt_neo.modeling_gpt_neo import GPTNeoSelfAttention
+from transformers.models.gpt_neo.modeling_gpt_neo import GPTNeoSelfAttention, GPTNeoBlock
 from transformers.models.gptj.modeling_gptj import GPTJAttention, GPTJBlock, GPTJModel
-from transformers.models.xglm.modeling_xglm import XGLMAttention, XGLMDecoderLayer
+from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention, GPTNeoXLayer, GPTNeoXModel, GPTNeoXForCausalLM
+from transformers.models.xglm.modeling_xglm import XGLMForCausalLM, XGLMAttention, XGLMDecoderLayer
 
 # from sklearn.decomposition import PCA
 # from sklearn.cluster import KMeans
 
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, equal, join_lists, iterable, pad
+
 
 @dataclass
 class Outputs:
@@ -75,7 +77,8 @@ class Heads:
     ov: torch.FloatTensor = None
 
 def fill_list(e, length, i, default_e=None): # fill e to ith position of a list of default_es
-    if type(e) == list: assert len(e) == length, f'{len(e)} != {length}'; return e
+    if isinstance(e, (list, tuple)):
+        assert len(e) == length, f'{len(e)} != {length}'; return e
     l = [default_e for _ in range(length)]
     if i is not None: l[i] = e
     return l
@@ -83,22 +86,34 @@ def fill_list(e, length, i, default_e=None): # fill e to ith position of a list 
 def default_get_hqkv(h): return h, h, h  # h is used for query, key and value
 def get_hqkv_k(h, h0): return h0, h, h0  # h is only used for key
 
+from bitsandbytes.nn import Linear8bitLt
+
 def unify(model):
-    if not hasattr(model, 'transformer'):
-        assert hasattr(model, 'model') # xglm
+    if my_isinstance(model, XGLMForCausalLM):
         model.transformer = model.model
         model.model.h = model.model.layers
         model.model.ln_f = model.model.layer_norm
+    elif my_isinstance(model, GPTNeoXForCausalLM):
+        model.transformer = model.gpt_neox
+        model.lm_head = model.embed_out
+        model.transformer.wte = model.transformer.embed_in
+        model.transformer.h = model.transformer.layers
+        model.transformer.ln_f = model.transformer.final_layer_norm
+        model.transformer.drop = nn.Dropout(0)
 
     for i, block in enumerate(model.transformer.h):
         if my_isinstance(block, XGLMDecoderLayer):
             block.attn = block.self_attn
             block.ln_1 = block.self_attn_layer_norm
             block.ln_2 = block.final_layer_norm
-        if hasattr(block.attn, 'attention'): # gptneo
+        elif my_isinstance(block, GPTNeoBlock):
             block.attn = block.attn.attention
-        if my_isinstance(block, GPTJBlock): block.ln_2 = block.ln_1
-
+        elif my_isinstance(block, GPTJBlock):
+            block.ln_2 = block.ln_1
+        elif my_isinstance(block, GPTNeoXLayer):
+            block.attn = block.attention
+            block.ln_1 = block.input_layernorm
+            block.ln_2 = block.post_attention_layernorm
         self = block.attn
         if my_isinstance(self, GPT2Attention):
             embed_dim = self.c_proj.weight.size(0)
@@ -115,10 +130,25 @@ def unify(model):
         elif my_isinstance(self, GPTNeoSelfAttention):
             self.attention_type = 'global' if i % 2 == 0 else 'local'
         elif my_isinstance(self, XGLMAttention):
-            self.attn_dropout = nn.Dropout(self.dropout)
-            self.resid_dropout = nn.Dropout(block.dropout)
+            self.attn_dropout = nn.Dropout(0)
+            self.resid_dropout = nn.Dropout(0)
         elif my_isinstance(self, GPTJAttention):
             self.num_heads = self.num_attention_heads
+        elif my_isinstance(self, GPTNeoXAttention):
+            for old_name, new_name in [('num_attention_heads', 'num_heads'), ('hidden_size', 'embed_dim'),
+                        ('head_size', 'head_dim'), ('rotary_ndims', 'rotary_dim'), ('dense', 'out_proj')]:
+                setattr(self, new_name, getattr(self, old_name))
+            self.attn_dropout = nn.Dropout(0)
+            self.resid_dropout = nn.Dropout(0)
+            if True or my_isinstance(self.query_key_value, Linear8bitLt):
+                self.qkv_proj = self.query_key_value
+            else:
+                for proj_name, w, b in zip(['q_proj', 'k_proj', 'v_proj'], 
+                    self.query_key_value.weight.view(self.num_heads, 3 * self.head_dim, self.embed_dim).chunk(3, dim=1), 
+                    self.query_key_value.bias.chunk(3)):
+                    proj = nn.Linear(self.embed_dim, self.embed_dim)
+                    proj.weight, proj.bias = nn.Parameter(rearrange(w, 'n d e -> (n d) e')), nn.Parameter(b)
+                    setattr(self, proj_name, proj)
 
 def scaled_ln(ln, x, scaled=True):
     if not scaled: return ln(x)
@@ -152,17 +182,17 @@ def ln2statefulfn(ln):
         return y 
     return fn
 
-def embed_forward(transformer, inputs, output_embeds=True): # gptneo
+def embed_forward(transformer, inputs, output_embeds=True):
     self = transformer
     input_ids = inputs if isinstance(inputs, torch.Tensor) else inputs.input_ids
-    input_shape = input_ids.size()
-    device = input_ids.device
-    position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=device)
-    position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
-    inputs_embeds = self.wte(input_ids)
-    position_embeds = self.wpe(position_ids) \
-        if not my_isinstance(transformer, GPTJModel) else inputs_embeds * 0.
-    hidden_states = inputs_embeds + position_embeds
+    hidden_states = inputs_embeds = self.wte(input_ids)
+    position_embeds = None
+    if not my_isinstance(transformer, (GPTJModel, GPTNeoXModel)):
+        input_shape = input_ids.size()
+        position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=input_ids.device)
+        position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
+        position_embeds = self.wpe(position_ids) 
+        hidden_states = hidden_states + position_embeds
     hidden_states = self.drop(hidden_states)
     return (hidden_states, inputs_embeds, position_embeds) if output_embeds else hidden_states
 
@@ -179,37 +209,71 @@ def _merge_heads(tensor, num_heads, attn_head_size):
     new_shape = tensor.size()[:-2] + (num_heads * attn_head_size,)
     return tensor.view(new_shape)
 
-def fixed_pos_embedding(x, seq_dim=1, seq_len=None):
-    dim = x.shape[-1]
-    if seq_len is None:
-        seq_len = x.shape[seq_dim]
-    inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2) / dim))
-    sinusoid_inp = torch.einsum("i , j -> i j", torch.arange(seq_len), inv_freq).to(x.device).float()
-    return torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)
+class RotaryEmbedding(torch.nn.Module):  # from gpt-neox
+    def __init__(self, dim, max_position_embeddings, base=10000, device=None):
+        super().__init__()
+        self.inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float().to(device) / dim))
+        # self.register_buffer("inv_freq", inv_freq)
 
-def rotate_every_two(x):
+        # Build here to make `torch.jit.trace` work.
+        self.max_seq_len_cached = max_position_embeddings
+        t = torch.arange(self.max_seq_len_cached, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.cos_cached = emb.cos()[None, None, :, :]
+        self.sin_cached = emb.sin()[None, None, :, :]
+
+    def forward(self, x, seq_len=None):
+        # x: [bs, num_attention_heads, seq_len, head_size]
+        return self.cos_cached[:seq_len, ...].to(x.device), self.sin_cached[:seq_len, ...].to(x.device)
+
+def fixed_pos_embedding(x, seq_len=None, gpt_neox_style=False):
+    self = fixed_pos_embedding
+    if not hasattr(self, 'sin_cached'):
+        seq_len = 2048
+        if gpt_neox_style:
+            rotary_emb = RotaryEmbedding(x.shape[-1], 2048, base=10000)
+            self.cos_cached, self.sin_cached = rotary_emb(x, seq_len=seq_len)
+        else:
+            dim = x.shape[-1]
+            inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2) / dim))
+            sinusoid_inp = torch.einsum("i , j -> i j", torch.arange(seq_len), inv_freq).to(x.device).float()
+            self.sin_cached, self.cos_cached = torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)
+    return self.sin_cached, self.cos_cached
+
+def rotate_every_two(x):  # gpt-j
     x1 = x[:, :, :, ::2]
     x2 = x[:, :, :, 1::2]
     x = torch.stack((-x2, x1), axis=-1)
     return x.flatten(-2)  # in einsum notation: rearrange(x, '... d j -> ... (d j)')
 
-def apply_rotary_pos_emb(x, sincos, offset=0):
-    sin, cos = map(lambda t: t[None, offset : x.shape[1] + offset, None, :].repeat_interleave(2, 3), sincos)
-    # einsum notation for lambda t: repeat(t[offset:x.shape[1]+offset,:], "n d -> () n () (d j)", j=2)
-    return (x * cos) + (rotate_every_two(x) * sin)
+def rotate_half(x):  # gpt-neox
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+def apply_rotary_pos_emb_every_two(x, sincos, offset=0): # x: bnir
+    # i(r/2) -> 11i(r/2) -> 11ir
+    sin, cos = map(lambda t: t[None, None, offset : x.shape[2] + offset, :].repeat_interleave(2, 3), sincos)
+    # einsum notation for lambda t: repeat(t[offset:x.shape[2]+offset,:], "n d -> () n () (d j)", j=2)
+    return (x * cos) + (rotate_every_two(x) * sin)  # binr,1i1r->binr
+
+def apply_rotary_pos_emb_half(x, sincos, offset=0): # x: bnir
+    # i(r/2) -> 11i(r/2) -> 11ir
+    # sin, cos = map(lambda t: t[None, None, offset : x.shape[2] + offset, :].repeat(1, 1, 1, 2), sincos)
+    sin, cos = map(lambda t: t[:, :, offset : x.shape[2] + offset, :], sincos) # gpt_neox_style fixed_pos_embedding
+    return (x * cos) + (rotate_half(x) * sin)  # bnir,11ir->bnir
+
+def apply_rotary_pos_emb(query_rot, key_rot, seq_len=2048, offset=0, is_gpt_neox=False):
+    sincos = fixed_pos_embedding(key_rot, seq_len=seq_len, gpt_neox_style=is_gpt_neox)
+    apply_rotary_pos_emb_fn = apply_rotary_pos_emb_half if is_gpt_neox else apply_rotary_pos_emb_every_two
+    key_rot = apply_rotary_pos_emb_fn(key_rot, sincos, offset=offset)
+    query_rot = apply_rotary_pos_emb_fn(query_rot, sincos, offset=offset)
+    return query_rot, key_rot
 
 def _attn(self, query, key, value, attention_mask=None):
-    # if not hasattr(_attn, 'bias'): # bias and masked_bias copied from GPTNeoSelfAttention.__init__
-    #     max_positions = 1024  # config.max_position_embeddings
-    #     bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
-    #         1, 1, max_positions, max_positions)
-    #     if isinstance(self, GPTNeoSelfAttention):
-    #         assert self.attention_type in ['global', 'local']
-    #         if self.attention_type == 'local': # GPTNeoSelfAttention
-    #             bias = torch.bitwise_xor(bias, torch.tril(bias, -256)) # config.window_size
-    #     _attn.bias = bias
-    #     _attn.masked_bias = torch.tensor(-1e9)
-    
     if isinstance(self, GPTNeoSelfAttention) or isinstance(self, GPTJAttention):
         # Keep the attention weights computation in fp32 to avoid overflow issues
         query, key = query.to(torch.float32), key.to(torch.float32)
@@ -222,10 +286,7 @@ def _attn(self, query, key, value, attention_mask=None):
         # attn_weights = attn_weights / (value.size(-1) ** 0.5) # vale may be None
         attn_weights = attn_weights / (query.size(-1) ** 0.5)
 
-    # mask handling copied from GPTNeoSelfAttention._attn
     query_length, key_length = query.size(-2), key.size(-2)
-    # causal_mask = _attn.bias[:, :, key_length - query_length : key_length, :key_length].bool()
-    # attn_weights = torch.where(causal_mask, attn_weights, _attn.masked_bias.to(attn_weights.dtype))
     causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length].bool()
     attn_weights = torch.where(causal_mask, attn_weights, self.masked_bias.to(attn_weights.dtype))
     if attention_mask is not None: attn_weights = attn_weights + attention_mask
@@ -266,87 +327,66 @@ def trim_heads(self, kept_heads):
         setattr(self, proj_name, proj)
     self.num_heads = len(kept_heads)
 
-def rotate(query, key, rotary_dim):
-    seq_len = key.shape[1]
-    offset = 0
-    k_rot = key[:, :, :, : rotary_dim]
-    k_pass = key[:, :, :, rotary_dim :]
-    q_rot = query[:, :, :, : rotary_dim]
-    q_pass = query[:, :, :, rotary_dim :]
+def mask_select(a, mask, num_heads):  # a: attn_output0 or value, bnid, mask: bi
+    mask = mask[None, :, :].expand(num_heads, -1, -1) # bi->nbi
+    a = rearrange(a, 'b n i d -> n b i d')[mask]  # nbid->(nk)d
+    a = rearrange(a, '(n k) d -> n k d', n=num_heads)
+    return a
 
-    sincos = fixed_pos_embedding(k_rot, 1, seq_len=seq_len)
-    k_rot = apply_rotary_pos_emb(k_rot, sincos, offset=offset)
-    q_rot = apply_rotary_pos_emb(q_rot, sincos, offset=offset)
-
-    key = torch.cat([k_rot, k_pass], dim=-1)
-    query = torch.cat([q_rot, q_pass], dim=-1)
-    return query, key
-
-def attn_forward(block, hq, hk, hv, attention_mask=None, by_head=True, compute_head_input=True,
-                head_mask=None, attn_weights=None): # gptneo
+def attn_forward(block, hq, hk, hv, labels=None, by_head=True, #compute_head_input=True,
+                attention_mask=None, head_mask=None, attn_weights=None): # gptneo
     self = block.attn  # block.attn.attention already renamed
-    if hq is not None and hk is not None and attn_weights is None:
-        rotary = my_isinstance(self, GPTJAttention)
-        if True: #head is None:
+    query, key, value = None, None, None
+    if hasattr(self, 'qkv_proj'):  # gpt-neox
+        qkv = self.qkv_proj(hq)  # hq == hk == hv
+        new_qkv_shape = qkv.size()[:-1] + (self.num_attention_heads, 3 * self.head_dim)
+        query, key, value = [rearrange(a, 'b i n d -> b n i d') # [bind] * 3 -> [bnid] * 3
+            for a in qkv.view(*new_qkv_shape).chunk(3, dim=-1)] # bin(3d) -> [bind] * 3
+    else:
+        if hq is not None and hk is not None and attn_weights is None:
             key = self.k_proj(hk)
-            key = _split_heads(key, self.num_heads, self.head_dim, rotary=rotary)  # bind
+            key = _split_heads(key, self.num_heads, self.head_dim)#, rotary=rotary)  # bind
             if hq.ndim == 3:  # bie
                 query = self.q_proj(hq)
-                query = _split_heads(query, self.num_heads, self.head_dim, rotary=rotary) # bind
+                query = _split_heads(query, self.num_heads, self.head_dim)#, rotary=rotary) # bind
             else:
                 assert hq.ndim == 4  # bnid, computed in cat_attn_forward
-                if rotary: hq = rearrange(hq, 'b n i d -> b i n d')
+                # if rotary: hq = rearrange(hq, 'b n i d -> b i n d')
                 assert hq.size()[1:] == key.size()[1:], f'{hq.size()} != {key.size()}'
                 query = hq
-        # else:
-        #     assert self.q_proj.bias is None and self.k_proj.bias is None
-        #     w_q = rearrange(self.q_proj.weight, '(n d) e -> n d e', n=self.num_heads)[head]
-        #     w_k = rearrange(self.k_proj.weight, '(n d) e -> n d e', n=self.num_heads)[head]
-        #     query, key = hq @ w_q.T, hk @ w_k.T  # bie,ed->bid
-        #     pattern = 'b i d -> b i 1 d' if rotary else 'b i d -> b 1 i d'
-        #     query, key = rearrange(query, pattern), rearrange(key, pattern)
+        if hv is not None: value = _split_heads(self.v_proj(hv), self.num_heads, self.head_dim)
+    rotary = my_isinstance(self, (GPTJAttention, GPTNeoXAttention))
+    if rotary and query is not None and key is not None:
+        k_rot = key[:, :, :, : self.rotary_dim]
+        k_pass = key[:, :, :, self.rotary_dim :]
+        q_rot = query[:, :, :, : self.rotary_dim]
+        q_pass = query[:, :, :, self.rotary_dim :]
 
-        if rotary:
-            seq_len = key.shape[1]
-            offset = 0
-            k_rot = key[:, :, :, : self.rotary_dim]
-            k_pass = key[:, :, :, self.rotary_dim :]
-            q_rot = query[:, :, :, : self.rotary_dim]
-            q_pass = query[:, :, :, self.rotary_dim :]
+        q_rot, k_rot = apply_rotary_pos_emb(q_rot, k_rot, is_gpt_neox=my_isinstance(self, GPTNeoXAttention))
 
-            sincos = fixed_pos_embedding(k_rot, 1, seq_len=seq_len)
-            k_rot = apply_rotary_pos_emb(k_rot, sincos, offset=offset)
-            q_rot = apply_rotary_pos_emb(q_rot, sincos, offset=offset)
-
-            key = torch.cat([k_rot, k_pass], dim=-1)
-            query = torch.cat([q_rot, q_pass], dim=-1)
-            key = key.permute(0, 2, 1, 3)
-            query = query.permute(0, 2, 1, 3)
-
-    value = _split_heads(self.v_proj(hv), self.num_heads, self.head_dim) if hv is not None else None
-
+        key = torch.cat([k_rot, k_pass], dim=-1)
+        query = torch.cat([q_rot, q_pass], dim=-1)
     attn_output, attn_weights = _attn(self, query, key, value, attention_mask) \
-        if attn_weights is None else (attn_weights @ value, attn_weights)  # XD
+        if attn_weights is None else (attn_weights.to(value.device) @ value, attn_weights)  # XD
     if value is None: return None, attn_weights, None, None
 
     if head_mask is not None: attn_output = einsum('bnid,bni->bnid', attn_output, head_mask)
 
     head_input, head_output = None, None
     if by_head:
-        w_o = self.out_proj.weight
-        # w_o = w_o.view(self.embed_dim, self.num_heads, -1).permute(1, 2, 0)
-        w_o = rearrange(w_o, 'e (n d) -> n d e', n=self.num_heads) # d=d_head, e=d_model
-        head_output = attn_output @ w_o  # bnid,nde->bnie
-        head_output = self.resid_dropout(head_output)
-        if self.num_heads < getattr(self, 'num_heads0', 0): compute_head_input = False
-        head_input = self.resid_dropout(value @ w_o) if compute_head_input else None
-        attn_output = head_output.sum(1)  # bnie->bie
-    else:
-        attn_output = _merge_heads(attn_output, self.num_heads, self.head_dim)
-        attn_output = self.out_proj(attn_output)
-        attn_output = self.resid_dropout(attn_output)
-    # if output_by_head:
-    #     print(equal(head_output.sum(1) + self.resid_dropout(self.out_proj.bias), attn_output))
+        w_o = self.out_proj.weight.data
+        do_bmm = not (any('0' in s for s in by_head) or w_o.dtype == torch.int8)
+        if do_bmm:
+            # w_o = w_o.view(self.embed_dim, self.num_heads, -1).permute(1, 2, 0)
+            w_o = rearrange(w_o, 'e (n d) -> n d e', n=self.num_heads) # d=d_head, e=d_model
+        if 'head_output' in by_head:
+            head_output = attn_output @ w_o if do_bmm else attn_output  # bnid,nde->bnie
+        if 'head_input' in by_head:
+            head_input = value @ w_o if do_bmm else value  # bnid,nde->bnie
+
+    attn_output = _merge_heads(attn_output, self.num_heads, self.head_dim) # bnid->bi(nd)
+    attn_output = self.out_proj(attn_output)
+    attn_output = self.resid_dropout(attn_output)
     return attn_output, attn_weights, head_input, head_output
 
 def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=None,
@@ -533,39 +573,41 @@ def get_self_attr(block, hidden_states0, cat_hidden_states, attn_labels, device=
     a = attr['mask']  # nloi, nsi, n(m+1)(r+1)i
     return a
 
-def forward0(model, inputs, labels=None, loss_reduction=None, by_head=False, attribute_layer=None, 
-            head_mask=None, mlp_mask=None, attn_weights=None,
-            hidden_states=None, detach_layer=None,
+def to(a, device): return a.to(device) if isinstance(a, torch.Tensor) else a
+
+def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, attribute_layer=None, 
+            head_mask=None, mlp_mask=None, attn_weights=None, hidden_states=None, detach_layer=None,
             special_head=(None, None), special_head_multiplier=1, #wv=None, wo=None, 
-            multiplied_layers=[], attr_threshold=1., base_multiplier=1.5, with_grad=False):
+            multiplied_layers=[], attr_threshold=1., base_multiplier=1.5, with_grad=False, 
+            output_hidden_states=False, output_device='cpu'):
     L = len(model.transformer.h)
-    head_mask = fill_list(head_mask, L, attribute_layer)
-    mlp_mask = fill_list(mlp_mask, L, attribute_layer)
-    attn_weights = fill_list(attn_weights, L, attribute_layer)
+    # head_mask = fill_list(head_mask, L, attribute_layer)
+    # mlp_mask = fill_list(mlp_mask, L, attribute_layer)
+    # attn_weights = fill_list(attn_weights, L, attribute_layer)
+    head_mask, mlp_mask, attn_weights = [fill_list(mask, L, attribute_layer)
+        for mask in [head_mask, mlp_mask, attn_weights]]
     from_layer = attribute_layer if hidden_states is not None else None
 
     self = model.transformer
     (hidden_states, inputs_embeds, position_embeds) = embed_forward(self, inputs) \
         if from_layer is None else (hidden_states, None, None)
-    all_hidden_states, intermediates, mlp_outputs = (), (), ()
+    inputs_embeds = to(inputs_embeds, output_device)
+    all_hidden_states, intermediates, attn_outputs, mlp_outputs = (), (), (), ()
     attn_fwd_outputs = []
-    # hq_extra = None
-    special_head_outputs = None
     for i, b in enumerate(self.h):
-        torch.set_grad_enabled(with_grad)
+        # torch.set_grad_enabled(with_grad)
         if from_layer is not None and i < from_layer: continue
         if i == detach_layer: hidden_states = hidden_states.detach()
-        all_hidden_states += (hidden_states,)
-        hq = hk = hv = b.ln_1(hidden_states)
-        # if hq_extra is not None: hq = b.ln_1(hidden_states + hq_extra)
-        attn_fwd_output = attn_forward(b, hq, hk, hv, by_head=by_head or i in multiplied_layers or i == special_head[0],
-                            compute_head_input=True, head_mask=head_mask[i], attn_weights=attn_weights[i])
+        if output_hidden_states: all_hidden_states += (to(hidden_states, output_device),)
+        h = b.ln_1(hidden_states)
+        attn_output, *attn_fwd_output = attn_forward(b, h, h, h, labels=labels, by_head=by_head,
+                            head_mask=head_mask[i], attn_weights=attn_weights[i])
+        attn_fwd_output = [to(o, output_device) for o in attn_fwd_output]
         attn_fwd_outputs.append(attn_fwd_output)
-        attn_output, aw, head_input, head_output = attn_fwd_output
+        # attn_output, aw, head_input, head_output = attn_fwd_output
+        
         if i == special_head[0]:
             head_output = list(rearrange(head_output, 'b n i e -> n b i e'))  # nbie->n*bie
-            # hq_extra = aw[:, special_head[1]] @ (hv @ wv @ wo) # bnij->bij,bje->bie
-            # attn_output = attn_output + hq_extra
             head_output[special_head[1]] = head_output[special_head[1]] * special_head_multiplier
             special_head_outputs = torch.cat([special_head_outputs, head_output[special_head[1]]]) \
                 if special_head_outputs is not None else head_output[special_head[1]] # sie, s in [1, 2] for 8-1, 12-10
@@ -574,17 +616,21 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=False, att
             multiplier = get_multiplier(b, hidden_states, aw, head_input, special_head_outputs, labels, i,
                 attr_threshold=attr_threshold, base_multiplier=base_multiplier)
             attn_output = torch.einsum('bnie,ni->bie', head_output, multiplier)
-        if not my_isinstance(b, GPTJBlock): hidden_states = hidden_states + attn_output
-        mlp_output, intermediate = mlp_forward(b, hidden_states, output_intermediate=True)
+        parallel_attn_mlp = my_isinstance(b, (GPTJBlock, GPTNeoXLayer))
+        if not parallel_attn_mlp: hidden_states = hidden_states + attn_output
+        mlp_output, _ = mlp_forward(b, hidden_states, output_intermediate=True)
         if mlp_mask[i] is not None: mlp_output = einsum('bie,bi->bie', mlp_output, mlp_mask[i])
-        intermediates += (intermediate,)
-        mlp_outputs += (mlp_output,)
-        if my_isinstance(b, GPTJBlock): hidden_states = hidden_states + attn_output
-        hidden_states = hidden_states + mlp_output
-    attn_outputs, all_attentions, head_inputs, head_outputs = zip(*attn_fwd_outputs)
-    all_hidden_states += (hidden_states,) # both before and after ln_f
+        # intermediates += (to(intermediate, output_device),)
+        if parallel_attn_mlp:
+            hidden_states = attn_output + mlp_output + hidden_states  # order matters!
+        else:
+            hidden_states = hidden_states + mlp_output
+        attn_output = to(attn_output, output_device); attn_outputs += (attn_output,)
+        mlp_output = to(mlp_output, output_device); mlp_outputs += (mlp_output,)
+    all_attentions, head_inputs, head_outputs = zip(*attn_fwd_outputs)
+    if output_hidden_states: all_hidden_states += (hidden_states,) # both before and after ln_f
     hidden_states = self.ln_f(hidden_states)
-    all_hidden_states += (hidden_states,)
+    if output_hidden_states: all_hidden_states += (hidden_states,)
 
     logits = model.lm_head(hidden_states)
     loss = compute_loss(logits, labels, reduction=loss_reduction) if labels is not None else None

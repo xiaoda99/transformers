@@ -658,11 +658,11 @@ class GPTNeoXMLP(nn.Module):
         self.dense_4h_to_h = nn.Linear(config.intermediate_size, config.hidden_size)
         self.act = ACT2FN[config.hidden_act]
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, output_intermediate=False):  # XD
         hidden_states = self.dense_h_to_4h(hidden_states)
-        hidden_states = self.act(hidden_states)
+        intermediate = hidden_states = self.act(hidden_states)  # XD
         hidden_states = self.dense_4h_to_h(hidden_states)
-        return hidden_states
+        return (hidden_states, intermediate) if output_intermediate else hidden_states # XD
 
 
 GPT_NEOX_ATTENTION_CLASSES = {
@@ -898,6 +898,7 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_in(input_ids)
+        self.inputs_embeds = inputs_embeds.to('cpu')  # XD
 
         hidden_states = self.emb_dropout(inputs_embeds)
 
@@ -941,12 +942,14 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
             if use_cache is True:
                 presents = presents + (outputs[1],)
             if output_attentions:
-                all_attentions = all_attentions + (outputs[2 if use_cache else 1],)
+                all_attentions = all_attentions + (outputs[2 if use_cache else 1].to('cpu'),)  # XD
+        if output_attentions: self.all_attentions = all_attentions; all_attentions = None  # XD
 
         hidden_states = self.final_layer_norm(hidden_states)
         # Add last hidden state
         if output_hidden_states:
-            all_hidden_states = all_hidden_states + (hidden_states,)
+            all_hidden_states = all_hidden_states + (hidden_states.to('cpu'),)  # XD
+            self.all_hidden_states = all_hidden_states; all_hidden_states = None  # XD
 
         if not return_dict:
             return tuple(v for v in [hidden_states, presents, all_hidden_states, all_attentions] if v is not None)

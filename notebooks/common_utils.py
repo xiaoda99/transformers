@@ -69,9 +69,10 @@ def mask_logits(logits, indices, kept_ids):
     for i, ids in zip(indices, kept_ids): mask[:, i, ids] = 0
     return logits + mask
 
-def my_isinstance(obj, type):  # to cope with autoreload
-    # return isinstance(obj, type)  # fail on autorelaod
-    return obj.__class__.__name__ == type.__name__ 
+def my_isinstance(obj, type_):  # to cope with autoreload
+    # return isinstance(obj, type_)  # fail on autorelaod
+    return obj.__class__.__name__ == type_.__name__ if not isinstance(type_, tuple) \
+        else any(obj.__class__.__name__ == t.__name__ for t in type_)
 
 def equal(a, b):
     assert a.size() == b.size(), f'{a.size()} != {b.size()}'

@@ -170,7 +170,7 @@ types_of_things = {
             'zebra', 'pig', 'giraffe', 'monkey', 'rabbit', 'elephant', 'wolf', 'lion', 'deer', 'fox', 'gorilla', 'kangaroo'],
     'insect': ['bee', 'ant', 'fly', 'mosquito', 'wasp', 'butterfly', 'beetle', 'spider'],
     'plant': ['rose', 'tulip', 'lily', 'daisy', 'sunflower', 'tree', 'grass', 'bush', 'weed', 'vine'],
-    'fruit': ['apple', 'banana', 'pear', 'grape', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'Mango', 'blackberry',
+    'fruit': ['apple', 'banana', 'pear', 'grape', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberry',
             'blueberry', 'strawberry', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'],
     'vehicle': ['car', 'bus', 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage', 
                 'subway', 'taxi', 'van', 'boat'],

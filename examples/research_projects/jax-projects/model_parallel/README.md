@@ -64,4 +64,16 @@ python run_clm_mp.py \
     --overwrite_output_dir --output_dir ~/tmp/flax-clm \
     --cache_dir ~/datasets_cache/wikitext --dtype bfloat16 \
     --logging_steps 96 --eval_steps 96
+python3 run_clm_mp.py  \
+   --model_name_or_path EleutherAI/gpt-j-6B \
+   --tokenizer_name gpt2 \
+   --dataset_name rotten_tomatoes_train_8530.tfrecords \
+   --do_train \
+   --block_size 1024 \
+   --num_train_epochs 5 \
+   --learning_rate 4e-6 \
+   --per_device_train_batch_size 3 --per_device_eval_batch_size 3 \
+   --overwrite_output_dir --output_dir ~/tmp/flax-clm \
+   --cache_dir  /home/wab/.cache/huggingface/hub --dtype bfloat16 \
+   --logging_steps 96000 --save_steps 96000
 ```
