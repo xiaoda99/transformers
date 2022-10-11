@@ -169,3 +169,9 @@ def sum_except(input, dims):
     if isinstance(dims, int): dims = [dims]
     dims = [d for d in range(input.ndim) if d not in dims]
     return input.sum(dims) if len(dims) > 0 else input
+
+def maybe_map(fn, *iters):
+    if iterable(iters[0]):
+        res = list(map(fn, *iters))
+        return {k: [d[k] for d in res] for k in res[0]} if isinstance(res[0], dict) else res
+    return fn(*iters)

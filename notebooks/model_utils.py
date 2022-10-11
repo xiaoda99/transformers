@@ -34,7 +34,7 @@ from transformers.models.xglm.modeling_xglm import XGLMForCausalLM, XGLMAttentio
 # from sklearn.cluster import KMeans
 
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, \
-    equal, join_lists, iterable, pad, Timer
+    equal, join_lists, iterable, pad, Timer, maybe_map
 
 
 @dataclass
@@ -399,14 +399,23 @@ def attn_forward(block, hq, hk, hv, by_head=None, #compute_head_input=True,
 def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=None,
             attn_weights=None, attn_labels=None, hidden_states0=None, attribute_k=False, trim=True, scaled=True):
     if isinstance(layer, Iterable):  # tuple, list or np.ndarray
-        assert labels is None and attn_labels is not None
-        assert isinstance(attn_labels, (list, tuple))
-        assert isinstance(hidden_states0, (list, tuple))
+        # assert labels is None and attn_labels is not None
+        # assert isinstance(attn_labels, (list, tuple))
+        # assert isinstance(hidden_states0, (list, tuple))
+        # assert len(attn_labels) == len(hidden_states) == len(hidden_states0) == len(layer) == len(head)
         if not isinstance(hidden_states, (list, tuple)): hidden_states = [hidden_states] * len(layer)
-        assert len(attn_labels) == len(hidden_states) == len(hidden_states0) == len(layer) == len(head)
-        outputs = [head_forward(model, hs, l, h, loss_reduction=loss_reduction,
-            attn_labels=al, hidden_states0=hk, trim=trim, scaled=scaled)
-            for hs, l, h, al, hk in zip(hidden_states, layer, head, attn_labels, hidden_states0)]
+        kwargs_list = [{} for _ in range(len(layer))]
+        if labels is not None:
+            assert len(labels) == len(attn_weights) == len(layer), f'{len(labels)}, {len(attn_weights)}, {len(layer)}'
+            kwargs_list = [{'labels': l, 'attn_weights': aw} for l, aw in zip(labels, attn_weights)]
+        if attn_labels is not None:
+            assert len(attn_labels) == len(hidden_states0) == len(layer), f'{len(attn_labels)}, {len(hidden_states0)}, {len(layer)}'
+            kwargs_list = [{'attn_labels': l, 'hidden_states0': h} for l, h in zip(attn_labels, hidden_states0)]
+        # outputs = [head_forward(model, hs, l, h, loss_reduction=loss_reduction,
+        #     attn_labels=al, hidden_states0=hk, trim=trim, scaled=scaled)
+        #     for hs, l, h, al, hk in zip(hidden_states, layer, head, attn_labels, hidden_states0)]
+        outputs = [head_forward(model, hs, l, h, loss_reduction=loss_reduction, trim=trim, scaled=scaled, **kwargs)
+            for hs, l, h, kwargs in zip(hidden_states, layer, head, kwargs_list)]
         return Outputs(hidden_states=[o.hidden_states for o in outputs],
             logits=[o.logits for o in outputs], loss=sum(o.loss for o in outputs))
 
@@ -851,8 +860,9 @@ def make_data_tuple(text, tokenizer, k_shot=3, bos_token='Ġ->', eos_token='Ċ',
 def get_prob_dist(d, topk=5, digits=3):
     return {k: round(math.exp(v), digits) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]}
 
-def show_predictions(tokenizer, examples, bos_indices, eos_indices, answers, logits, labels, candidates=None,
-        mask_logits_fn=None, k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True):
+def show_predictions(tokenizer, examples, bos_indices, eos_indices, answers, 
+        logits=None, labels=None, candidates=None, mask_logits_fn=None,
+        k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True):
     use_openai_api = hasattr(logits, 'token_logprobs')  # isinstance(model, types.FunctionType)
     if use_openai_api: ans_nlls = []
     if not use_openai_api and mask_logits_fn is not None: logits = mask_logits_fn(logits)
@@ -891,7 +901,8 @@ def show_predictions(tokenizer, examples, bos_indices, eos_indices, answers, log
 def predict(model, tokenizer, text, _examples, k_shot=3, bos_token='Ġ->', eos_token='Ċ', verbose=True):
     input_ids, labels, *args = make_data_tuple( # args = [examples, bos_indices, eos_indices, answers]
         text, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
-    candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for _, _, cands, _ in _examples]
+    candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for _, _, cands, _ in _examples] \
+        if _examples is not None else None
     with torch.no_grad():
         # logits = model(input_ids.to(getattr(model, 'device', 'cpu'))).logits
         # if isinstance(logits, torch.Tensor): logits = logits.to('cpu').float()# softmax on cpu needs float32
@@ -1015,7 +1026,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
 def scaled_input(input, num_points, baseline=None, requires_grad=True):
     assert input.size(0) == 1
     if baseline is None: baseline = torch.zeros_like(input)
-    if num_points == 3:
+    if False and num_points == 3:
         step = (input - baseline) / 10
         res = torch.cat([baseline + step * i for i in [0, 5, 10]], dim=0) #lxy
         # res = torch.cat([baseline + step * i for i in [0, ]], dim=0)
@@ -1057,7 +1068,7 @@ def _attribute(forward_fn, model, x, post_forward_fn=[], num_points=10, batch_si
     attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in x}
     return attr, torch.cat(ys), logits
 
-def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, batch_size=8):
+def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, batch_size=8, forward_only=False):
     if batch_size is None: batch_size = num_points + 1
     if isinstance(post_forward_fn, (list, tuple)):
         post_forward_fn = compose_forward_fns(post_forward_fn, scaled=True)
@@ -1072,10 +1083,12 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, batch_size
             scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
             with Timer('sum_forward'): o = forward_fn(model, **scaled_x_)
             y, logits = post_forward_fn(model, o); ys.append(y)
+            if forward_only: continue
             with Timer('grad'): grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x.values()))
                 # [v for k, v in scaled_x.items() if k in grad_keys])
             for j, key in enumerate(grad_keys):
                 grad[key] += grad_[j].sum(dim=0, keepdim=True)
+    if forward_only: return None, torch.cat(ys), logits
     attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in grad_keys}
 
     attn_attr = attr.get('attn_weights')
@@ -1179,24 +1192,41 @@ def node2fn(model, node, outputs, labels, attn_attr):
     if head is None:
         return partial(mlp_forward, layer=layer) if label_type is None \
             else partial(mlp_forward, layer=layer, labels=labels)
-    if label_type in ['argmax_attn_labels', 'attn_labels']:
-        def get_attn_labels(layer, head, label_type):
-            return get_argmax_attn_labels(outputs, layer, head, labels=labels) \
+    def get_kwargs(layer, head):
+        if label_type in ['argmax_attn_labels', 'attn_labels']:
+            attn_labels = get_argmax_attn_labels(outputs, layer, head, labels=labels) \
                 if label_type.startswith('argmax') else attn_attr[node.parent.name][layer, head]
-        if isinstance(layer, Iterable): # tuple, list or np.ndarray
-            attn_labels = [get_attn_labels(l, h, label_type) for l, h in zip(layer, head)]
-            hidden_states0 = [outputs.hidden_states[l] for l in layer]
+            return {'attn_labels': attn_labels, 'hidden_states0': outputs.hidden_states[layer]}
         else:
-            attn_labels = get_attn_labels(layer, head, label_type)
-            # attn_labels = attn_labels / (attn_labels.sum(-1, keepdim=True) + 1e-9)  # ij->i1 # don't normalize attn attr
-            hidden_states0 = outputs.hidden_states[layer]
-        kwargs = {'hidden_states0': hidden_states0, 'attn_labels': attn_labels, 'attribute_k': attribute_k}
-    else:
-        kwargs = {'attn_weights': outputs.attentions[layer]}
-        if label_type == 'labels':
-            kwargs['labels'] = labels
-        elif label_type == 'argmax_labels':
-            kwargs['labels'] = get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels)
+            assert label_type in ['labels', 'argmax_labels'], label_type
+            _labels = get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels) \
+                if label_type == 'argmax_labels' else labels
+            return {'labels': _labels, 'attn_weights': outputs.attentions[layer]}
+    kwargs = maybe_map(get_kwargs, layer, head)
+
+    # if label_type in ['argmax_attn_labels', 'attn_labels']:
+    #     def get_attn_labels(layer, head, label_type):
+    #         return get_argmax_attn_labels(outputs, layer, head, labels=labels) \
+    #             if label_type.startswith('argmax') else attn_attr[node.parent.name][layer, head]
+    #     if isinstance(layer, Iterable): # tuple, list or np.ndarray
+    #         attn_labels = [get_attn_labels(l, h, label_type) for l, h in zip(layer, head)]
+    #         hidden_states0 = [outputs.hidden_states[l] for l in layer]
+    #     else:
+    #         attn_labels = get_attn_labels(layer, head, label_type)
+    #         # attn_labels = attn_labels / (attn_labels.sum(-1, keepdim=True) + 1e-9)  # ij->i1 # don't normalize attn attr
+    #         hidden_states0 = outputs.hidden_states[layer]
+    #     kwargs = {'hidden_states0': hidden_states0, 'attn_labels': attn_labels, 'attribute_k': attribute_k}
+    # else:  # label_type in ['labels', 'argmax_labels']
+    #     def get_labels(layer, head, label_type):
+    #         return get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels) \
+    #             if label_type == 'argmax_labels' else labels
+    #     if isinstance(layer, Iterable): # tuple, list or np.ndarray
+    #         labels = [get_labels(l, h, label_type) for l, h in zip(layer, head)]
+    #         attn_weights = [outputs.attentions[l] for l in layer]
+    #     else:
+    #         labels = get_labels(layer, head, label_type)
+    #         attn_weights = outputs.attentions[layer]
+    #     kwargs = {'attn_weights': attn_weights, 'labels': labels}
     return partial(head_forward, layer=layer, head=head, **kwargs)
 
 def get_head_weights(model, layer, head=None, transpose=True, absorb_ln=False):
