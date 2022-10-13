@@ -397,27 +397,29 @@ def attn_forward(block, hq, hk, hv, by_head=None, #compute_head_input=True,
     return attn_output, attn_weights, head_input, head_output
 
 def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=None,
-            attn_weights=None, attn_labels=None, hidden_states0=None, attribute_k=False, trim=True, scaled=True):
+            attn_weights=None, attn_mask=None, attn_labels=None, hidden_states0=None, attribute_k=False, trim=True, scaled=True):
     if isinstance(layer, Iterable):  # tuple, list or np.ndarray
-        # assert labels is None and attn_labels is not None
-        # assert isinstance(attn_labels, (list, tuple))
-        # assert isinstance(hidden_states0, (list, tuple))
-        # assert len(attn_labels) == len(hidden_states) == len(hidden_states0) == len(layer) == len(head)
         if not isinstance(hidden_states, (list, tuple)): hidden_states = [hidden_states] * len(layer)
-        kwargs_list = [{} for _ in range(len(layer))]
-        if labels is not None:
-            assert len(labels) == len(attn_weights) == len(layer), f'{len(labels)}, {len(attn_weights)}, {len(layer)}'
-            kwargs_list = [{'labels': l, 'attn_weights': aw} for l, aw in zip(labels, attn_weights)]
         if attn_labels is not None:
+            assert attn_weights is None
             assert len(attn_labels) == len(hidden_states0) == len(layer), f'{len(attn_labels)}, {len(hidden_states0)}, {len(layer)}'
             kwargs_list = [{'attn_labels': l, 'hidden_states0': h} for l, h in zip(attn_labels, hidden_states0)]
-        # outputs = [head_forward(model, hs, l, h, loss_reduction=loss_reduction,
-        #     attn_labels=al, hidden_states0=hk, trim=trim, scaled=scaled)
-        #     for hs, l, h, al, hk in zip(hidden_states, layer, head, attn_labels, hidden_states0)]
+            if attn_mask is not None:
+                assert len(attn_mask) == len(layer), f'{len(attn_mask)} != {len(layer)}'
+                for kwargs, am in zip(kwargs_list, attn_mask): kwargs['attn_mask'] = am
+        else:
+            assert len(attn_weights) == len(layer), f'{len(attn_weights)} != {len(layer)}'
+            kwargs_list = [{'attn_weights': aw} for aw in attn_weights]
+            if labels is not None:
+                assert len(labels) == len(layer), f'{len(labels)} != {len(layer)}'
+                for kwargs, l in zip(kwargs_list, labels): kwargs['labels'] = l
         outputs = [head_forward(model, hs, l, h, loss_reduction=loss_reduction, trim=trim, scaled=scaled, **kwargs)
             for hs, l, h, kwargs in zip(hidden_states, layer, head, kwargs_list)]
-        return Outputs(hidden_states=[o.hidden_states for o in outputs],
-            logits=[o.logits for o in outputs], loss=sum(o.loss for o in outputs))
+        if outputs[0].loss is None:
+            assert all(isinstance(o.hidden_states, tuple) and len(o.hidden_states) == 1 for o in outputs)
+        hidden_states, loss = ([sum(o.hidden_states[0] for o in outputs)], None) if outputs[0].loss is None else \
+            ([o.hidden_states for o in outputs], sum(o.loss for o in outputs))
+        return Outputs(hidden_states=hidden_states, logits=[o.logits for o in outputs], loss=loss)
 
     block = model.transformer.h[layer]
     # only hq and hv can be scaled, not hk
@@ -453,8 +455,7 @@ def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=
     elif attn_labels is not None:
         # may do some attn_logits masking here
         logits = attn_logits[:, head]  # bnij->bij
-        # print('in head_forward, logits =', torch.einsum('bij->b', logits * torch.ones_like(logits).tril()))
-        if not attribute_k: logits = logits.log_softmax(-1)
+        if not attribute_k: logits = (logits + (attn_mask if attn_mask is not None else 0)).log_softmax(-1)
         loss = -torch.einsum('bij->b', logits * attn_labels) # per_example_sum. per_example_mean is hard to define when using unormalized attn attr  # bug fix
     return Outputs(hidden_states=(head_output,) if head_output is not None else (), logits=logits, loss=loss)
 
@@ -814,7 +815,7 @@ def get_argmax_labels(model, hidden_states, labels):
 def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows=None):
     assert input_ids.size(0) == 1  # bsz == 1
     bos_id = tokenizer.convert_tokens_to_ids(bos_token)
-    bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()
+    bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()[1:]
     # print(bos_indices)
     if nrows is not None:
         assert nrows == len(bos_indices)
@@ -915,7 +916,6 @@ def predict(model, tokenizer, text, _examples, k_shot=3, bos_token='Ġ->', eos_t
     if verbose: print(loss)
     attn_attr = {}
     return [text, input_ids, labels] + args + [o, attn_attr]
-    return loss, top1_corrects, answer_probs, candidate_probs
 
 # def mask_select(a, mask=None):  # a: attn_output0, bnid, mask: bi
 #     bsz = a.size(0)
@@ -1186,7 +1186,7 @@ def get_argmax_attn_labels(o, layer, head, labels=None):
     if labels is not None: attn_labels = torch.einsum('bij,bi->ij', attn_labels, (labels != -100).float()) # b=1
     return attn_labels
 
-def node2fn(model, node, outputs, labels, attn_attr):
+def node2fn(model, node, outputs, labels, attn_attr, attn_mask=None):
     d = node.data
     i, layer, head, label_type, attribute_k = d.step, d.layer, d.head, d.label_type, d.attribute_k
     if head is None:
@@ -1196,12 +1196,14 @@ def node2fn(model, node, outputs, labels, attn_attr):
         if label_type in ['argmax_attn_labels', 'attn_labels']:
             attn_labels = get_argmax_attn_labels(outputs, layer, head, labels=labels) \
                 if label_type.startswith('argmax') else attn_attr[node.parent.name][layer, head]
-            return {'attn_labels': attn_labels, 'hidden_states0': outputs.hidden_states[layer]}
-        else:
-            assert label_type in ['labels', 'argmax_labels'], label_type
-            _labels = get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels) \
+            kwargs = {'attn_labels': attn_labels, 'hidden_states0': outputs.hidden_states[layer]}
+            if attn_mask is not None: kwargs['attn_mask'] = attn_mask
+            return kwargs
+        kwargs = {'attn_weights': outputs.attentions[layer]}
+        if label_type in ['labels', 'argmax_labels']:
+            kwargs['labels'] = get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels) \
                 if label_type == 'argmax_labels' else labels
-            return {'labels': _labels, 'attn_weights': outputs.attentions[layer]}
+        return kwargs
     kwargs = maybe_map(get_kwargs, layer, head)
 
     # if label_type in ['argmax_attn_labels', 'attn_labels']:
