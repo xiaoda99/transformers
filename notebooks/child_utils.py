@@ -363,7 +363,8 @@ class SymSet(Set):
         for pair in data:
             for similars, opposites in [(pair[0], pair[1]), (pair[1], pair[0])]:
                 for i, e in enumerate(similars):
-                    self.equal._dict[e] = list(set(similars) - {e}) + [e]
+                    self.equal._dict[e] = [e]
+                    if len(similars) > 1: self.similar._dict[e] = list(set(similars) - {e})
                     if i == 0: self.opposite._dict[e] = opposites[:1]
         
 

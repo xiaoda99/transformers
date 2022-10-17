@@ -4,6 +4,7 @@ from difflib import restore
 # from typing import Iterable
 from collections.abc import Iterable
 from lib2to3.pgen2 import token
+from modulefinder import Module
 from matplotlib import scale  # same as typing.Iterable?
 import numpy as np
 import math
@@ -240,18 +241,19 @@ class RotaryEmbedding(torch.nn.Module):  # from gpt-neox
         return self.cos_cached[:seq_len, ...].to(x.device), self.sin_cached[:seq_len, ...].to(x.device)
 
 def fixed_pos_embedding(x, seq_len=None, gpt_neox_style=False):
-    self = fixed_pos_embedding
-    if not hasattr(self, 'sin_cached'):
+    self = fixed_pos_embedding; device = x.device
+    self.sin, self.cos = {}, {}
+    if device not in self.sin: #not hasattr(self, 'sin'):
         seq_len = 2048
         if gpt_neox_style:
             rotary_emb = RotaryEmbedding(x.shape[-1], 2048, base=10000)
-            self.cos_cached, self.sin_cached = rotary_emb(x, seq_len=seq_len)
+            self.cos[device], self.sin[device] = rotary_emb(x, seq_len=seq_len)
         else:
             dim = x.shape[-1]
             inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2) / dim))
-            sinusoid_inp = torch.einsum("i , j -> i j", torch.arange(seq_len), inv_freq).to(x.device).float()
-            self.sin_cached, self.cos_cached = torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)
-    return self.sin_cached, self.cos_cached
+            sinusoid_inp = torch.einsum("i , j -> i j", torch.arange(seq_len), inv_freq).to(device).float()
+            self.sin[device], self.cos[device] = torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)
+    return self.sin[device], self.cos[device]
 
 def rotate_every_two(x):  # gpt-j
     x1 = x[:, :, :, ::2]
@@ -272,13 +274,13 @@ def apply_rotary_pos_emb_every_two(x, sincos, offset=0): # x: bnir
     return (x * cos) + (rotate_every_two(x) * sin)  # binr,1i1r->binr
 
 def apply_rotary_pos_emb_half(x, sincos, offset=0): # x: bnir
-    # i(r/2) -> 11i(r/2) -> 11ir
-    # sin, cos = map(lambda t: t[None, None, offset : x.shape[2] + offset, :].repeat(1, 1, 1, 2), sincos)
-    sin, cos = map(lambda t: t[:, :, offset : x.shape[2] + offset, :], sincos) # gpt_neox_style fixed_pos_embedding
+    fn = (lambda t: t[None, None, offset : x.shape[2] + offset, :].repeat(1, 1, 1, 2) # gpt_j_style: i(r/2)->11i(r/2)->11ir
+        if t.ndim == 2 else t[:, :, offset : x.shape[2] + offset, :]) # gpt_neox_style
+    sin, cos = map(fn, sincos)
     return (x * cos) + (rotate_half(x) * sin)  # bnir,11ir->bnir
 
 def apply_rotary_pos_emb(query_rot, key_rot, seq_len=2048, offset=0, is_gpt_neox=False):
-    sincos = fixed_pos_embedding(key_rot, seq_len=seq_len, gpt_neox_style=is_gpt_neox)
+    sincos = fixed_pos_embedding(key_rot, seq_len=seq_len, gpt_neox_style=False)
     apply_rotary_pos_emb_fn = apply_rotary_pos_emb_half if is_gpt_neox else apply_rotary_pos_emb_every_two
     key_rot = apply_rotary_pos_emb_fn(key_rot, sincos, offset=offset)
     query_rot = apply_rotary_pos_emb_fn(query_rot, sincos, offset=offset)
@@ -815,8 +817,7 @@ def get_argmax_labels(model, hidden_states, labels):
 def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows=None):
     assert input_ids.size(0) == 1  # bsz == 1
     bos_id = tokenizer.convert_tokens_to_ids(bos_token)
-    bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()[1:]
-    # print(bos_indices)
+    bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()#[1:]
     if nrows is not None:
         assert nrows == len(bos_indices)
     else:
@@ -831,7 +832,6 @@ def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows
     labels = torch.ones_like(input_ids) * (-100)
     answers = []
     for bos_i, eos_i in zip(bos_indices, eos_indices):
-        # eos_i = bos_i + 2  # show only the first answer token
         ans_ids = input_ids[0, bos_i + 1: eos_i]
         labels[0, bos_i: eos_i - 1] = ans_ids
         answers.append(ans_ids.numpy())
@@ -899,23 +899,25 @@ def show_predictions(tokenizer, examples, bos_indices, eos_indices, answers,
         loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100].tolist()  # 'none'
     return loss, top1_corrects, answer_probs, candidate_probs
 
-def predict(model, tokenizer, text, _examples, k_shot=3, bos_token='Ġ->', eos_token='Ċ', verbose=True):
+def predict(model, tokenizer, text, _examples, k_shot=3, bos_token='Ġ->', eos_token='Ċ',
+            custom_forward=True, verbose=True):
     input_ids, labels, *args = make_data_tuple( # args = [examples, bos_indices, eos_indices, answers]
         text, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
     candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for _, _, cands, _ in _examples] \
         if _examples is not None else None
+    answer_indices = [cands[0].index(ans) for _, _, cands, ans in _examples]
     with torch.no_grad():
-        # logits = model(input_ids.to(getattr(model, 'device', 'cpu'))).logits
-        # if isinstance(logits, torch.Tensor): logits = logits.to('cpu').float()# softmax on cpu needs float32
-        with Timer('forward0'): o = forward0(model, input_ids.to(model.device), labels=labels.to(model.device),
-                    output_hidden_states=True, by_head=['head_input'])
+        o = forward0(model, input_ids.to(model.device), labels=labels.to(model.device), by_head=['head_input']) \
+            if isinstance(model, nn.Module) and custom_forward else model(input_ids.to(getattr(model, 'device', 'cpu')))
         logits = o.logits
+        if isinstance(logits, torch.Tensor): logits = logits.to('cpu').float()# softmax on cpu needs float32
     loss, top1_corrects, answer_probs, candidate_probs = show_predictions(
         tokenizer, *args, logits=logits, labels=labels, loss_reduction='mean',
         candidates=candidates, k_shot=k_shot, topk=3, verbose=verbose)
     if verbose: print(loss)
     attn_attr = {}
-    return [text, input_ids, labels] + args + [o, attn_attr]
+    return [text, input_ids, labels] + args + [o, attn_attr], \
+        (loss, top1_corrects, answer_indices, answer_probs, candidate_probs)
 
 # def mask_select(a, mask=None):  # a: attn_output0, bnid, mask: bi
 #     bsz = a.size(0)
