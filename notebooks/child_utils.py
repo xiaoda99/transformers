@@ -1,11 +1,16 @@
 import sys
 import os
 import json
+import csv
 from collections import defaultdict, OrderedDict, Counter
 import string
 from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass
 from typing import Callable, Any
+
+from pattern.en import conjugate, lemma, lexeme, PRESENT, SG
+import nltk
+from nltk.corpus import cmudict  # nltk.download('cmudict')
 
 from common_utils import join_lists
 
@@ -114,22 +119,59 @@ lxy = [  # The adjective form of x is y
 verb_form =[
     ('sleep','slept'),
     ('go','went'),
-    ('talk','talked'),
-    ('can','could'),
-    ('do','did'),
-    ('forget','forgot'),
-    ('leave','left'),
-    ('are','were'),
-    ('begin','began'),
-    ('stand','stood'),
-    ('take','took'),
-    ('have','had'),
-    ('fly','flew'),
-    ('speak','spoke'),
     ('come','came'),
-    ('try','tried'),
-    ('want','wanted'),
+    ('leave','left'),
+    ('talk','talked'),
+    ('speak','spoke'),
+    ('hear','heard'),
+    ('listen','listened'),
+    ('see','saw'),
+    ('look','looked'),
+    ('eat','ate'),
+    ('drink','drank'),
+    ('stand','stood'),
+    ('sit','sat'),
+    ('walk','walked'),
+    ('run','ran'),
+    ('swim','swam'),
+    ('fly','flew'),
+    ('sing','sang'),
+    ('dance','danced'),
+    ('fall','fell'),
+    ('write','wrote'),
+    ('draw','drew'),
+    ('drive','drove'),
+    ('ride','rode'),
+    ('play','played'),
+    ('forget','forgot'),
+    ('know','knew'),
+    ('read','read'),
+    ('cut','cut'),
+    ('hit','hit'),
+    ('hurt','hurt'),
+    # ('can','could'),
+    # ('do','did'),
+    # ('are','were'),
+    # ('begin','began'),
+    # ('take','took'),
+    # ('have','had'),
+    # ('try','tried'),
+    # ('want','wanted'),
 ]
+
+# or conjugate(verb='give',tense=PRESENT,number=SG)
+# https://stackoverflow.com/questions/3753021/using-nltk-and-wordnet-how-do-i-convert-simple-tense-verb-into-its-present-pas
+@dataclass
+class Tenses:
+    do: str = None
+    does: str = None
+    doing: str = None
+    did: str = None
+    done: str = None
+
+verbs = [v for v, _ in verb_form]
+verb_tenses = [lexeme(v) for v in verbs]
+verb_tenses = [Tenses(*(vt + [vt[0]] * (5 - len(vt)))) for vt in verb_tenses]
 
 antonyms = [
     ('big', 'small'),
@@ -207,9 +249,9 @@ capabilities = [ # A x can y.
     ('car', 'drive'),
     ('printer', 'print'),
     ('pen', 'write'),
-    ('saw', 'cut'),
+    ('saw', 'saw'),  # cut
     ('oven', 'bake'),
-    ('pot', 'boil'),
+    ('pot', 'cook'), # boil
     ('gun', 'shoot'),
     # ('pan', 'fry'),
     ('brush', 'paint'),
@@ -289,6 +331,11 @@ country2capital = [ #The capital of Germany is Berlin.
     ('Greece', 'Athens'),
 ]
 
+# https://github.com/knowitall/chunkedextractor/blob/master/src/main/resources/edu/knowitall/chunkedextractor/demonyms.csv
+demonyms = {country: resident for resident, country in csv.reader(open('demonyms.csv'))}
+demonyms.update({'Korea': 'Korean', 'the United States': 'American', 'the United Kingdom': 'British', 'United States': 'American', 'United Kingdom': 'British'})
+city2resident = [(capital, demonyms[country.replace('the ', '')]) for country, capital in country2capital]
+
 grammar_correction = [
     ('Anna and Mike is going skiing.', 'Anna and Mike are going skiing.'),
     ('Anna and Pat are married; he has been together for 20 years.', 'Anna and Pat are married; they have been together for 20 years.'),
@@ -316,6 +363,15 @@ remove_two = [
     ('0, 17, 4, 8, 4, 10, 1', '0, 17, 8, 10, 1'),
 ]
 
+# https://stackoverflow.com/questions/20336524/verify-correct-use-of-a-and-an-in-english-texts-python
+def starts_with_vowel_sound(word, pronunciations=cmudict.dict()):
+    for syllables in pronunciations.get(word, []):
+        return syllables[0][-1].isdigit() 
+
+def add_a_or_an(word):
+    word = lower(word)
+    return ('an' if starts_with_vowel_sound(word) else 'a') + ' ' + word
+
 class Relation(object):
     def __init__(self, _dict): self._dict = _dict
     def f(self, x): return self._dict.get(x, [])
@@ -325,28 +381,21 @@ class Relation(object):
     def b(self, x0, x1): return x1 in self._dict.get(x0, [])
     
 class Set(object):
-    def __init__(self, data):
-        self.set_data(data)
-        # self.set_functions()
-
-    def set_functions(self):
+    def __init__(self, data, rel_names):
+        # self.set_data(data)
+        self.rel_names = rel_names
         for rel_name in self.rel_names:
-            rel = getattr(self, rel_name)
-            d = rel._dict
-            rel.f = lambda e, d=d: d.get(e, [])
-            rel.dom = lambda d=d: set(d.keys())
-            rel.codom = lambda d=d: set(d.values())
-            rel.b = lambda e, e2, d=d: e2 in d.get(e, [])
+            setattr(self, rel_name, Relation(_dict=defaultdict(list)))
 
 class EqSet(Set):
-    def set_data(self, data):
+    def __init__(self, data):
         self.data = data
         self.rel_names = ['equal']
         for rel_name, d in zip(self.rel_names, [{data[i]: [data[i]] for i in range(0, len(data))}]):
             setattr(self, rel_name, Relation(_dict=d))
 
 class PoSet(Set):
-    def set_data(self, data):
+    def __init__(self, data):
         self.data = data
         self.rel_names = ['prev', 'next', 'equal']
         for rel_name, d in zip(self.rel_names, [{data[i]: data[i - 1] for i in range(1, len(data))},
@@ -355,11 +404,12 @@ class PoSet(Set):
             setattr(self, rel_name, Relation(_dict=d))
 
 class SymSet(Set):
-    def set_data(self, data):
-        self.data = data
-        self.rel_names = ['similar', 'opposite', 'equal']
-        for rel_name in self.rel_names:
-            setattr(self, rel_name, Relation(_dict=defaultdict(list)))
+    def __init__(self, data):
+        # self.data = data
+        # self.rel_names = ['similar', 'opposite', 'equal']
+        # for rel_name in self.rel_names:
+        #     setattr(self, rel_name, Relation(_dict=defaultdict(list)))
+        super(SymSet, self).__init__(data, ['similar', 'opposite', 'equal'])
         for pair in data:
             for similars, opposites in [(pair[0], pair[1]), (pair[1], pair[0])]:
                 for i, e in enumerate(similars):
@@ -367,17 +417,92 @@ class SymSet(Set):
                     if len(similars) > 1: self.similar._dict[e] = list(set(similars) - {e})
                     if i == 0: self.opposite._dict[e] = opposites[:1]
         
+class BijectSet(Set):
+    def __init__(self, data):
+        # self.data = data
+        # self.rel_names = ['proj', 'inv_proj']
+        # for rel_name in self.rel_names:
+        #     setattr(self, rel_name, Relation(_dict=defaultdict(list)))
+        super().__init__(data, ['proj', 'inv_proj'])
+        for a, b in data:
+            self.proj._dict[a] = [b]
+            self.inv_proj._dict[b] = [a]
 
 class TreeSet(Set):
-    def set_data(self, data):
-        self.data = data
-        self.rel_names = ['subclass', 'superclass']
-        for rel_name in self.rel_names:
-            setattr(self, rel_name, Relation(_dict=defaultdict(list)))
+    def __init__(self, data):
+        # self.data = data
+        # self.rel_names = ['subclass', 'superclass']
+        # for rel_name in self.rel_names:
+        #     setattr(self, rel_name, Relation(_dict=defaultdict(list)))
+        super(TreeSet, self).__init__(data, ['subclass', 'superclass'])
         for superclass, subclasses in data.items():
             self.subclass._dict[superclass] = subclasses
             for subclass in subclasses:
                 self.superclass._dict[subclass] = [superclass]
+
+def MlM_gen(rels, cxt_len=None):
+    hop = 0
+    query = choice(list(rels[hop][0].dom()))
+    candidates0 = [choice(r.f(query)) for r in rels[hop][:1]]
+    # candidates0 = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
+    candidates0 += sample(list(rels[hop][0].codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
+        cxt_len - len(candidates0))
+
+    hop = 1
+    candidates1 = sample(list(rels[hop][0].dom()), cxt_len)
+    cxt = sample(list(zip(candidates0, candidates1)), cxt_len)
+
+    def transform_fn(cxt, query):
+        hop = 0; tgt, ans = seq(cxt).find(lambda x: rels[hop][0].b(query, x[0]))#[1]
+        hop = 1; ans = rels[hop][0].f(ans)[0]
+        return tgt, ans
+    tgt, ans = transform_fn(cxt, query)
+    hop = 1; candidates = ([rels[hop][0].f(x[1])[0] for x in cxt], [x[1] for x in cxt])
+    return cxt, query, candidates, ans
+
+def IlMlI_gen(rels, cxt_len=None):
+    hop = 0
+    query = choice(list(rels[hop][0].dom()))
+    candidates0 = [choice(r.f(query)) for r in rels[hop][:1]]
+    candidates0 += sample(list(rels[hop][0].codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
+        cxt_len - len(candidates0))
+    candidates0 = candidates0[:1] + sample(candidates0[1:], cxt_len - 1)
+
+    hop = 1
+    query1 = choice(list(rels[hop][0].dom()))
+    candidates1 = [query1] + [choice(r.f(query1)) for r in rels[hop][:1]]
+    candidates1 += sample(list(rels[hop][0].codom() - {query1} - set(join_lists([r.f(query1) for r in rels[hop]]))), 
+        cxt_len - len(candidates1))
+    # assert len(candidates1) == len(set(candidates1)), str(candidates1)
+    cxt = sample(list(zip(candidates0, candidates1)), cxt_len)
+    
+    def transform_fn(cxt, query):
+        hop = 0; ans = seq(cxt).find(lambda x: rels[hop][0].b(query, x[0]))[1]
+        hop = 1; ans = seq(cxt).find(lambda x: x[0] != query and rels[hop][0].b(ans, x[1]))[0]
+        hop = 2; ans = choice(rels[hop][0].f(ans))
+        return ans
+    ans = transform_fn(cxt, query)
+    hop = 2; candidates = ([rels[hop][0].f(x[0])[0] for x in cxt], [x[0] for x in cxt])
+    return cxt, query, candidates, ans
+
+def g2c(g_fn, labels=['No', 'Yes', 'Maybe']):
+    def wrapped(*args,**kwargs):
+        cxt, query, candidates, ans = g_fn(*args,**kwargs)
+        if tuple(candidates[0]) == tuple(candidates[1]):
+            return (cxt, (query, choice(list(set(candidates[0]) - {query, ans}))), [labels], labels[1]) \
+                if random() > 0.5 else (cxt, (query, ans), [labels], labels[0])
+        else:
+            ans_idx = candidates[0].index(ans)
+            _ans = candidates[1][ans_idx]
+            p = random()
+            if p < 1/3: ans, label = ans, labels[0]
+            elif 1/3 <= p < 2/3: ans, label = _ans, labels[1]
+            else:
+                if len(list(set(candidates[0] + candidates[1]) - {ans, _ans})) == 0:
+                    print('empty', candidates[0], candidates[1], ans, _ans)
+                ans, label = choice(list(set(candidates[0] + candidates[1]) - {ans, _ans})), labels[2]
+            return cxt, (query, ans), [labels], label
+    return wrapped
 
 def inc(token):
     assert len(token) == 1 or token in ['->'], token

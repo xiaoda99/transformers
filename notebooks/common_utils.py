@@ -175,3 +175,5 @@ def maybe_map(fn, *iters):
         res = list(map(fn, *iters))
         return {k: [d[k] for d in res] for k in res[0]} if isinstance(res[0], dict) else res
     return fn(*iters)
+
+def lget(l, i, default=None): return l[i] if len(l) > i else default
