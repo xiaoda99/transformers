@@ -177,3 +177,8 @@ def maybe_map(fn, *iters):
     return fn(*iters)
 
 def lget(l, i, default=None): return l[i] if len(l) > i else default
+
+import inspect
+def get_default_value(fn, name):
+    if isinstance(fn, types.FunctionType): return inspect.signature(fn).parameters[name].default
+    assert isinstance(fn, partial); return fn.keywords[name]

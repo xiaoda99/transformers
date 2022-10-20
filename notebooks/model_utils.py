@@ -903,9 +903,10 @@ def predict(model, tokenizer, text, _examples, k_shot=3, bos_token='Ġ->', eos_t
             custom_forward=True, verbose=True):
     input_ids, labels, *args = make_data_tuple( # args = [examples, bos_indices, eos_indices, answers]
         text, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
-    candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for _, _, cands, _ in _examples] \
-        if _examples is not None else None
-    answer_indices = [cands[0].index(ans) for _, _, cands, ans in _examples]
+    candidates, answer_indices = None, None
+    if _examples is not None:
+        candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for _, _, cands, _ in _examples]
+        answer_indices = [cands[0].index(ans) for _, _, cands, ans in _examples]
     with torch.no_grad():
         o = forward0(model, input_ids.to(model.device), labels=labels.to(model.device), by_head=['head_input']) \
             if isinstance(model, nn.Module) and custom_forward else model(input_ids.to(getattr(model, 'device', 'cpu')))

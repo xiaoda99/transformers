@@ -14,6 +14,10 @@ from nltk.corpus import cmudict  # nltk.download('cmudict')
 
 from common_utils import join_lists
 
+sys.path.insert(0, '/nas/xd/projects/PyFunctional')
+from functional import seq
+
+
 # from transformers import GPT2Tokenizer
 # cache_dir = '/nas/xd/.cache/torch/transformers/'
 # _tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
@@ -170,7 +174,8 @@ class Tenses:
     done: str = None
 
 verbs = [v for v, _ in verb_form]
-verb_tenses = [lexeme(v) for v in verbs]
+try: verb_tenses = [lexeme(v) for v in verbs]
+except: verb_tenses = [lexeme(v) for v in verbs]
 verb_tenses = [Tenses(*(vt + [vt[0]] * (5 - len(vt)))) for vt in verb_tenses]
 
 antonyms = [
@@ -211,19 +216,20 @@ types_of_things = {
     'animal': ['chicken', 'duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'bear', 'tiger', 'cat', 
             'zebra', 'pig', 'giraffe', 'monkey', 'rabbit', 'elephant', 'wolf', 'lion', 'deer', 'fox', 'gorilla', 'kangaroo'],
     'insect': ['bee', 'ant', 'fly', 'mosquito', 'wasp', 'butterfly', 'beetle', 'spider'],
-    'plant': ['rose', 'tulip', 'lily', 'daisy', 'sunflower', 'tree', 'grass', 'bush', 'weed', 'vine'],
+    'flower': ['rose', 'tulip', 'lily', 'daisy', 'sunflower'],
     'fruit': ['apple', 'banana', 'pear', 'grape', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberry',
             'blueberry', 'strawberry', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'],
     'vehicle': ['car', 'bus', 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage', 
-                'subway', 'taxi', 'van', 'boat'],
-    'furniture': ['sofa', 'couch', 'desk', 'chair', 'table', 'bed', 'bookshelf', 'closet', 'wardrobe'],
-    'electronics': ['computer', 'laptop', 'iPad', 'phone', 'smartphone', 'television', 'camera', 'printer'],
+                'subway', 'taxi', 'van', 'boat'],  # transportation
+    'weapon': ['gun', 'rifle', 'sword', 'pistol', 'dagger', 'bomb', 'grenade', 'cannon'],
+    'furniture': ['sofa', 'couch', 'desk', 'chair', 'table', 'bed', 'bookshelf'],# 'closet', 'wardrobe'],
     'tool': ['hammer', 'spanner', 'awl', 'scissors', 'axe', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'],
-    'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
-    'clothes': ['shirt', 'pants', 'dress', 'coat', 'shoes', 'socks', 'hat', 'tie', 'jacket', 'skirt', 'trousers', 'jeans'],
-    'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
-    'appliance': ['microwave', 'oven', 'fridge', 'washer', 'dryer', 'washing machine'],
-    'weapons': ['gun', 'rifle', 'sword', 'pistol', 'dagger', 'bomb', 'grenade', 'cannon'],
+    'clothing': ['shirt', 'pants', 'dress', 'coat', 'socks', 'hat', 'tie', 'jacket', 'skirt', 'trousers', 'jeans'], #, 'shoes'
+    'appliance': ['microwave', 'fridge', 'washer', 'dryer', 'washing machine'],  #, 'oven'
+    # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
+    # 'electronics': ['computer', 'laptop', 'iPad', 'phone', 'smartphone', 'television', 'camera', 'printer'],
+    # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
+    # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
 }
 # A list of words with their types:
 # big small -> size
@@ -243,22 +249,39 @@ types_of_things = {
 
 capabilities = [ # A x can y.
     ('knife', 'cut'),
-    # ('computer', 'calculate'),
+    ('calculator', 'calculate'), # or compute
     ('phone', 'call'),
-    ('TV', 'watch'),  # show
-    ('car', 'drive'),
     ('printer', 'print'),
     ('pen', 'write'),
     ('saw', 'saw'),  # cut
     ('oven', 'bake'),
     ('pot', 'cook'), # boil
     ('gun', 'shoot'),
+    ('dagger', 'stab'),
     # ('pan', 'fry'),
     ('brush', 'paint'),
     ('shovel', 'dig'),
     ('hammer', 'hit'),
+    ('axe', 'chop'),
+    ('drill', 'bore'),  # or drill
     ('lamp', 'light'),
     ('fan', 'blow'),
+    ('washing machine', 'wash'),  # or washer
+    ('opener ', 'open'),  # or washer
+    ('dryer', 'dry'),
+    ('lighter', 'light'),
+    
+    ('TV', 'watch'),  # show
+    ('car', 'drive'),
+
+    ('plane', 'fly'),
+    ('bicycle', 'ride'),
+    ('glider', 'glide'),
+    ('skateboard', 'skate'),
+    ('swing', 'swing'),
+    ('piano ', 'play'),
+    ('violin  ', 'play'),
+    # ('book', 'read'), # teach
 ]
 
 adj2very = [
@@ -321,7 +344,7 @@ country2capital = [ #The capital of Germany is Berlin.
     ('South Africa', 'Pretoria'),
     ('Egypt', 'Cairo'),
     ('Kenya', 'Nairobi'),
-    ('Korea', 'Seoul'),
+    ('South Korea', 'Seoul'),
     ('the Philippines', 'Manila'),
     ('Portugal', 'Lisbon'),
     ('Switzerland', 'Bern'),
@@ -333,7 +356,7 @@ country2capital = [ #The capital of Germany is Berlin.
 
 # https://github.com/knowitall/chunkedextractor/blob/master/src/main/resources/edu/knowitall/chunkedextractor/demonyms.csv
 demonyms = {country: resident for resident, country in csv.reader(open('demonyms.csv'))}
-demonyms.update({'Korea': 'Korean', 'the United States': 'American', 'the United Kingdom': 'British', 'United States': 'American', 'United Kingdom': 'British'})
+demonyms.update({'the United States': 'American', 'the United Kingdom': 'British', 'United States': 'American', 'United Kingdom': 'British'})
 city2resident = [(capital, demonyms[country.replace('the ', '')]) for country, capital in country2capital]
 
 grammar_correction = [
@@ -370,11 +393,13 @@ def starts_with_vowel_sound(word, pronunciations=cmudict.dict()):
 
 def add_a_or_an(word):
     word = lower(word)
+    if word.endswith('s'): return f'a pair of {word}' # plies, scissors
     return ('an' if starts_with_vowel_sound(word) else 'a') + ' ' + word
 
 class Relation(object):
     def __init__(self, _dict): self._dict = _dict
     def f(self, x): return self._dict.get(x, [])
+    def inv_f(self, x): return self._inv_dict.get(x, [])
     # def el(self): return self._el
     def dom(self, xs=None): return set(self._dict.keys())
     def codom(self, ys=None): return set(join_lists(self._dict.values()))
@@ -405,11 +430,7 @@ class PoSet(Set):
 
 class SymSet(Set):
     def __init__(self, data):
-        # self.data = data
-        # self.rel_names = ['similar', 'opposite', 'equal']
-        # for rel_name in self.rel_names:
-        #     setattr(self, rel_name, Relation(_dict=defaultdict(list)))
-        super(SymSet, self).__init__(data, ['similar', 'opposite', 'equal'])
+        super().__init__(data, ['similar', 'opposite', 'equal'])
         for pair in data:
             for similars, opposites in [(pair[0], pair[1]), (pair[1], pair[0])]:
                 for i, e in enumerate(similars):
@@ -419,10 +440,6 @@ class SymSet(Set):
         
 class BijectSet(Set):
     def __init__(self, data):
-        # self.data = data
-        # self.rel_names = ['proj', 'inv_proj']
-        # for rel_name in self.rel_names:
-        #     setattr(self, rel_name, Relation(_dict=defaultdict(list)))
         super().__init__(data, ['proj', 'inv_proj'])
         for a, b in data:
             self.proj._dict[a] = [b]
@@ -430,27 +447,26 @@ class BijectSet(Set):
 
 class TreeSet(Set):
     def __init__(self, data):
-        # self.data = data
-        # self.rel_names = ['subclass', 'superclass']
-        # for rel_name in self.rel_names:
-        #     setattr(self, rel_name, Relation(_dict=defaultdict(list)))
-        super(TreeSet, self).__init__(data, ['subclass', 'superclass'])
-        for superclass, subclasses in data.items():
-            self.subclass._dict[superclass] = subclasses
-            for subclass in subclasses:
-                self.superclass._dict[subclass] = [superclass]
+        super().__init__(data, ['child', 'parent'])
+        for parent, children in data.items():
+            self.child._dict[parent] = children
+            for child in children: self.parent._dict[child] = [parent]
+        self.child._inv_dict, self.parent._inv_dict = self.parent._dict, self.child._dict
 
-def MlM_gen(rels, cxt_len=None):
-    hop = 0
-    query = choice(list(rels[hop][0].dom()))
-    candidates0 = [choice(r.f(query)) for r in rels[hop][:1]]
-    # candidates0 = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
-    candidates0 += sample(list(rels[hop][0].codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
-        cxt_len - len(candidates0))
+def MlM_gen(rels, cxt_len=3):
+    candidates = OrderedDict()
+    hop = 0; rel = rels[hop][0]
+    query = choice(list(rel.dom()))
+    candidates[hop] = [choice(r.f(query)) for r in rels[hop][:1]]
+    # candidates[hop] = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
+    candidates[hop] += sample(list(rel.codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
+        cxt_len - len(candidates[hop]))
 
-    hop = 1
-    candidates1 = sample(list(rels[hop][0].dom()), cxt_len)
-    cxt = sample(list(zip(candidates0, candidates1)), cxt_len)
+    hop = 1; rel = rels[hop][0]
+    # candidates[hop] = sample(list(rel.dom()), cxt_len)
+    ans = choice(list(rel.codom()))
+    candidates[hop] = [choice(rel.inv_f(ans))] + sample(list(rel.dom() - set(rel.inv_f(ans))), cxt_len - 1)
+    cxt = sample(list(zip(*candidates.values())), cxt_len)
 
     def transform_fn(cxt, query):
         hop = 0; tgt, ans = seq(cxt).find(lambda x: rels[hop][0].b(query, x[0]))#[1]
@@ -460,7 +476,7 @@ def MlM_gen(rels, cxt_len=None):
     hop = 1; candidates = ([rels[hop][0].f(x[1])[0] for x in cxt], [x[1] for x in cxt])
     return cxt, query, candidates, ans
 
-def IlMlI_gen(rels, cxt_len=None):
+def IlMlI_gen(rels, cxt_len=3):
     hop = 0
     query = choice(list(rels[hop][0].dom()))
     candidates0 = [choice(r.f(query)) for r in rels[hop][:1]]
