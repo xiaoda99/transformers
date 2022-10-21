@@ -180,5 +180,6 @@ def lget(l, i, default=None): return l[i] if len(l) > i else default
 
 import inspect
 def get_default_value(fn, name):
+    # https://stackoverflow.com/questions/12627118/get-a-function-arguments-default-value
     if isinstance(fn, types.FunctionType): return inspect.signature(fn).parameters[name].default
     assert isinstance(fn, partial); return fn.keywords[name]

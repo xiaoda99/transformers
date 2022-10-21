@@ -1737,7 +1737,7 @@ def get_scale_fn(factor=0):
     return scale
 
 def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x_pos=None,
-            use_imshow=False, annot=False, figsize=(10, 10), ax=None):
+            use_imshow=False, annot=False, figsize=(10, 10), fontsize=10, transpose=False, ax=None):
     ytokens = ytokens or tokens
     if ystart is not None:
         ystop = ystop or attn.size(0)
@@ -1745,26 +1745,30 @@ def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x
         ytokens = ytokens[ystart: ystop]
         y_pos = [p - ystart for p in y_pos]
     square = attn.size(0) == attn.size(1)
-    if not square:
-        figsize2 = (attn.size(1), attn.size(0))
-        a = min(s1 / s2 for s1, s2 in zip(figsize, figsize2))
-        figsize = [s * a for s in figsize2]
-    # ytokens = tokens if square else [str(i) for i in range(attn.size(0))]
-    if ax is None: plt.figure(figsize=figsize)
+    if ax is None:
+        if not square:
+            figsize2 = (attn.size(1), attn.size(0))
+            a = min(s1 / s2 for s1, s2 in zip(figsize, figsize2))
+            figsize = [s * a for s in figsize2]
+        plt.figure(figsize=figsize)
+    if transpose:
+        attn = attn.T
+        tokens, ytokens = ytokens, tokens
+        x_pos, y_pos = y_pos, x_pos
     if use_imshow:
         ax.imshow(attn)#, cmap='hot')
         ax.set_xticks(np.arange(0, attn.size(1), 1)); ax.set_xticklabels(tokens)
         ax.set_yticks(np.arange(0, attn.size(0), 1)); ax.set_yticklabels(ytokens)
     else:
         kwargs = dict(linewidths=0.1, linecolor='grey') if y_pos is None else {}
-        res = sns.heatmap(numpy(attn), square=square, cbar=False, annot=annot, fmt='d', 
+        ax = sns.heatmap(numpy(attn), square=square, cbar=False, annot=annot, fmt='d', 
             xticklabels=tokens, yticklabels=ytokens, ax=ax, **kwargs)
+    _ = ax.set_xticklabels(ax.get_xmajorticklabels(), fontsize=fontsize, rotation=90)
+    _ = ax.set_yticklabels(ax.get_ymajorticklabels(), fontsize=fontsize, rotation=0)
+    ax.tick_params(right=True, labelright=True, left=False, labelleft=False)#, top=True, labeltop=True) # cause x3 slowdown!
     kwargs = dict(linewidths=0.5, color='grey')
-    if y_pos is not None: ax.hlines(y=y_pos, xmin=0, xmax=attn.size(1), **kwargs)  # max-0.5 for imshow
-    if x_pos is not None: ax.vlines(x=x_pos, ymin=0, ymax=attn.size(0), **kwargs)
-    # _ = res.set_xticklabels(res.get_xmajorticklabels(), fontsize=10, rotation=0)
-    # _ = res.set_yticklabels(res.get_ymajorticklabels(), fontsize=10, rotation=0)
-    # res.tick_params(top=True, right=True, labeltop=True, labelright=True) # cause x3 slowdown!
+    if y_pos is not None: ax.hlines(y=y_pos, xmin=0, xmax=attn.size(1)-0.5*use_imshow, **kwargs)  # max-0.5 for imshow
+    if x_pos is not None: ax.vlines(x=x_pos, ymin=0, ymax=attn.size(0)-0.5*use_imshow, **kwargs)
     # plt.show()
 
 def cluster(emb, labels, n_clusters=3):

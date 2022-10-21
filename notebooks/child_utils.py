@@ -2,20 +2,23 @@ import sys
 import os
 import json
 import csv
-from collections import defaultdict, OrderedDict, Counter
+from collections import defaultdict, OrderedDict, Counter, Iterable
+from functools import partial
 import string
 from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass
 from typing import Callable, Any
+import traceback
 
 from pattern.en import conjugate, lemma, lexeme, PRESENT, SG
 import nltk
 from nltk.corpus import cmudict  # nltk.download('cmudict')
 
-from common_utils import join_lists
+from common_utils import join_lists, my_isinstance, lget
 
 sys.path.insert(0, '/nas/xd/projects/PyFunctional')
 from functional import seq
+from functional.pipeline import Sequence
 
 
 # from transformers import GPT2Tokenizer
@@ -79,8 +82,6 @@ girls = [
 boys = [l.strip() for l in open('boy_names_1000.txt').readlines()]
 girls = [l.strip() for l in open('girl_names_1000.txt').readlines()]
 persons = boys + girls
-
-
 
 noun2adj = [  # The adjective form of x is y
     ('rain','rainy'),
@@ -215,7 +216,7 @@ Types of animals: dog, cat, horse, rabbit, pig'''
 types_of_things = {
     'animal': ['chicken', 'duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'bear', 'tiger', 'cat', 
             'zebra', 'pig', 'giraffe', 'monkey', 'rabbit', 'elephant', 'wolf', 'lion', 'deer', 'fox', 'gorilla', 'kangaroo'],
-    'insect': ['bee', 'ant', 'fly', 'mosquito', 'wasp', 'butterfly', 'beetle', 'spider'],
+    'insect': ['bee', 'ant', 'mosquito', 'wasp', 'butterfly', 'beetle', 'spider'],  # , 'fly'
     'flower': ['rose', 'tulip', 'lily', 'daisy', 'sunflower'],
     'fruit': ['apple', 'banana', 'pear', 'grape', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberry',
             'blueberry', 'strawberry', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'],
@@ -223,7 +224,7 @@ types_of_things = {
                 'subway', 'taxi', 'van', 'boat'],  # transportation
     'weapon': ['gun', 'rifle', 'sword', 'pistol', 'dagger', 'bomb', 'grenade', 'cannon'],
     'furniture': ['sofa', 'couch', 'desk', 'chair', 'table', 'bed', 'bookshelf'],# 'closet', 'wardrobe'],
-    'tool': ['hammer', 'spanner', 'awl', 'scissors', 'axe', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'],
+    'tool': ['hammer', 'spanner', 'awl', 'scissors', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'], #, 'axe' should be weapon?
     'clothing': ['shirt', 'pants', 'dress', 'coat', 'socks', 'hat', 'tie', 'jacket', 'skirt', 'trousers', 'jeans'], #, 'shoes'
     'appliance': ['microwave', 'fridge', 'washer', 'dryer', 'washing machine'],  #, 'oven'
     # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
@@ -231,6 +232,7 @@ types_of_things = {
     # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
 }
+
 # A list of words with their types:
 # big small -> size
 # blue red -> color
@@ -519,6 +521,56 @@ def g2c(g_fn, labels=['No', 'Yes', 'Maybe']):
                 ans, label = choice(list(set(candidates[0] + candidates[1]) - {ans, _ans})), labels[2]
             return cxt, (query, ans), [labels], label
     return wrapped
+
+def _str(l, vocab=None, sep=' '):
+    if l is None: return ''
+    if isinstance(l, str) or not isinstance(l, Iterable): l = [l]
+    l = [e for e in l if not my_isinstance(e, Sequence)] #type(e).__name__ != 'Sequence']
+    if isinstance(l, (dict, OrderedDict)): l = [f'{k}: {v}' for k, v in l.items()]
+    return sep.join(str(i) for i in l)
+
+def options2str(options): return '[' + ' | '.join(options) + ']'  # ' or '.join(options) + '?'
+
+def make_examples(task, nrows=4, vocab_for_each_row=True, **kwargs):
+    vocab_fn, example_gen_fn = task[:2]
+    vocabs, examples = [], []
+    qa_set = set() # for dedup
+    if not vocab_for_each_row: vocab = vocab_fn()
+    for i in range(nrows * 2):
+        if vocab_for_each_row: vocab = vocab_fn()
+        try:
+            cxt, query, candidates, ans = example_gen_fn(vocab, **kwargs)
+        except:
+            traceback.print_exc()  # print(traceback.format_exc())
+            continue
+        if isinstance(query, list): query = tuple(query)
+        if (tuple(cxt), query, ans) not in qa_set:
+            qa_set.add((tuple(cxt), query, ans))
+            vocabs.append(vocab)
+            examples.append([cxt, query, candidates, ans])
+        if len(examples) == nrows: break
+    return vocabs, examples
+
+def _item2str(item, vocab=None, reverse=False):
+    return (f'{item[1]} {item[0]}' if reverse else f'{item[0]} {item[1]}') if isinstance(item, tuple) else f'{item}'
+
+def _cxt2str(cxt, vocab=None, prefix='', sep=', ', item2str=_item2str):
+    return prefix + sep.join([item2str(item, vocab) for item in cxt])
+
+def make_input_str(task, vocabs, examples, abstract=0, abstract_bos_token='Ġ->', options_position=None):
+    cxt_len = len(examples[0][0])
+    default_item2str = partial(_item2str, reverse=abstract == 2) if cxt_len > 1 else lambda i, _: f'{i[1]}'
+    default_query2str = _str if cxt_len > 1 else lambda q, _: ''
+    cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)] \
+        if abstract == 0 else [partial(_cxt2str, item2str=default_item2str), default_query2str, abstract_bos_token, _str]
+    def example2str(vocab, example):
+        cxt, query, options, ans = example
+        strs = [cxt2str(cxt, vocab), query2str(query, vocab)]
+        if options_position is not None: strs.insert(options_position, options2str(options))
+        return '. '.join(s for s in strs if s != '') + bos_token.replace('Ġ', ' ') + ' ' + ans2str(ans)
+
+    text = '\n'.join(example2str(v, e) for v, e in zip(vocabs, examples)) + '\n'
+    return text
 
 def inc(token):
     assert len(token) == 1 or token in ['->'], token
