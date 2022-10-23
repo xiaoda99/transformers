@@ -8,7 +8,7 @@ from modulefinder import Module
 from matplotlib import scale  # same as typing.Iterable?
 import numpy as np
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from functools import reduce, partial
 from itertools import chain, product, combinations, cycle
 import matplotlib.pyplot as plt
@@ -36,7 +36,7 @@ from transformers.models.xglm.modeling_xglm import XGLMForCausalLM, XGLMAttentio
 
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, \
     equal, join_lists, iterable, pad, Timer, maybe_map
-
+from child_utils import example2ranges
 
 @dataclass
 class Outputs:
@@ -808,8 +808,8 @@ def forward(model, inputs, labels=None, loss_reduction=None, by_head=False,
     o.all_attentions2 = all_attentions2; o.cat_hqs = cat_hqs
     return o
 
-def get_argmax_labels(model, hidden_states, labels):
-    logits = model.lm_head(model.transformer.ln_f(hidden_states))
+def get_argmax_labels(model, hidden_states, labels, logits=None):
+    if logits is None: logits = model.lm_head(model.transformer.ln_f(hidden_states))
     argmax_labels = labels.clone()
     argmax_labels[labels != -100] = logits.argmax(-1)[labels != -100]
     return argmax_labels
@@ -837,14 +837,30 @@ def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows
         answers.append(ans_ids.numpy())
     return bos_indices, eos_indices, answers, labels
 
+def move_ranges(r, offset):
+    for field in fields(r):
+        name = field.name; pair = getattr(r, name)
+        if pair is not None: setattr(r, name, tuple([i + offset for i in pair]))
+    return r
+
+def locate_ranges(examples, example_strs, tokenizer, bos_token):
+    ranges, all_tokens, newline_token = [], [], tokenizer.tokenize('\n')[0]  # 'Ċ'
+    assert len(examples) == len(example_strs)
+    for e, e_str in zip(examples, example_strs):
+        tokens, r = example2ranges(e, tokenizer.tokenize(e_str), bos_token)
+        ranges.append(move_ranges(r, len(all_tokens)))
+        all_tokens += tokens + [newline_token]
+    # assert tuple(all_tokens) == tuple(tokenizer.tokenize(text))
+    return ranges
+
 # bos_token='▁is'; eos_token='</s>' for s2s
-def make_data_tuple(text, tokenizer, k_shot=3, bos_token='Ġ->', eos_token='Ċ', s2s=False):
-    examples = text.strip().split('\n')
+def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token='Ġ->', eos_token='Ċ', s2s=False):
+    example_strs = text.strip().split('\n')
     input_ids = tokenizer.encode(text, return_tensors='pt')
     # tokens = tokenizer.tokenize(text)
     # # tokenize without tokenization artifact -> needed for visualization, from unseal
     # tokens = list(map(tokenizer.convert_tokens_to_string, map(lambda x: [x], tokens)))
-
+    ranges = locate_ranges(examples, example_strs, tokenizer, bos_token)
     bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_token=bos_token, eos_token=eos_token)
     if s2s:  # for t5 models
         bos_i, eos_i = bos_indices[-1], eos_indices[-1]
@@ -856,22 +872,22 @@ def make_data_tuple(text, tokenizer, k_shot=3, bos_token='Ġ->', eos_token='Ċ',
         bos_indices, eos_indices = [bos_i - bos_i], [eos_i - bos_i]
     else:
         labels[:, :bos_indices[k_shot]] = -100  # 只算k_shot个示例后的loss
-    return input_ids, labels, examples, bos_indices, eos_indices, answers
+    return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers
 
 def get_prob_dist(d, topk=5, digits=3):
     return {k: round(math.exp(v), digits) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]}
 
-def show_predictions(tokenizer, examples, bos_indices, eos_indices, answers, 
+def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers, 
         logits=None, labels=None, candidates=None, mask_logits_fn=None,
         k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True):
     use_openai_api = hasattr(logits, 'token_logprobs')  # isinstance(model, types.FunctionType)
     if use_openai_api: ans_nlls = []
     if not use_openai_api and mask_logits_fn is not None: logits = mask_logits_fn(logits)
     
-    assert len(bos_indices) == len(examples), '%d != %d' % (len(bos_indices), len(examples))
+    assert len(bos_indices) == len(example_strs), '%d != %d' % (len(bos_indices), len(example_strs))
     top1_corrects, answer_probs, candidate_probs = [], [], []
     convert_fn = tokenizer.convert_ids_to_tokens if True else partial(convert_ids_to_tokens, tokenizer=tokenizer)
-    for i, (example, bos_i, eos_i, ans_ids) in enumerate(zip(examples, bos_indices, eos_indices, answers)):
+    for i, (example_str, bos_i, eos_i, ans_ids) in enumerate(zip(example_strs, bos_indices, eos_indices, answers)):
         # eos_i = bos_i + 2  # show only the first answer token
         if use_openai_api:
             ans_prob_dist = [get_prob_dist(d, topk=topk) for d in logits.top_logprobs[bos_i + 1: eos_i]]
@@ -891,7 +907,7 @@ def show_predictions(tokenizer, examples, bos_indices, eos_indices, answers,
                     [dist.get(cand, 0.) for cand in [t.replace('Ġ', ' ') for t in convert_fn(candidates[i])]])
             if verbose: 
                 print(('*' if top1_correct else ' ') + ans_token, ans_prob, dist if use_openai_api 
-                    else show_topk(*dist.topk(topk), indices_fn=convert_fn), sep, example) 
+                    else show_topk(*dist.topk(topk), indices_fn=convert_fn), sep, example_str) 
     if use_openai_api:
         loss = (ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls))
     else:
@@ -899,14 +915,14 @@ def show_predictions(tokenizer, examples, bos_indices, eos_indices, answers,
         loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100].tolist()  # 'none'
     return loss, top1_corrects, answer_probs, candidate_probs
 
-def predict(model, tokenizer, text, _examples, k_shot=3, bos_token='Ġ->', eos_token='Ċ',
+def predict(model, tokenizer, text, examples, k_shot=3, bos_token='Ġ->', eos_token='Ċ',
             custom_forward=True, verbose=True):
-    input_ids, labels, *args = make_data_tuple( # args = [examples, bos_indices, eos_indices, answers]
-        text, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
+    input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
+        text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
     candidates, answer_indices = None, None
-    if _examples is not None:
-        candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for _, _, cands, _ in _examples]
-        answer_indices = [cands[0].index(ans) for _, _, cands, ans in _examples]
+    if examples is not None:
+        candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for _, _, cands, _ in examples]
+        answer_indices = [cands[0].index(ans_chain[-1]) for _, _, cands, ans_chain in examples]
     with torch.no_grad():
         o = forward0(model, input_ids.to(model.device), labels=labels.to(model.device), by_head=['head_input']) \
             if isinstance(model, nn.Module) and custom_forward else model(input_ids.to(getattr(model, 'device', 'cpu')))
@@ -915,11 +931,41 @@ def predict(model, tokenizer, text, _examples, k_shot=3, bos_token='Ġ->', eos_t
     loss, top1_corrects, answer_probs, candidate_probs = show_predictions(
         tokenizer, *args, logits=logits, labels=labels, loss_reduction='mean',
         candidates=candidates, k_shot=k_shot, topk=3, verbose=verbose)
-    if verbose: print(loss)
+        
+    if verbose == 1:
+        print(loss)
+        f, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 2.4), sharex=True)
+        x = [i + 0.5 for i in range(len(examples))] # to align with sns.heatmap
+        _ = ax0.bar(x, top1_corrects, width=0.9, alpha=0.5);
+        _ = ax0.plot(x, answer_probs, color='r');
+        if answer_indices is not None:
+            label_probs = F.one_hot(torch.LongTensor(answer_indices))
+            _ = sns.heatmap(torch.cat([label_probs, torch.Tensor(candidate_probs)], dim=1).T, cbar=False, ax=ax1);
+        plt.show()
+
     attn_attr = {}
-    return [text, input_ids, labels] + args + [o, attn_attr], \
+    return [text, input_ids, labels, ranges] + args + [o, attn_attr], \
         (loss, top1_corrects, answer_indices, answer_probs, candidate_probs)
 
+def attn_pattern2labels(ranges, attn_pattern, attn_size):
+    q, k = attn_pattern.split('->')  # e.g. 'bos->ans0'
+    attn_labels = torch.zeros(*attn_size)
+    def get_slice(r, name):
+        if name.startswith('['): b, _ = getattr(r, name[1:]); e = b + 1
+        elif name.endswith(']'): _, e = getattr(r, name[:-1]); b = e - 1
+        else: b, e = getattr(r, name)
+        return slice(b, e)
+    for r in ranges: attn_labels[get_slice(r, q), get_slice(r, k)] = 1
+    return attn_labels
+
+def get_head_matching_scores(data_tuples, attn_pattern):
+    matching_scores = []  
+    for text, input_ids, labels, ranges, *args, o, attn_attr in data_tuples:
+        attn_labels = attn_pattern2labels(ranges[k_shot:], attn_pattern, o.attentions[0].size()[-2:])
+        attentions = torch.cat(o.attentions)  # lhij
+        matching_scores.append(((attentions + 1e-9) * attn_labels).sum((-2, -1)) / len(ranges))  # mean log-likelyhood, lhij->lh
+    return torch.stack(matching_scores).mean(0)  # b*[lh]->blh->lh
+    
 # def mask_select(a, mask=None):  # a: attn_output0, bnid, mask: bi
 #     bsz = a.size(0)
 #     # mask = mask[None, :, :].expand(num_heads, -1, -1) # bi->nbi
@@ -1736,9 +1782,12 @@ def get_scale_fn(factor=0):
     def scale(hidden): return hidden * factor
     return scale
 
-def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x_pos=None,
+def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x_pos=None, topk=None,
             use_imshow=False, annot=False, figsize=(10, 10), fontsize=10, transpose=False, ax=None):
     ytokens = ytokens or tokens
+    if y_pos is None and topk is not None:
+        attn_ = attn.clone(); attn_[:, 0] = 0  # null attn to start pos is ignored
+        y_pos, x_pos, _ = topk_md(attn_, k=topk) 
     if ystart is not None:
         ystop = ystop or attn.size(0)
         attn = attn[ystart: ystop]
@@ -1750,11 +1799,13 @@ def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x
             figsize2 = (attn.size(1), attn.size(0))
             a = min(s1 / s2 for s1, s2 in zip(figsize, figsize2))
             figsize = [s * a for s in figsize2]
-        plt.figure(figsize=figsize)
     if transpose:
         attn = attn.T
         tokens, ytokens = ytokens, tokens
         x_pos, y_pos = y_pos, x_pos
+        figsize = figsize[::-1]
+    if ax is None: plt.figure(figsize=figsize)
+
     if use_imshow:
         ax.imshow(attn)#, cmap='hot')
         ax.set_xticks(np.arange(0, attn.size(1), 1)); ax.set_xticklabels(tokens)
@@ -1765,7 +1816,7 @@ def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x
             xticklabels=tokens, yticklabels=ytokens, ax=ax, **kwargs)
     _ = ax.set_xticklabels(ax.get_xmajorticklabels(), fontsize=fontsize, rotation=90)
     _ = ax.set_yticklabels(ax.get_ymajorticklabels(), fontsize=fontsize, rotation=0)
-    ax.tick_params(right=True, labelright=True, left=False, labelleft=False)#, top=True, labeltop=True) # cause x3 slowdown!
+    if transpose: ax.tick_params(right=True, labelright=True, left=False, labelleft=False)#, top=True, labeltop=True) # cause x3 slowdown!
     kwargs = dict(linewidths=0.5, color='grey')
     if y_pos is not None: ax.hlines(y=y_pos, xmin=0, xmax=attn.size(1)-0.5*use_imshow, **kwargs)  # max-0.5 for imshow
     if x_pos is not None: ax.vlines(x=x_pos, ymin=0, ymax=attn.size(0)-0.5*use_imshow, **kwargs)

@@ -1,3 +1,5 @@
+from lib2to3.pgen2.token import N_TOKENS
+from lib2to3.pgen2.tokenize import tokenize
 import sys
 import os
 import json
@@ -6,7 +8,7 @@ from collections import defaultdict, OrderedDict, Counter, Iterable
 from functools import partial
 import string
 from random import choice, choices, shuffle, sample, randint, random, seed
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from typing import Callable, Any
 import traceback
 
@@ -449,11 +451,14 @@ class BijectSet(Set):
 
 class TreeSet(Set):
     def __init__(self, data):
-        super().__init__(data, ['child', 'parent'])
+        super().__init__(data, ['child', 'parent', 'equal'])
         for parent, children in data.items():
             self.child._dict[parent] = children
-            for child in children: self.parent._dict[child] = [parent]
+            for child in children:
+                self.parent._dict[child] = [parent]
+                self.equal._dict[child] = [child]
         self.child._inv_dict, self.parent._inv_dict = self.parent._dict, self.child._dict
+        self.equal._inv_dict = self.equal._dict
 
 def MlM_gen(rels, cxt_len=3):
     candidates = OrderedDict()
@@ -470,13 +475,12 @@ def MlM_gen(rels, cxt_len=3):
     candidates[hop] = [choice(rel.inv_f(ans))] + sample(list(rel.dom() - set(rel.inv_f(ans))), cxt_len - 1)
     cxt = sample(list(zip(*candidates.values())), cxt_len)
 
-    def transform_fn(cxt, query):
-        hop = 0; tgt, ans = seq(cxt).find(lambda x: rels[hop][0].b(query, x[0]))#[1]
-        hop = 1; ans = rels[hop][0].f(ans)[0]
-        return tgt, ans
-    tgt, ans = transform_fn(cxt, query)
     hop = 1; candidates = ([rels[hop][0].f(x[1])[0] for x in cxt], [x[1] for x in cxt])
-    return cxt, query, candidates, ans
+    def transform_fn(cxt, query):
+        hop = 0; rel = rels[hop][0]; tgt, ans0 = seq(cxt).find(lambda x: rel.b(query, x[0]))#[1]
+        hop = 1; rel = rels[hop][0]; ans = rel.f(ans0)[0]
+        return tgt, ans0, ans
+    return cxt, query, candidates, transform_fn(cxt, query)
 
 def IlMlI_gen(rels, cxt_len=3):
     hop = 0
@@ -557,20 +561,60 @@ def _item2str(item, vocab=None, reverse=False):
 def _cxt2str(cxt, vocab=None, prefix='', sep=', ', item2str=_item2str):
     return prefix + sep.join([item2str(item, vocab) for item in cxt])
 
+@dataclass
+class Ranges:
+    bos: tuple = None
+    ans: tuple = None
+    ans0: tuple = None
+    query: tuple = None
+    tgt: tuple = None
+
+def get_word_by_range(tokens, r, space_token='Ġ'):
+    return ''.join(tokens[k].replace(space_token, '' if i == 0 else ' ') for i, k in enumerate(range(*r)))
+
+def locate(tokens, word, return_last=False, space_token='Ġ'):  # tricky
+    start_i, end_i = None, None
+    for i, token in enumerate(tokens):
+        _token = token.replace(space_token, '')
+        is_start_position = token.startswith(space_token) or i == 0 or tokens[i - 1] == 'Ċ' or \
+            not any(token.startswith(s) for s in string.ascii_letters)
+        if is_start_position and (word == _token or 
+            i + 1 < len(tokens) and word.startswith(_token + tokens[i + 1].replace(space_token, ' '))):
+            start_i = i
+            for j in range(i, len(tokens)):
+                if word.endswith(tokens[j].replace(space_token, '')):
+                    end_i = j + 1; break
+            assert end_i is not None, f'{tokens} {word} {start_i}'
+            if not return_last: break
+    assert start_i is not None, f'{tokens} {word}'
+    _word = get_word_by_range(tokens, (start_i, end_i), space_token=space_token)
+    assert _word == word, f'{_word} != {word} tokens = {tokens}, range = {(start_i, end_i)}'
+    return start_i, end_i
+
+def example2ranges(example, tokens, bos_token):
+    cxt, query, options, (tgt, ans0, ans) = example
+    assert locate(tokens, ans, return_last=True) == (tokens.index(bos_token) + 1, len(tokens))
+    return tokens, Ranges(
+        bos = locate(tokens, bos_token.replace('Ġ', '')),
+        ans = locate(tokens, ans, return_last=True),
+        ans0 = locate(tokens, ans0),
+        query = locate(tokens, query, return_last=True) if query else None,
+        tgt = locate(tokens, tgt) if query else None
+)
+
 def make_input_str(task, vocabs, examples, abstract=0, abstract_bos_token='Ġ->', options_position=None):
     cxt_len = len(examples[0][0])
-    default_item2str = partial(_item2str, reverse=abstract == 2) if cxt_len > 1 else lambda i, _: f'{i[1]}'
-    default_query2str = _str if cxt_len > 1 else lambda q, _: ''
+    default_item2str, default_query2str = (partial(_item2str, reverse=abstract == 2), _str) \
+        if cxt_len > 1 else (lambda i, _: f'{i[1]}', lambda q, _: '')
     cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)] \
         if abstract == 0 else [partial(_cxt2str, item2str=default_item2str), default_query2str, abstract_bos_token, _str]
     def example2str(vocab, example):
-        cxt, query, options, ans = example
+        cxt, query, options, (tgt, ans0, ans) = example
         strs = [cxt2str(cxt, vocab), query2str(query, vocab)]
         if options_position is not None: strs.insert(options_position, options2str(options))
         return '. '.join(s for s in strs if s != '') + bos_token.replace('Ġ', ' ') + ' ' + ans2str(ans)
 
-    text = '\n'.join(example2str(v, e) for v, e in zip(vocabs, examples)) + '\n'
-    return text
+    return '\n'.join(example2str(v, e) for v, e in zip(vocabs, examples)) + '\n'
 
 def inc(token):
     assert len(token) == 1 or token in ['->'], token
