@@ -1,9 +1,10 @@
 from __future__ import annotations
 from typing import Optional
 import dataclasses
-from dataclasses import dataclass, field
+from dataclasses import dataclass, is_dataclass, asdict
 
-
+import operator
+from operator import getitem, setitem
 from functools import partial
 from collections import defaultdict, OrderedDict, Counter
 from collections.abc import Iterable
@@ -38,6 +39,7 @@ def show_topk(values, indices, values_fn=lambda x: numpy(x, decimals=3), indices
     return dict(OrderedDict(zip(indices_fn(indices), values_fn(values))))
 
 def topk_md(tensor, k, largest=True, transpose=False):
+    k = min(tensor.numel(), k)
     if tensor.ndim == 1:
         values, indices = tensor.topk(k, largest=largest)
         return indices.numpy(), values.numpy()
@@ -149,11 +151,22 @@ def traverse(node, fn):
     fn(node)
     for child in node.children: traverse(child, fn)
 
-def reduce_objects(objs, fields, reduce_fn='mean'):
-    obj = dataclasses.replace(objs[0])
-    for field in fields:
-        if getattr(objs[0], field, None) is None: continue
-        setattr(obj, field, sum(getattr(o, field) for o in objs) / (len(objs) if reduce_fn == 'mean' else 1))
+def reduce_objects(objs, fields=None, reduce_fn='mean'):
+    if not isinstance(objs, list): objs = list(objs)
+    denorm = len(objs) if reduce_fn == 'mean' else 1
+    if isinstance(objs[0], torch.Tensor) or not isinstance(objs[0], dict) and not hasattr(objs[0], '__dict__'):
+        # print('In reduce_objects:', [type(o) for o in objs])
+        return sum(objs) / denorm
+    
+    obj, _fields, getter, setter = ({}, objs[0].keys(), getitem, setitem) if isinstance(objs[0], dict) else \
+        (type(objs[0])(), objs[0].__dict__.keys(), getattr, setattr)   # dict or (data)class object
+    _fields = [f for f in _fields if getter(objs[0], f) is not None]
+    fields = set(_fields).intersection(set(fields)) if fields is not None else _fields
+    for field in fields: setter(obj, field, sum(getter(o, field) for o in objs) / denorm)
+    # obj = dataclasses.replace(objs[0])
+    # for field in fields:
+    #     if getattr(objs[0], field, None) is None: continue
+    #     setattr(obj, field, sum(getattr(o, field) for o in objs) / (len(objs) if reduce_fn == 'mean' else 1))
     return obj
 
 def iterable(item):

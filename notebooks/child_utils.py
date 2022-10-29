@@ -16,6 +16,12 @@ from pattern.en import conjugate, lemma, lexeme, PRESENT, SG
 import nltk
 from nltk.corpus import cmudict  # nltk.download('cmudict')
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import torch
+import torch.nn.functional as F 
+
 from common_utils import join_lists, my_isinstance, lget
 
 sys.path.insert(0, '/nas/xd/projects/PyFunctional')
@@ -83,7 +89,7 @@ girls = [
 # https://www.verywellfamily.com/top-1000-baby-girl-names-2757832
 boys = [l.strip() for l in open('boy_names_1000.txt').readlines()]
 girls = [l.strip() for l in open('girl_names_1000.txt').readlines()]
-persons = boys + girls
+# persons = boys + girls
 
 noun2adj = [  # The adjective form of x is y
     ('rain','rainy'),
@@ -215,7 +221,7 @@ Types of tools: hammer, screwdriver, saw, drill, wrench
 Types of clothes: shirt, pants, dress, coat, shoes
 Types of fruits: apple, grape, pear, banana, orage
 Types of animals: dog, cat, horse, rabbit, pig'''
-types_of_things = {
+def types_of_things(): return {
     'animal': ['chicken', 'duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'bear', 'tiger', 'cat', 
             'zebra', 'pig', 'giraffe', 'monkey', 'rabbit', 'elephant', 'wolf', 'lion', 'deer', 'fox', 'gorilla', 'kangaroo'],
     'insect': ['bee', 'ant', 'mosquito', 'wasp', 'butterfly', 'beetle', 'spider'],  # , 'fly'
@@ -397,7 +403,8 @@ def starts_with_vowel_sound(word, pronunciations=cmudict.dict()):
 
 def add_a_or_an(word):
     word = lower(word)
-    if word.endswith('s'): return f'a pair of {word}' # plies, scissors
+    if word.endswith('s') and word not in ['bus'] and not word.endswith('ss'): # plies, scissors, etc. but not grass, dress, etc.
+        return f'a pair of {word}'
     return ('an' if starts_with_vowel_sound(word) else 'a') + ' ' + word
 
 class Relation(object):
@@ -411,22 +418,31 @@ class Relation(object):
     
 class Set(object):
     def __init__(self, data, rel_names):
-        # self.set_data(data)
+        self.data = data
         self.rel_names = rel_names
         for rel_name in self.rel_names:
             setattr(self, rel_name, Relation(_dict=defaultdict(list)))
 
+    def use(self, rel_names):
+        if isinstance(rel_names, str): rel_names = [rel_names]
+        self.used_rel_names = rel_names
+        self.relations = [getattr(self, rel_name) for rel_name in rel_names]
+        return self
+
+    def __str__(self):
+        return f"{self.data.__name__}.{self.__class__.__name__}.{'|'.join(self.used_rel_names)}"
+
 class EqSet(Set):
     def __init__(self, data):
-        self.data = data
-        self.rel_names = ['equal']
+        super().__init__(data, ['equal'])
+        data = data()
         for rel_name, d in zip(self.rel_names, [{data[i]: [data[i]] for i in range(0, len(data))}]):
             setattr(self, rel_name, Relation(_dict=d))
 
 class PoSet(Set):
     def __init__(self, data):
-        self.data = data
-        self.rel_names = ['prev', 'next', 'equal']
+        super().__init__(data, ['prev', 'next', 'equal'])
+        data = data()
         for rel_name, d in zip(self.rel_names, [{data[i]: data[i - 1] for i in range(1, len(data))},
                                                 {data[i]: data[i + 1] for i in range(0, len(data) - 1)},
                                                 {data[i]: data[i] for i in range(0, len(data))}]):
@@ -435,6 +451,7 @@ class PoSet(Set):
 class SymSet(Set):
     def __init__(self, data):
         super().__init__(data, ['similar', 'opposite', 'equal'])
+        data = data()
         for pair in data:
             for similars, opposites in [(pair[0], pair[1]), (pair[1], pair[0])]:
                 for i, e in enumerate(similars):
@@ -452,6 +469,7 @@ class BijectSet(Set):
 class TreeSet(Set):
     def __init__(self, data):
         super().__init__(data, ['child', 'parent', 'equal'])
+        data = data()
         for parent, children in data.items():
             self.child._dict[parent] = children
             for child in children:
@@ -462,6 +480,7 @@ class TreeSet(Set):
 
 def MlM_gen(rels, cxt_len=3):
     candidates = OrderedDict()
+    rels = [s.relations for s in rels]
     hop = 0; rel = rels[hop][0]
     query = choice(list(rel.dom()))
     candidates[hop] = [choice(r.f(query)) for r in rels[hop][:1]]
@@ -475,7 +494,7 @@ def MlM_gen(rels, cxt_len=3):
     candidates[hop] = [choice(rel.inv_f(ans))] + sample(list(rel.dom() - set(rel.inv_f(ans))), cxt_len - 1)
     cxt = sample(list(zip(*candidates.values())), cxt_len)
 
-    hop = 1; candidates = ([rels[hop][0].f(x[1])[0] for x in cxt], [x[1] for x in cxt])
+    candidates = ([rel.f(x[1])[0] for x in cxt], [x[1] for x in cxt])
     def transform_fn(cxt, query):
         hop = 0; rel = rels[hop][0]; tgt, ans0 = seq(cxt).find(lambda x: rel.b(query, x[0]))#[1]
         hop = 1; rel = rels[hop][0]; ans = rel.f(ans0)[0]
@@ -572,49 +591,72 @@ class Ranges:
 def get_word_by_range(tokens, r, space_token='Ġ'):
     return ''.join(tokens[k].replace(space_token, '' if i == 0 else ' ') for i, k in enumerate(range(*r)))
 
-def locate(tokens, word, return_last=False, space_token='Ġ'):  # tricky
-    start_i, end_i = None, None
-    for i, token in enumerate(tokens):
-        _token = token.replace(space_token, '')
-        is_start_position = token.startswith(space_token) or i == 0 or tokens[i - 1] == 'Ċ' or \
-            not any(token.startswith(s) for s in string.ascii_letters)
-        if is_start_position and (word == _token or 
-            i + 1 < len(tokens) and word.startswith(_token + tokens[i + 1].replace(space_token, ' '))):
-            start_i = i
-            for j in range(i, len(tokens)):
-                if word.endswith(tokens[j].replace(space_token, '')):
-                    end_i = j + 1; break
-            assert end_i is not None, f'{tokens} {word} {start_i}'
-            if not return_last: break
-    assert start_i is not None, f'{tokens} {word}'
-    _word = get_word_by_range(tokens, (start_i, end_i), space_token=space_token)
-    assert _word == word, f'{_word} != {word} tokens = {tokens}, range = {(start_i, end_i)}'
-    return start_i, end_i
+# adapted from: https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py find_token_range
+def locate(tokens, substring, return_last=False, space_token='Ġ'):
+    whole_string = "".join(t.replace(space_token, ' ') for t in tokens)
+    char_loc = getattr(whole_string, 'index' if not return_last else 'rindex')(substring)
+    loc = 0; tok_start, tok_end = None, None
+    for i, t in enumerate(tokens):
+        _t = t.replace(space_token, '')
+        loc += len(t)
+        if tok_start is None and loc > char_loc:
+            assert substring.startswith(_t), f'{whole_string}\n{tokens}\n{substring} not startswith {_t} at {i}'
+            tok_start = i
+        if tok_end is None and loc >= char_loc + len(substring):
+            assert substring.endswith(_t), f'{whole_string}\n{tokens}\n{substring} not endswith {_t} at {i}'
+            tok_end = i + 1
+            break
+    return (tok_start, tok_end)
 
 def example2ranges(example, tokens, bos_token):
     cxt, query, options, (tgt, ans0, ans) = example
-    assert locate(tokens, ans, return_last=True) == (tokens.index(bos_token) + 1, len(tokens))
-    return tokens, Ranges(
+    assert locate(tokens, ans, return_last=True) == (tokens.index(bos_token) + 1, len(tokens)), \
+        f'{tokens} {ans}\n{locate(tokens, ans, return_last=True)} != {(tokens.index(bos_token) + 1, len(tokens))}'
+    return Ranges(
         bos = locate(tokens, bos_token.replace('Ġ', '')),
         ans = locate(tokens, ans, return_last=True),
         ans0 = locate(tokens, ans0),
         query = locate(tokens, query, return_last=True) if query else None,
         tgt = locate(tokens, tgt) if query else None
-)
+    )
 
-def make_input_str(task, vocabs, examples, abstract=0, abstract_bos_token='Ġ->', options_position=None):
+abstract_bos_token = 'Ġ->'
+
+def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
     cxt_len = len(examples[0][0])
-    default_item2str, default_query2str = (partial(_item2str, reverse=abstract == 2), _str) \
-        if cxt_len > 1 else (lambda i, _: f'{i[1]}', lambda q, _: '')
+    abs_item2str, abs_query2str = (partial(_item2str, reverse=abstract == 2), _str)
+    if cxt_len == 1:
+        abs_item2str, abs_query2str = (lambda i, _: f'{i[1]}', lambda q, _: '')
+        examples = [(cxt, None, None, (None, ans0, ans)) for cxt, query, options, (tgt, ans0, ans) in examples]
     cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)] \
-        if abstract == 0 else [partial(_cxt2str, item2str=default_item2str), default_query2str, abstract_bos_token, _str]
+        if abstract == 0 else [partial(_cxt2str, item2str=abs_item2str), abs_query2str, abstract_bos_token, _str]
     def example2str(vocab, example):
         cxt, query, options, (tgt, ans0, ans) = example
         strs = [cxt2str(cxt, vocab), query2str(query, vocab)]
         if options_position is not None: strs.insert(options_position, options2str(options))
         return '. '.join(s for s in strs if s != '') + bos_token.replace('Ġ', ' ') + ' ' + ans2str(ans)
 
-    return '\n'.join(example2str(v, e) for v, e in zip(vocabs, examples)) + '\n'
+    return examples, '\n'.join(example2str(v, e) for v, e in zip(vocabs, examples)) + '\n', bos_token
+
+def generate(task, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True):
+    counts = []
+    while len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3:
+        vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
+        answer_indices = [cands[0].index(ans) for _, _, cands, (tgt, ans0, ans) in examples]
+        counts = [v for k, v in Counter(answer_indices).most_common()]
+    if cxt_len > 1 and plot:
+        print(Counter(answer_indices).most_common())
+        label_probs = F.one_hot(torch.LongTensor(answer_indices))
+        _ = plt.figure(figsize=(10, 0.7))
+        _ = sns.heatmap(label_probs.T, cbar=False); plt.show()
+    examples, text, bos_token = make_input_str(task, vocabs, examples, abstract=abstract)
+
+    if verbose: print(text)
+    return examples, text, bos_token
+
+def task2str(task):
+    vocab_fn, gen_fn, *_ = task
+    return f"{gen_fn.__name__}({', '.join(str(v) for v in vocab_fn())})"
 
 def inc(token):
     assert len(token) == 1 or token in ['->'], token
