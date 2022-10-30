@@ -33,7 +33,7 @@ def numpy(a, decimals=None):
     if decimals is not None: v = v.round(decimals)
     return v
 
-def show_topk(values, indices, values_fn=lambda x: numpy(x, decimals=3), indices_fn=None):
+def show_topk(values, indices, values_fn=lambda x: numpy(x, decimals=3), indices_fn=None, transpose=False):
     if indices_fn is None:
         indices_fn = show_topk.indices_fn if getattr(show_topk, 'indices_fn', None) is not None else lambda x: x
     return dict(OrderedDict(zip(indices_fn(indices), values_fn(values))))

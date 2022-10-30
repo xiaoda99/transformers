@@ -830,10 +830,11 @@ def get_argmax_labels(model, hidden_states, labels, logits=None):
     argmax_labels[labels != -100] = logits.argmax(-1)[labels != -100]
     return argmax_labels
 
-def locate_answers(input_ids, tokenizer, bos_token='Ġ->', eos_token='Ċ', nrows=None):
+def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token='Ġ->', eos_token='Ċ', nrows=None):
     assert input_ids.size(0) == 1  # bsz == 1
-    bos_id = tokenizer.convert_tokens_to_ids(bos_token)
-    bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()#[1:]
+    if bos_indices is None:
+        bos_id = tokenizer.convert_tokens_to_ids(bos_token)
+        bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()#[1:]
     if nrows is not None:
         assert nrows == len(bos_indices)
     else:
@@ -876,11 +877,9 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=None, eos_tok
     if bos_token is None: bos_token == abstract_bos_token
     example_strs = text.strip().split('\n')
     input_ids = tokenizer.encode(text, return_tensors='pt')
-    # tokens = tokenizer.tokenize(text)
-    # # tokenize without tokenization artifact -> needed for visualization, from unseal
-    # tokens = list(map(tokenizer.convert_tokens_to_string, map(lambda x: [x], tokens)))
     ranges = locate_ranges(examples, example_strs, tokenizer, bos_token)
-    bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_token=bos_token, eos_token=eos_token)
+    bos_indices = [r.bos[0] for r in ranges]
+    bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
     if s2s:  # for t5 models
         bos_i, eos_i = bos_indices[-1], eos_indices[-1]
         assert eos_i == input_ids.size(1) - 1, f'{eos_i} != {input_ids.size()}[1] - 1'

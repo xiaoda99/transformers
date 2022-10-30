@@ -11,13 +11,17 @@ from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass, fields
 from typing import Callable, Any
 import traceback
+from functools import lru_cache
+import time
+
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from pattern.en import conjugate, lemma, lexeme, PRESENT, SG
 import nltk
 from nltk.corpus import cmudict  # nltk.download('cmudict')
-
-import matplotlib.pyplot as plt
-import seaborn as sns
+import openai
+from cachier import cachier
 
 import torch
 import torch.nn.functional as F 
@@ -224,17 +228,27 @@ Types of animals: dog, cat, horse, rabbit, pig'''
 def types_of_things(): return {
     'animal': ['chicken', 'duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'bear', 'tiger', 'cat', 
             'zebra', 'pig', 'giraffe', 'monkey', 'rabbit', 'elephant', 'wolf', 'lion', 'deer', 'fox', 'gorilla', 'kangaroo'],
-    'insect': ['bee', 'ant', 'mosquito', 'wasp', 'butterfly', 'beetle', 'spider'],  # , 'fly'
-    'flower': ['rose', 'tulip', 'lily', 'daisy', 'sunflower'],
-    'fruit': ['apple', 'banana', 'pear', 'grape', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberry',
-            'blueberry', 'strawberry', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'],
-    'vehicle': ['car', 'bus', 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage', 
-                'subway', 'taxi', 'van', 'boat'],  # transportation
-    'weapon': ['gun', 'rifle', 'sword', 'pistol', 'dagger', 'bomb', 'grenade', 'cannon'],
-    'furniture': ['sofa', 'couch', 'desk', 'chair', 'table', 'bed', 'bookshelf'],# 'closet', 'wardrobe'],
-    'tool': ['hammer', 'spanner', 'awl', 'scissors', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'], #, 'axe' should be weapon?
-    'clothing': ['shirt', 'pants', 'dress', 'coat', 'socks', 'hat', 'tie', 'jacket', 'skirt', 'trousers', 'jeans'], #, 'shoes'
-    'appliance': ['microwave', 'fridge', 'washer', 'dryer', 'washing machine'],  #, 'oven'
+    'fruit': ['apple', 'banana', 'pear', 'grapes', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberry',
+            'blueberries', 'strawberries', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'], # may be food too?
+    'drink': ['tea', 'coffee', 'beer', 'wine', 'whiskey', 'vodka', 'soda', 'juice', 'cocktail'],  # some as alcohol
+    'food': ['hamburger', 'burger', 'bread', 'meat', 'pizza', 'cakes', 'biscuits', 'spaghetti',
+            'chips', 'peanuts', 'nuts', 'steak', 'pork', 'beef', 'mutton'],  # last three as meat
+    'weapon': ['gun', 'rifle', 'sword', 'pistol', 'dagger', 'bomb', 'grenade', 'cannon'],  # some as firearms
+    'color': ['white', 'black', 'red', 'yellow', 'blue', 'green', 'purple', 'pink', 'gray'],
+    # 'insect': ['bee', 'ant', 'mosquito', 'wasp', 'butterfly', 'beetle', 'spider'],  # , 'fly'
+    # 'flower': ['rose', 'tulip', 'lily', 'daisy', 'sunflower'],
+    # 'vehicle': ['car', 'bus', 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage', 
+    #             'subway', 'taxi', 'van', 'boat'],  # transportation
+    # 'furniture': ['sofa', 'couch', 'desk', 'chair', 'table', 'bed', 'bookshelf'],# 'closet', 'wardrobe'],
+    # 'tool': ['hammer', 'spanner', 'awl', 'scissors', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'], #, 'axe' should be weapon?
+    # 'clothing': ['shirt', 'pants', 'dress', 'coat', 'socks', 'hat', 'tie', 'jacket', 'skirt', 'trousers', 'jeans'], #, 'shoes'
+    # 'appliance': ['microwave', 'fridge', 'washer', 'dryer', 'washing machine'],  #, 'oven'
+    # 'fish': [],
+    # 'country': [],
+    # 'language': [],
+    # 'temperature': [],
+    # 'age': [],
+    # 'sport': [],
     # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
     # 'electronics': ['computer', 'laptop', 'iPad', 'phone', 'smartphone', 'television', 'camera', 'printer'],
     # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
@@ -368,6 +382,40 @@ country2capital = [ #The capital of Germany is Berlin.
 demonyms = {country: resident for resident, country in csv.reader(open('demonyms.csv'))}
 demonyms.update({'the United States': 'American', 'the United Kingdom': 'British', 'United States': 'American', 'United Kingdom': 'British'})
 city2resident = [(capital, demonyms[country.replace('the ', '')]) for country, capital in country2capital]
+
+# @lru_cache(maxsize=1024)
+# @cachier()
+# decorators do not work well with autoreload, so implement my own cache instead
+def query_openai(prompt, max_tokens=20, engine='text-davinci-002'):
+    if not hasattr(query_openai, 'cache'): query_openai.cache = {}
+    cache = query_openai.cache; key = (engine, prompt)
+    if key not in cache:
+        t0 = time.time()
+        response = openai.Completion.create(engine=engine, prompt=prompt,
+            max_tokens=max_tokens, temperature=0, echo=False, stop='\n')
+        text = response.choices[0].text
+        cache[key] = text
+        last_line = prompt.split('\n')[-1]; print(f"In query_openai: {last_line} -> {text}")
+        time.sleep(max(0, 1.1 - (time.time() - t0)))  # to avoid reaching rate limit of 60 / min
+    return cache[key]
+
+def wrap_noun(noun):
+    prompt_fn = lambda s: \
+f'''apple: There is an apple.
+chip: There are chips.
+coffee: There is coffee.
+biscuit: There are biscuits.
+dog: There is a dog.
+tea: There is tea.
+{s}: There'''
+    def extract_fn(text):
+        text = text.replace(' is ', '').replace(' are ', '')
+        if text.endswith('.'): text = text[:-1]
+        if not text.split()[-1].startswith(noun[:2]): # e.g. 'red' -> 'a red apple'
+            print(f'{noun} -> {text}. Skip abnormal wrap')
+            text = noun
+        return text
+    return extract_fn(query_openai(prompt_fn(noun)))
 
 grammar_correction = [
     ('Anna and Mike is going skiing.', 'Anna and Mike are going skiing.'),
@@ -591,9 +639,10 @@ class Ranges:
 def get_word_by_range(tokens, r, space_token='Ġ'):
     return ''.join(tokens[k].replace(space_token, '' if i == 0 else ' ') for i, k in enumerate(range(*r)))
 
-# adapted from: https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py find_token_range
+# adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
 def locate(tokens, substring, return_last=False, space_token='Ġ'):
     whole_string = "".join(t.replace(space_token, ' ') for t in tokens)
+    assert substring in whole_string, f'{tokens}\n{substring} not int {whole_string}'
     char_loc = getattr(whole_string, 'index' if not return_last else 'rindex')(substring)
     loc = 0; tok_start, tok_end = None, None
     for i, t in enumerate(tokens):
@@ -610,10 +659,8 @@ def locate(tokens, substring, return_last=False, space_token='Ġ'):
 
 def example2ranges(example, tokens, bos_token):
     cxt, query, options, (tgt, ans0, ans) = example
-    assert locate(tokens, ans, return_last=True) == (tokens.index(bos_token) + 1, len(tokens)), \
-        f'{tokens} {ans}\n{locate(tokens, ans, return_last=True)} != {(tokens.index(bos_token) + 1, len(tokens))}'
     return Ranges(
-        bos = locate(tokens, bos_token.replace('Ġ', '')),
+        bos = locate(tokens, bos_token.replace('Ġ', ''), return_last=True),
         ans = locate(tokens, ans, return_last=True),
         ans0 = locate(tokens, ans0),
         query = locate(tokens, query, return_last=True) if query else None,
@@ -624,12 +671,14 @@ abstract_bos_token = 'Ġ->'
 
 def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
     cxt_len = len(examples[0][0])
-    abs_item2str, abs_query2str = (partial(_item2str, reverse=abstract == 2), _str)
-    if cxt_len == 1:
-        abs_item2str, abs_query2str = (lambda i, _: f'{i[1]}', lambda q, _: '')
-        examples = [(cxt, None, None, (None, ans0, ans)) for cxt, query, options, (tgt, ans0, ans) in examples]
-    cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)] \
-        if abstract == 0 else [partial(_cxt2str, item2str=abs_item2str), abs_query2str, abstract_bos_token, _str]
+    if abstract != 0:
+        item2str, query2str = (partial(_item2str, reverse=abstract == 2), _str)
+        if cxt_len == 1:
+            item2str, query2str = (lambda i, _: f'{i[1]}', lambda q, _: '')
+            examples = [(cxt, None, None, (None, ans0, ans)) for cxt, query, options, (tgt, ans0, ans) in examples]
+        cxt2str, bos_token, ans2str = partial(_cxt2str, item2str=item2str), abstract_bos_token, _str
+    else:
+        cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)]
     def example2str(vocab, example):
         cxt, query, options, (tgt, ans0, ans) = example
         strs = [cxt2str(cxt, vocab), query2str(query, vocab)]
