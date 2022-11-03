@@ -27,6 +27,7 @@ import torch
 import torch.nn.functional as F 
 
 from common_utils import join_lists, my_isinstance, lget
+from openai_utils import query_openai
 
 sys.path.insert(0, '/nas/xd/projects/PyFunctional')
 from functional import seq
@@ -215,26 +216,28 @@ antonyms = [
     ('right', 'wrong'),
     ('rich', 'poor'),
     ('clever', 'stupid'),
+    ('healthy', 'ill'),
     ('male', 'female'),
     ('man', 'woman'),
-    ('true', 'false'),
+    # ('true', 'false'),
 ]
 
 '''gpt-3 prompt
 Types of tools: hammer, screwdriver, saw, drill, wrench
 Types of clothes: shirt, pants, dress, coat, shoes
-Types of fruits: apple, grape, pear, banana, orage
+Types of fruits: apple, grape, pear, banana, orange
 Types of animals: dog, cat, horse, rabbit, pig'''
 def types_of_things(): return {
-    'animal': ['chicken', 'duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'bear', 'tiger', 'cat', 
-            'zebra', 'pig', 'giraffe', 'monkey', 'rabbit', 'elephant', 'wolf', 'lion', 'deer', 'fox', 'gorilla', 'kangaroo'],
+    'animal': ['chicken', 'duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'bear', 'tiger', 'cat', 'zebra', 'pig', 
+            'giraffe', 'monkey', 'rabbit', 'elephant', 'wolf', 'lion', 'deer', 'fox', 'gorilla', 'kangaroo', 'squirrel', 'mouse'], # 21-5, 15-8
     'fruit': ['apple', 'banana', 'pear', 'grapes', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberry',
             'blueberries', 'strawberries', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'], # may be food too?
-    'drink': ['tea', 'coffee', 'beer', 'wine', 'whiskey', 'vodka', 'soda', 'juice', 'cocktail'],  # some as alcohol
-    'food': ['hamburger', 'burger', 'bread', 'meat', 'pizza', 'cakes', 'biscuits', 'spaghetti',
-            'chips', 'peanuts', 'nuts', 'steak', 'pork', 'beef', 'mutton'],  # last three as meat
-    'weapon': ['gun', 'rifle', 'sword', 'pistol', 'dagger', 'bomb', 'grenade', 'cannon'],  # some as firearms
-    'color': ['white', 'black', 'red', 'yellow', 'blue', 'green', 'purple', 'pink', 'gray'],
+    'drink': ['tea', 'coffee', 'beer', 'wine', 'whiskey', 'vodka', 'soda', 'juice', 'cocktail'],  # some as alcohol, 21-5, 15-8
+    'food': ['hamburger', 'burger', 'bread', 'meat', 'pizza', 'cake', 'steak', 'spaghetti',
+            # 'biscuits', 'spaghetti', 'chips', 'peanuts', 'nuts', 'pork', 'beef', 'mutton'
+            ],  # last three as meat， 21-5， 15-8
+    'weapon': ['gun', 'handgun', 'shotgun', 'rifle',  'pistol', 'revolver', 'grenade', 'cannon'], #'bomb', 'dagger', 'sword',], # 21-5, 15-8, though latter prefers firearm
+    'color': ['white', 'black', 'red', 'yellow', 'blue', 'green', 'purple', 'pink', 'gray'],  # 15-8
     # 'insect': ['bee', 'ant', 'mosquito', 'wasp', 'butterfly', 'beetle', 'spider'],  # , 'fly'
     # 'flower': ['rose', 'tulip', 'lily', 'daisy', 'sunflower'],
     # 'vehicle': ['car', 'bus', 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage', 
@@ -383,22 +386,6 @@ demonyms = {country: resident for resident, country in csv.reader(open('demonyms
 demonyms.update({'the United States': 'American', 'the United Kingdom': 'British', 'United States': 'American', 'United Kingdom': 'British'})
 city2resident = [(capital, demonyms[country.replace('the ', '')]) for country, capital in country2capital]
 
-# @lru_cache(maxsize=1024)
-# @cachier()
-# decorators do not work well with autoreload, so implement my own cache instead
-def query_openai(prompt, max_tokens=20, engine='text-davinci-002'):
-    if not hasattr(query_openai, 'cache'): query_openai.cache = {}
-    cache = query_openai.cache; key = (engine, prompt)
-    if key not in cache:
-        t0 = time.time()
-        response = openai.Completion.create(engine=engine, prompt=prompt,
-            max_tokens=max_tokens, temperature=0, echo=False, stop='\n')
-        text = response.choices[0].text
-        cache[key] = text
-        last_line = prompt.split('\n')[-1]; print(f"In query_openai: {last_line} -> {text}")
-        time.sleep(max(0, 1.1 - (time.time() - t0)))  # to avoid reaching rate limit of 60 / min
-    return cache[key]
-
 def wrap_noun(noun):
     prompt_fn = lambda s: \
 f'''apple: There is an apple.
@@ -412,7 +399,7 @@ tea: There is tea.
         text = text.replace(' is ', '').replace(' are ', '')
         if text.endswith('.'): text = text[:-1]
         if not text.split()[-1].startswith(noun[:2]): # e.g. 'red' -> 'a red apple'
-            print(f'{noun} -> {text}. Skip abnormal wrap')
+            # print(f'{noun} -> {text}. Skip abnormal wrap')
             text = noun
         return text
     return extract_fn(query_openai(prompt_fn(noun)))
@@ -529,12 +516,16 @@ class TreeSet(Set):
 def MlM_gen(rels, cxt_len=3):
     candidates = OrderedDict()
     rels = [s.relations for s in rels]
+    # print(rels)
     hop = 0; rel = rels[hop][0]
-    query = choice(list(rel.dom()))
+    # print(rel._dict)
+    query = choice(list(rel.dom())) # 选择查询
     candidates[hop] = [choice(r.f(query)) for r in rels[hop][:1]]
+    
     # candidates[hop] = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
     candidates[hop] += sample(list(rel.codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
-        cxt_len - len(candidates[hop]))
+        cxt_len - len(candidates[hop])) # 选择候选
+    
 
     hop = 1; rel = rels[hop][0]
     # candidates[hop] = sample(list(rel.dom()), cxt_len)

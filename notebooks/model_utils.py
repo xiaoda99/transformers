@@ -70,7 +70,7 @@ class Attributions:
 @dataclass
 class AttrData:
     step: int = None
-    topk: int = None
+    topi: int = None
     layer: int = None
     head: int = None
     label_type: str = None
@@ -971,6 +971,7 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size):
     def get_slice(r, name):
         if name.startswith('['): b, _ = getattr(r, name[1:]); e = b + 1
         elif name.endswith(']'): _, e = getattr(r, name[:-1]); b = e - 1
+        elif name.endswith('+'): _, e = getattr(r, name[:-1]); b, e = e, e + 1
         else: b, e = getattr(r, name)
         return slice(b, e)
     for r in ranges: attn_labels[get_slice(r, q), get_slice(r, k)] = 1
@@ -1185,16 +1186,17 @@ def attribute2(forward_fn, model, x, post_forward_fn):
     mlp_attr = y[1 + L * H:]#.view(L, 1)  # l1
     return Attributions(embed=embed_attr, head=head_attr, mlp=mlp_attr)
 
-def attribute_step(model, data_tuple, node, root, attribute_k=False):
+def attribute_step(model, data_tuple, node, attribute_k=False):
     L = len(model.transformer.h)
     text, input_ids, labels, ranges, *_, o = data_tuple
-    fns = path2fns(node, root, partial(node2fn, model=model, outputs=o, labels=labels))
+    fns = path2fns(node, partial(node2fn, model=model, outputs=o, labels=labels))
     (output_layer, _labels) = (node.data.layer, None) if len(fns) > 0 else (L, labels)
+    if _labels is not None and node.data.label_type == 'argmax_labels':  # for root
+        _labels = get_argmax_labels(model, o.hidden_states[-2], _labels)
     to_layer = max(output_layer) if isinstance(output_layer, Iterable) else output_layer
     fwd_fn = partial(sum_forward, outputs=o, labels=_labels, output_layer=output_layer)
-    keys = ['embed_mask', 'mlp_mask', 'attn_weights']
+    keys = ['attn_weights']#, 'mlp_mask', 'embed_mask']
     x = OrderedDict((key, get_x(key, o, to_layer=to_layer)) for key in keys)
-    # _labels = get_argmax_labels(model, o.hidden_states[-2], _labels)
     attr, ys, logits = attribute(fwd_fn, model, x, fns, num_points=4 if attribute_k else 7) 
     # fwd_fn = partial(sum_forward, outputs=o, labels=_labels, reduce_fn=torch.cat, scaled=False)
     # attr2 = attr #attribute2(fwd_fn, model, x, fns)
@@ -1225,6 +1227,7 @@ def plot_attr(attr, attr2):
 
 def plot_attrs(attrs, figsize=(4, 4), topk=None):
     fig, axs = plt.subplots(1, len(attrs), sharey=False, figsize=(figsize[0] * len(attrs), figsize[1]))
+    if len(attrs) == 1: axs = [axs]
     for ax, a in zip(axs, attrs):
         res = sns.heatmap(a, cbar=False, ax=ax)
         _ = res.set_yticklabels(res.get_ymajorticklabels(), rotation=0)
@@ -1253,6 +1256,30 @@ def data2str(data):
     if attribute_k: s = s + ' ' + 'attr_k'
     return s
 
+def add_node(parent, layer=None, head=None, topi=None, label_type='attn_labels', attribute_k=False):
+    if parent is None:
+        si = -1; node = Node('[-1] root ' + label_type)
+        node.data = AttrData(step=si, label_type=label_type)
+    else:
+        if layer is None or topi is not None:
+            attr = parent.data.attr
+            layer, head = topk_md(attr.head, 10, transpose=True)[topi][:2] if type(topi) == int \
+                else np.array(topk_md(attr.head, 10)[:2])[:, topi] # list
+        si = parent.data.step
+        if si == -1: assert label_type is not None
+        else: label_type = None
+        data = AttrData(step=si + 1, topi=topi, layer=layer, head=head, label_type=label_type, 
+            attribute_k=label_type in ['argmax_attn_labels', 'attn_labels'] and attribute_k)
+        node = Node(data2str(data), parent); node.data = data
+    return node
+
+def plot_tree(node):
+    root = node
+    while 'root' not in root.name: root = root.parent
+    node.name = '*' + node.name
+    print_tree(root)
+    node.name = node.name[1:]  # strip prepending '*'
+
 def get_argmax_attn_labels(o, layer, head, labels=None):
     # attn_labels = torch.einsum('bnij,bnj->bnij', o.attentions[layer], o.head_inputs[layer].norm(dim=-1)) # bnje->bnj
     # return attn_labels[0, head]  # 1nij->ij
@@ -1280,11 +1307,12 @@ def node2fn(node, model, outputs, labels, attn_mask=None):
     kwargs = maybe_map(get_kwargs, layer, head)
     return partial(head_forward, layer=layer, head=head, **kwargs)
 
-def path2fns(node, root, node2fn):
+def path2fns(node, node2fn):
     fns = []
-    while node != root:
+    while 'root' not in node.name:
         fns.append(node2fn(node))
-        node = node.parent if not node.data.label_type else root
+        if node.data.label_type is None: node = node.parent
+        else: break
     return fns
 
 def get_head_weights(model, layer, head=None, transpose=True, absorb_ln=False):
