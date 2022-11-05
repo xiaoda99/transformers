@@ -40,7 +40,7 @@ sys.path.insert(0, '/nas/xd/projects/pptree')
 from pptree import Node, print_tree
 
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, \
-    equal, join_lists, iterable, pad, Timer, maybe_map
+    equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects
 from child_utils import example2ranges, abstract_bos_token
 
 @dataclass
@@ -1195,12 +1195,13 @@ def attribute_step(model, data_tuple, node, attribute_k=False):
         _labels = get_argmax_labels(model, o.hidden_states[-2], _labels)
     to_layer = max(output_layer) if isinstance(output_layer, Iterable) else output_layer
     fwd_fn = partial(sum_forward, outputs=o, labels=_labels, output_layer=output_layer)
-    keys = ['attn_weights']#, 'mlp_mask', 'embed_mask']
+    keys = ['attn_weights', 'mlp_mask']#, 'embed_mask']
     x = OrderedDict((key, get_x(key, o, to_layer=to_layer)) for key in keys)
     attr, ys, logits = attribute(fwd_fn, model, x, fns, num_points=4 if attribute_k else 7) 
     # fwd_fn = partial(sum_forward, outputs=o, labels=_labels, reduce_fn=torch.cat, scaled=False)
     # attr2 = attr #attribute2(fwd_fn, model, x, fns)
     o.attn_attr[node.name] = attr.attn # associate non-averageable attn attr to current node. tricky
+    del attr.attn  # avoid being reduced by reduce_objects
     return attr
 
 def get_x(key, outputs, to_layer=None):
@@ -1228,8 +1229,10 @@ def plot_attr(attr, attr2):
 def plot_attrs(attrs, figsize=(4, 4), topk=None):
     fig, axs = plt.subplots(1, len(attrs), sharey=False, figsize=(figsize[0] * len(attrs), figsize[1]))
     if len(attrs) == 1: axs = [axs]
-    for ax, a in zip(axs, attrs):
+    titles, attrs = (attrs.keys(), attrs.values()) if isinstance(attrs, dict) else ([None] * len(attrs), attrs)
+    for ax, a, title in zip(axs, attrs, titles):
         res = sns.heatmap(a, cbar=False, ax=ax)
+        if title is not None: ax.set_title(title)
         _ = res.set_yticklabels(res.get_ymajorticklabels(), rotation=0)
         # res.tick_params(top=False, right=True, labeltop=False, labelright=True)
     plt.show()
@@ -1245,9 +1248,10 @@ def get_head_rank(head_attr, layer, head, topk=20):
         return head2rank.get((layer,), None)
 
 def data2str(data):
-    i, topk, layer, head, label_type, attribute_k = data.step, data.topk, data.layer, data.head, data.label_type, data.attribute_k
-    # s = f'[{i}] top{topk} {layer}' if head is None else f'[{i}] top{topk} {layer}-{head}'
-    s = f'[{i}] top{topk} '
+    i, topi, layer, head, label_type, attribute_k = data.step, data.topi, data.layer, data.head, data.label_type, data.attribute_k
+    # s = f'[{i}] top{topi} {layer}' if head is None else f'[{i}] top{topi} {layer}-{head}'
+    s = f'[{i}] '
+    if topi is not None: s += f'top{topi} '
     if head is None: s += f'{layer}'
     elif not isinstance(layer, Iterable): s += f'{layer}-{head}'
     else: s += ','.join([f'{l}-{h}' for l, h in zip(layer, head)])
@@ -1280,6 +1284,15 @@ def plot_tree(node):
     print_tree(root)
     node.name = node.name[1:]  # strip prepending '*'
 
+def show_result(result):
+    print('\n'.join(result.texts[-1].split('\n')[:3]))
+    n = node = result.node; plot_tree(node)
+    while n is not None:
+        print(n.name)
+        data = n.data; plot_attrs(dict(getattr(data, 'scores', {}), attr=data.attr.head), topk=10)
+        n = n.parent
+    return data, result.data_tuples
+    
 def get_argmax_attn_labels(o, layer, head, labels=None):
     # attn_labels = torch.einsum('bnij,bnj->bnij', o.attentions[layer], o.head_inputs[layer].norm(dim=-1)) # bnje->bnj
     # return attn_labels[0, head]  # 1nij->ij

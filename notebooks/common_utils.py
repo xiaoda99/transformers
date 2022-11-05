@@ -163,12 +163,13 @@ def reduce_objects(objs, fields=None, reduce_fn='mean'):
     _fields = [f for f in _fields if getter(objs[0], f) is not None]
     fields = set(_fields).intersection(set(fields)) if fields is not None else _fields
     for field in fields: setter(obj, field, sum(getter(o, field) for o in objs) / denorm)
-    # obj = dataclasses.replace(objs[0])
-    # for field in fields:
-    #     if getattr(objs[0], field, None) is None: continue
-    #     setattr(obj, field, sum(getattr(o, field) for o in objs) / (len(objs) if reduce_fn == 'mean' else 1))
     return obj
 
+def mr(fn):
+    def mapreduced_fn(data, *args, **kwargs):
+        return reduce_objects([fn(d, *args, **kwargs) for d in data])
+    return mapreduced_fn
+    
 def iterable(item):
     return isinstance(item, Iterable) and not isinstance(item, (tuple, str, torch.Tensor))
 
