@@ -1,6 +1,8 @@
 import time
 import openai
 
+openai.api_key = open('/nas/xd/projects/openai_api_keys.txt').readlines()[2].split()[0]
+
 # @lru_cache(maxsize=1024)
 # @cachier()
 # decorators do not work well with autoreload, so implement my own cache instead

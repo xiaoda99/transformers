@@ -1,5 +1,3 @@
-from lib2to3.pgen2.token import N_TOKENS
-from lib2to3.pgen2.tokenize import tokenize
 import sys
 import os
 import json
@@ -9,19 +7,14 @@ from functools import partial
 import string
 from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass, fields
-from typing import Callable, Any
 import traceback
-from functools import lru_cache
 import time
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 from pattern.en import conjugate, lemma, lexeme, PRESENT, SG
-import nltk
-from nltk.corpus import cmudict  # nltk.download('cmudict')
-import openai
-from cachier import cachier
+# from nltk.corpus import cmudict  # nltk.download('cmudict')
 
 import torch
 import torch.nn.functional as F 
@@ -432,7 +425,8 @@ remove_two = [
 ]
 
 # https://stackoverflow.com/questions/20336524/verify-correct-use-of-a-and-an-in-english-texts-python
-def starts_with_vowel_sound(word, pronunciations=cmudict.dict()):
+def starts_with_vowel_sound(word, pronunciations=None):
+    if pronunciations is None: pronunciations = cmudict.dict()
     for syllables in pronunciations.get(word, []):
         return syllables[0][-1].isdigit() 
 
@@ -526,7 +520,6 @@ def MlM_gen(rels, cxt_len=3):
     candidates[hop] += sample(list(rel.codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
         cxt_len - len(candidates[hop])) # 选择候选
     
-
     hop = 1; rel = rels[hop][0]
     # candidates[hop] = sample(list(rel.dom()), cxt_len)
     ans = choice(list(rel.codom()))
@@ -565,9 +558,12 @@ def IlMlI_gen(rels, cxt_len=3):
     hop = 2; candidates = ([rels[hop][0].f(x[0])[0] for x in cxt], [x[0] for x in cxt])
     return cxt, query, candidates, ans
 
-def g2c(g_fn, labels=['No', 'Yes', 'Maybe']):
+def g2c(g_fn, cls_labels=['Yes', 'No']):
     def wrapped(*args,**kwargs):
-        cxt, query, candidates, ans = g_fn(*args,**kwargs)
+        cxt, query, candidates, (tgt, ans0, ans) = g_fn(*args,**kwargs)
+        (_ans, _ans0), label = ((ans, ans0), cls_labels[0]) if random() < 0.5 else \
+            (choice([(c, c0) for c, c0 in zip(*candidates) if c != ans]), cls_labels[1])
+        return cxt, query, candidates, (tgt, _ans0, _ans), label
         if tuple(candidates[0]) == tuple(candidates[1]):
             return (cxt, (query, choice(list(set(candidates[0]) - {query, ans}))), [labels], labels[1]) \
                 if random() > 0.5 else (cxt, (query, ans), [labels], labels[0])
@@ -582,6 +578,7 @@ def g2c(g_fn, labels=['No', 'Yes', 'Maybe']):
                     print('empty', candidates[0], candidates[1], ans, _ans)
                 ans, label = choice(list(set(candidates[0] + candidates[1]) - {ans, _ans})), labels[2]
             return cxt, (query, ans), [labels], label
+    wrapped.__name__ = f'g2c({g_fn.__name__})'
     return wrapped
 
 def _str(l, vocab=None, sep=' '):
@@ -600,16 +597,17 @@ def make_examples(task, nrows=4, vocab_for_each_row=True, **kwargs):
     if not vocab_for_each_row: vocab = vocab_fn()
     for i in range(nrows * 2):
         if vocab_for_each_row: vocab = vocab_fn()
-        try:
-            cxt, query, candidates, ans = example_gen_fn(vocab, **kwargs)
-        except:
-            traceback.print_exc()  # print(traceback.format_exc())
-            continue
+        cxt, query, candidates, ans, *a = example_gen_fn(vocab, **kwargs)
+        # try:
+        #     cxt, query, candidates, ans, *a = example_gen_fn(vocab, **kwargs)
+        # except:
+        #     traceback.print_exc()  # print(traceback.format_exc())
+        #     continue
         if isinstance(query, list): query = tuple(query)
         if (tuple(cxt), query, ans) not in qa_set:
             qa_set.add((tuple(cxt), query, ans))
             vocabs.append(vocab)
-            examples.append([cxt, query, candidates, ans])
+            examples.append([cxt, query, candidates, ans, *a])
         if len(examples) == nrows: break
     return vocabs, examples
 
@@ -649,13 +647,13 @@ def locate(tokens, substring, return_last=False, space_token='Ġ'):
     return (tok_start, tok_end)
 
 def example2ranges(example, tokens, bos_token):
-    cxt, query, options, (tgt, ans0, ans) = example
+    cxt, query, options, (tgt, ans0, ans), *cls = example
     return Ranges(
         bos = locate(tokens, bos_token.replace('Ġ', ''), return_last=True),
         ans = locate(tokens, ans, return_last=True),
-        ans0 = locate(tokens, ans0),
+        ans0 = locate(tokens, ans0) if ans0 else None,
         query = locate(tokens, query, return_last=True) if query else None,
-        tgt = locate(tokens, tgt) if query else None
+        tgt = locate(tokens, tgt) if query and tgt else None
     )
 
 abstract_bos_token = 'Ġ->'
@@ -666,15 +664,20 @@ def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
         item2str, query2str = (partial(_item2str, reverse=abstract == 2), _str)
         if cxt_len == 1:
             item2str, query2str = (lambda i, _: f'{i[1]}', lambda q, _: '')
-            examples = [(cxt, None, None, (None, ans0, ans)) for cxt, query, options, (tgt, ans0, ans) in examples]
+            examples = [(cxt, None, None, (None, ans0, ans), *cls) for cxt, query, options, (tgt, ans0, ans), *cls in examples]
         cxt2str, bos_token, ans2str = partial(_cxt2str, item2str=item2str), abstract_bos_token, _str
     else:
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)]
+    boc_token, cls2str = '?', _str
     def example2str(vocab, example):
-        cxt, query, options, (tgt, ans0, ans) = example
+        cxt, query, options, (tgt, ans0, ans), *cls = example
         strs = [cxt2str(cxt, vocab), query2str(query, vocab)]
         if options_position is not None: strs.insert(options_position, options2str(options))
-        return '. '.join(s for s in strs if s != '') + bos_token.replace('Ġ', ' ') + ' ' + ans2str(ans)
+        s = '. '.join(s for s in strs if s != '') + bos_token.replace('Ġ', ' ') + ' ' + ans2str(ans)
+        if len(cls) > 0:  # g2c
+            cls = cls[0]
+            s += boc_token + ' ' + cls2str(cls)
+        return s
 
     return examples, '\n'.join(example2str(v, e) for v, e in zip(vocabs, examples)) + '\n', bos_token
 
@@ -682,7 +685,7 @@ def generate(task, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True):
     counts = []
     while len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3:
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
-        answer_indices = [cands[0].index(ans) for _, _, cands, (tgt, ans0, ans) in examples]
+        answer_indices = [cands[0].index(ans) for _, _, cands, (tgt, ans0, ans), *cls in examples]
         counts = [v for k, v in Counter(answer_indices).most_common()]
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())

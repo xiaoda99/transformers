@@ -1,12 +1,7 @@
 import sys
-# from ast import pattern
 from collections import OrderedDict
-from difflib import restore
 # from typing import Iterable
 from collections.abc import Iterable
-from lib2to3.pgen2 import token
-from modulefinder import Module
-from matplotlib import scale  # same as typing.Iterable?
 import numpy as np
 import math
 from dataclasses import dataclass, field, fields
@@ -17,8 +12,9 @@ import seaborn as sns
 from tqdm import tqdm
 from pprint import pprint
 
-from sklearn.manifold import TSNE, MDS
-from sklearn.decomposition import PCA
+# from sklearn.manifold import TSNE, MDS
+# from sklearn.decomposition import PCA
+# from sklearn.cluster import KMeans
 
 import torch
 import torch.nn as nn
@@ -32,9 +28,6 @@ from transformers.models.gpt_neo.modeling_gpt_neo import GPTNeoSelfAttention, GP
 from transformers.models.gptj.modeling_gptj import GPTJAttention, GPTJBlock, GPTJModel
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention, GPTNeoXLayer, GPTNeoXModel, GPTNeoXForCausalLM
 from transformers.models.xglm.modeling_xglm import XGLMForCausalLM, XGLMAttention, XGLMDecoderLayer
-
-# from sklearn.decomposition import PCA
-# from sklearn.cluster import KMeans
 
 sys.path.insert(0, '/nas/xd/projects/pptree')
 from pptree import Node, print_tree
@@ -939,8 +932,8 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token='Ġ->', eos_to
         text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
     candidates, answer_indices = None, None
     if examples is not None and examples[0][-2] is not None:
-        candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for _, _, cands, _ in examples]
-        answer_indices = [cands[0].index(ans_chain[-1]) for _, _, cands, ans_chain in examples]
+        candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for cxt, query, cands, *_ in examples]
+        answer_indices = [cands[0].index(ans) for cxt, query, cands, (*_, ans), *cls in examples]
     with torch.no_grad():
         o = forward0(model, input_ids.to(model.device), labels=labels.to(model.device), by_head=['head_input']) \
             if isinstance(model, nn.Module) and custom_forward else model(input_ids.to(getattr(model, 'device', 'cpu')))
@@ -961,12 +954,12 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token='Ġ->', eos_to
             _ = sns.heatmap(torch.cat([label_probs, torch.Tensor(candidate_probs)], dim=1).T, cbar=False, ax=ax1);
         plt.show()
 
-    # attn_attr = {}
     return [text, input_ids, labels, ranges] + args + [o,], \
         (loss, top1_corrects, answer_indices, answer_probs, candidate_probs)
 
-def attn_pattern2labels(ranges, attn_pattern, attn_size):
+def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=None):
     q, k = attn_pattern.split('->')  # e.g. 'bos->ans0'
+    ranges_q = ranges[k_shot:] if k_shot is not None and not ('ans' in q and 'ans0' in k) else ranges
     attn_labels = torch.zeros(*attn_size)
     def get_slice(r, name):
         if name.startswith('['): b, _ = getattr(r, name[1:]); e = b + 1
@@ -974,14 +967,19 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size):
         elif name.endswith('+'): _, e = getattr(r, name[:-1]); b, e = e, e + 1
         else: b, e = getattr(r, name)
         return slice(b, e)
-    for r in ranges: attn_labels[get_slice(r, q), get_slice(r, k)] = 1
-    return attn_labels
+    if 'bos' in q and 'ans' in k and 'ans0' not in k:  # pattern for intermediary heads
+        for rq in ranges_q:
+            for rk in ranges:
+                attn_labels[get_slice(rq, q), get_slice(rk, k)] = 1
+    else:
+        for r in ranges_q: attn_labels[get_slice(r, q), get_slice(r, k)] = 1
+    return attn_labels.tril()
 
 def get_head_matching_scores(data_tuple, attn_pattern, k_shot=3):
     text, input_ids, labels, ranges, *args, o = data_tuple
-    attn_labels = attn_pattern2labels(ranges[k_shot:], attn_pattern, o.attentions[0].size()[-2:])
+    attn_labels = attn_pattern2labels(ranges, attn_pattern, o.attentions[0].size()[-2:], k_shot=k_shot)
     attentions = torch.cat(o.attentions)  # lhij
-    matching_scores = ((attentions + 1e-9).log() * attn_labels).sum((-2, -1)) / len(ranges)  # mean log-likelyhood, lhij->lh
+    matching_scores = ((attentions + 1e-9).log() * attn_labels).sum((-2, -1)) / attn_labels.sum()  # mean log-likelyhood, lhij->lh
     return matching_scores
 
 # def mask_select(a, mask=None):  # a: attn_output0, bnid, mask: bi
@@ -1260,15 +1258,18 @@ def data2str(data):
     if attribute_k: s = s + ' ' + 'attr_k'
     return s
 
+def get_matched_head_attr(data):
+    return data.attr.head / (-sum(data.scores.values()) / len(data.scores) if len(getattr(data, 'scores', {})) > 0 else 1)
+
 def add_node(parent, layer=None, head=None, topi=None, label_type='attn_labels', attribute_k=False):
     if parent is None:
         si = -1; node = Node('[-1] root ' + label_type)
         node.data = AttrData(step=si, label_type=label_type)
     else:
         if layer is None or topi is not None:
-            attr = parent.data.attr
-            layer, head = topk_md(attr.head, 10, transpose=True)[topi][:2] if type(topi) == int \
-                else np.array(topk_md(attr.head, 10)[:2])[:, topi] # list
+            head_attr = get_matched_head_attr(parent.data)
+            layer, head = topk_md(head_attr, 10, transpose=True)[topi][:2] if type(topi) == int \
+                else np.array(topk_md(head_attr, 10)[:2])[:, topi] # list
         si = parent.data.step
         if si == -1: assert label_type is not None
         else: label_type = None
@@ -1289,10 +1290,11 @@ def show_result(result):
     n = node = result.node; plot_tree(node)
     while n is not None:
         print(n.name)
-        data = n.data; plot_attrs(dict(getattr(data, 'scores', {}), attr=data.attr.head), topk=10)
+        data = n.data
+        plot_attrs(dict(data.scores, head_attr=data.attr.head, matched_head_attr=get_matched_head_attr(data)), topk=10)
         n = n.parent
-    return data, result.data_tuples
-    
+    return node.data, result.data_tuples
+
 def get_argmax_attn_labels(o, layer, head, labels=None):
     # attn_labels = torch.einsum('bnij,bnj->bnij', o.attentions[layer], o.head_inputs[layer].norm(dim=-1)) # bnje->bnj
     # return attn_labels[0, head]  # 1nij->ij
@@ -1869,6 +1871,16 @@ def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x
     if y_pos is not None: ax.hlines(y=y_pos, xmin=0, xmax=attn.size(1)-0.5*use_imshow, **kwargs)  # max-0.5 for imshow
     if x_pos is not None: ax.vlines(x=x_pos, ymin=0, ymax=attn.size(0)-0.5*use_imshow, **kwargs)
     # plt.show()
+
+def plot_attns(data_tuples, tokenizer, l, h, v, attn_pattern=None, figsize=(20, 20)):
+    print(l, h, v)
+    for text, input_ids, labels, ranges, *args, o in data_tuples[:4]:
+        attn = o.attentions[l][0, h]
+        tokens = [t.replace('Ġ', '').replace('Ċ', '-'*12) for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
+        y_pos, x_pos = attn_pattern2labels(ranges, attn_pattern, attn.size()).nonzero().T \
+            if attn_pattern is not None else (None, None)
+        plot_attn(attn, tokens, y_pos=y_pos, x_pos=x_pos, figsize=figsize, fontsize=9, transpose=True)
+        plt.show()
 
 def cluster(emb, labels, n_clusters=3):
     assert emb.shape[0] == labels.shape[0], '%d ！= %d' % (emb.shape[0], labels.shape[0])
