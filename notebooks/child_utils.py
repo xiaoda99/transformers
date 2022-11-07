@@ -578,7 +578,7 @@ def g2c(g_fn, cls_labels=['Yes', 'No']):
                     print('empty', candidates[0], candidates[1], ans, _ans)
                 ans, label = choice(list(set(candidates[0] + candidates[1]) - {ans, _ans})), labels[2]
             return cxt, (query, ans), [labels], label
-    wrapped.__name__ = f'g2c({g_fn.__name__})'
+    # wrapped.__name__ = f'g2c({g_fn.__name__})'
     return wrapped
 
 def _str(l, vocab=None, sep=' '):
@@ -681,7 +681,10 @@ def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
 
     return examples, '\n'.join(example2str(v, e) for v, e in zip(vocabs, examples)) + '\n', bos_token
 
-def generate(task, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True):
+def generate(task, do_g2c=False, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True):
+    if do_g2c:
+        vocab_fn, gen_fn, *a = task
+        task = (vocab_fn, g2c(gen_fn), *a)
     counts = []
     while len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3:
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)

@@ -69,6 +69,7 @@ class AttrData:
     label_type: str = None
     attribute_k: bool = False
     attr: Attributions = None
+    scores: dict = None
 
 @dataclass
 class Result:
@@ -78,7 +79,8 @@ class Result:
     texts: list = None
     data_tuples: list = None
     node: Node = None
-    root: None = None
+    mean_loss: float = None
+    mean_acc: float = None
 
 @dataclass
 class Eigovs:
@@ -1184,7 +1186,7 @@ def attribute2(forward_fn, model, x, post_forward_fn):
     mlp_attr = y[1 + L * H:]#.view(L, 1)  # l1
     return Attributions(embed=embed_attr, head=head_attr, mlp=mlp_attr)
 
-def attribute_step(model, data_tuple, node, attribute_k=False):
+def attribute_step(data_tuple, model, node, attribute_k=False):
     L = len(model.transformer.h)
     text, input_ids, labels, ranges, *_, o = data_tuple
     fns = path2fns(node, partial(node2fn, model=model, outputs=o, labels=labels))
@@ -1193,7 +1195,7 @@ def attribute_step(model, data_tuple, node, attribute_k=False):
         _labels = get_argmax_labels(model, o.hidden_states[-2], _labels)
     to_layer = max(output_layer) if isinstance(output_layer, Iterable) else output_layer
     fwd_fn = partial(sum_forward, outputs=o, labels=_labels, output_layer=output_layer)
-    keys = ['attn_weights', 'mlp_mask']#, 'embed_mask']
+    keys = ['attn_weights', 'mlp_mask', 'embed_mask']
     x = OrderedDict((key, get_x(key, o, to_layer=to_layer)) for key in keys)
     attr, ys, logits = attribute(fwd_fn, model, x, fns, num_points=4 if attribute_k else 7) 
     # fwd_fn = partial(sum_forward, outputs=o, labels=_labels, reduce_fn=torch.cat, scaled=False)
@@ -1261,11 +1263,14 @@ def data2str(data):
 def get_matched_head_attr(data):
     return data.attr.head / (-sum(data.scores.values()) / len(data.scores) if len(getattr(data, 'scores', {})) > 0 else 1)
 
-def add_node(parent, layer=None, head=None, topi=None, label_type='attn_labels', attribute_k=False):
+def add_node(parent, layer=None, head=None, topi=None, label_type='attn_labels', attribute_k=False, verbose=True):
     if parent is None:
         si = -1; node = Node('[-1] root ' + label_type)
         node.data = AttrData(step=si, label_type=label_type)
     else:
+        if parent is not None and parent.data.attr is None:
+            print('parent has not been attributed yet, replace it instead of adding to it.')
+            parent = parent.parent; parent.children = []
         if layer is None or topi is not None:
             head_attr = get_matched_head_attr(parent.data)
             layer, head = topk_md(head_attr, 10, transpose=True)[topi][:2] if type(topi) == int \
@@ -1276,24 +1281,44 @@ def add_node(parent, layer=None, head=None, topi=None, label_type='attn_labels',
         data = AttrData(step=si + 1, topi=topi, layer=layer, head=head, label_type=label_type, 
             attribute_k=label_type in ['argmax_attn_labels', 'attn_labels'] and attribute_k)
         node = Node(data2str(data), parent); node.data = data
+    if verbose and parent is not None: plot_tree(node)
+    return node
+
+def add_node_to_result(result, node_name='node', label_type='attn_labels', **kwargs):
+    parent = getattr(result, node_name, None)
+    node = add_node(parent, label_type=label_type, **kwargs)
+    setattr(result, node_name, node)
     return node
 
 def plot_tree(node):
     root = node
     while 'root' not in root.name: root = root.parent
     node.name = '*' + node.name
+    if node.data.attr is None: node.name += '...'
     print_tree(root)
-    node.name = node.name[1:]  # strip prepending '*'
+    node.name = node.name.replace('*', '').replace('...', '')
 
 def show_result(result):
     print('\n'.join(result.texts[-1].split('\n')[:3]))
     n = node = result.node; plot_tree(node)
-    while n is not None:
-        print(n.name)
+    # while n is not None:
+    #     data = n.data
+    #     if data.attr is not None:
+    #         print(n.name)
+    #         plot_attrs(dict(data.scores,
+    #             head_attr=torch.cat([data.attr.head, data.attr.mlp.unsqueeze(-1)], dim=1),
+    #             matched_head_attr=get_matched_head_attr(data)), topk=10)
+    #     n = n.parent
+    path = []
+    while n is not None: path.append(n); n = n.parent
+    for n in path[::-1]:
         data = n.data
-        plot_attrs(dict(data.scores, head_attr=data.attr.head, matched_head_attr=get_matched_head_attr(data)), topk=10)
-        n = n.parent
-    return node.data, result.data_tuples
+        if data.attr is not None:
+            print(n.name)
+            plot_attrs(dict(data.scores,
+                head_attr=torch.cat([data.attr.head, data.attr.mlp.unsqueeze(-1)], dim=1),
+                matched_head_attr=get_matched_head_attr(data)), topk=10)
+    return node, result.data_tuples
 
 def get_argmax_attn_labels(o, layer, head, labels=None):
     # attn_labels = torch.einsum('bnij,bnj->bnij', o.attentions[layer], o.head_inputs[layer].norm(dim=-1)) # bnje->bnj
@@ -1881,6 +1906,46 @@ def plot_attns(data_tuples, tokenizer, l, h, v, attn_pattern=None, figsize=(20, 
             if attn_pattern is not None else (None, None)
         plot_attn(attn, tokens, y_pos=y_pos, x_pos=x_pos, figsize=figsize, fontsize=9, transpose=True)
         plt.show()
+
+def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, k_shot=0, attn_patterns=None):
+    # print(l, h, v)#, get_head_rank(attr2.head, l, h))#, eigv_positivity[l, h], pos_score[l, h])
+    if True:
+        text, input_ids, labels, ranges, *args, o = data_tuple
+        H = o.attentions[0].size(1)
+        fns = path2fns(node, partial(node2fn, model=model, outputs=o, labels=labels))
+        fwd_fn = partial(sum_forward, outputs=o, output_layer=l)
+        _labels = labels if len(fns) == 0 else None
+        # _labels = get_argmax_labels(model, o.hidden_states[-2], _labels)
+        fn = partial(head_forward, layer=l, head=h, attn_weights=o.attentions[l], labels=_labels) \
+            if h < H else partial(mlp_forward, layer=l, labels=_labels)
+        keys = ['embed_mask', 'mlp_mask', 'attn_weights']
+        x = OrderedDict((key, get_x(key, o, to_layer=l)) for key in keys)
+        _, ys, logits = attribute(fwd_fn, model, x, [fn] + fns, num_points=3, forward_only=True); print(ys)
+        if iterable(logits): logits = sum(logits)
+        if logits.size(-1) == model.lm_head.out_features:  # lm_logits
+            _ = show_predictions(tokenizer, *args, logits=logits[-1:], labels=_labels, topk=4, sep='\t')
+
+        if h == H: return
+        aw, aa = o.attentions[l][0, h], o.attn_attr[node.name][l, h]
+        bos_indices = args[1]; ystart = (node.data.step <= 0)*bos_indices[k_shot]; ystop = aa.size(0)
+        # fig, axs = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(20, 10*(ystop-ystart)/aa.size(0)))
+        fig, axs = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(40*(ystop-ystart)/aa.size(0), 20))
+        tokens = [t.replace('Ġ', '').replace('Ċ', '-'*12) for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
+        # y_pos, x_pos, _ = topk_md(aa, k=nrows-k_shot)
+        y_pos, x_pos = None, None
+        if attn_patterns is not None:
+            all_attn_labels = [attn_pattern2labels(ranges, ap, aw.size()) for ap in attn_patterns]
+            if len(all_attn_labels) == 1:
+                attn_labels = all_attn_labels[0]
+            else:  # steps that have multiple attn patterns, e.g. ['ans->ans0]', 'ans->ans0+'] of relating heads
+                all_attn_labels = [(al, (al * aa).sum()) for al in all_attn_labels]
+                attn_labels = max(all_attn_labels, key=lambda x: x[1])[0] # find the pattern that best matches aa
+            y_pos, x_pos = attn_labels.nonzero().T
+        if True: #with Timer():
+            for ax, a in zip(axs, [aw, aa]):
+                plot_attn(a, tokens, ax=ax, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
+                    fontsize=9, transpose=True, use_imshow=False)
+            plt.show()
 
 def cluster(emb, labels, n_clusters=3):
     assert emb.shape[0] == labels.shape[0], '%d ！= %d' % (emb.shape[0], labels.shape[0])
