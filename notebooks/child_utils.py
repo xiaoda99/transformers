@@ -487,6 +487,8 @@ class SymSet(Set):
                     self.equal._dict[e] = [e]
                     if len(similars) > 1: self.similar._dict[e] = list(set(similars) - {e})
                     if i == 0: self.opposite._dict[e] = opposites[:1]
+        self.opposite._inv_dict, self.similar._inv_dict = self.opposite._dict, self.similar._dict
+        self.equal._inv_dict = self.equal._dict
         
 class BijectSet(Set):
     def __init__(self, data):
@@ -638,7 +640,8 @@ def locate(tokens, substring, return_last=False, space_token='Ġ'):
         _t = t.replace(space_token, '')
         loc += len(t)
         if tok_start is None and loc > char_loc:
-            assert substring.startswith(_t), f'{whole_string}\n{tokens}\n{substring} not startswith {_t} at {i}'
+            assert substring.find(_t) in [0, 1], \
+                f'{whole_string}\n{tokens}\n{substring} not startswith {_t} at {i}'
             tok_start = i
         if tok_end is None and loc >= char_loc + len(substring):
             assert substring.endswith(_t), f'{whole_string}\n{tokens}\n{substring} not endswith {_t} at {i}'
@@ -649,14 +652,14 @@ def locate(tokens, substring, return_last=False, space_token='Ġ'):
 def example2ranges(example, tokens, bos_token):
     cxt, query, options, (tgt, ans0, ans), *cls = example
     return Ranges(
-        bos = locate(tokens, bos_token.replace('Ġ', ''), return_last=True),
+        bos = locate(tokens, bos_token, return_last=True),
         ans = locate(tokens, ans, return_last=True),
         ans0 = locate(tokens, ans0) if ans0 else None,
         query = locate(tokens, query, return_last=True) if query else None,
         tgt = locate(tokens, tgt) if query and tgt else None
     )
 
-abstract_bos_token = 'Ġ->'
+abstract_bos_token = ' ->'
 
 def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
     cxt_len = len(examples[0][0])
@@ -673,7 +676,7 @@ def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
         cxt, query, options, (tgt, ans0, ans), *cls = example
         strs = [cxt2str(cxt, vocab), query2str(query, vocab)]
         if options_position is not None: strs.insert(options_position, options2str(options))
-        s = '. '.join(s for s in strs if s != '') + bos_token.replace('Ġ', ' ') + ' ' + ans2str(ans)
+        s = '. '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
         if len(cls) > 0:  # g2c
             cls = cls[0]
             s += boc_token + ' ' + cls2str(cls)

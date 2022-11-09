@@ -113,7 +113,7 @@ frames = [
     [['believable'], ['incredible']]
 ]
 
-person_adjs = [
+_person_adjs = [
     [['tall'], ['short']],
     [['fat'], ['thin']],
     [['hot'], ['cold']],
@@ -122,32 +122,36 @@ person_adjs = [
     [['rich'], ['poor']],
     [['big'], ['small']],
     [['insensitive'], ['sensitive']],
-    [['quiet'], ['noisy', 'loud']],
+    [['quiet'], ['noisy']],
     [['young'], ['old']],
     [['fast'], ['slow']],
     [['ugly'], ['beautiful']],
     [['clean'], ['dirty']],
-    [['polite'], ['rude', 'impolite']],
+    # [['polite'], ['rude', 'impolite']],  # brutal, harsh
+    [['gentle'], ['harsh']],
     [['strong'], ['weak']],
     [['good'], ['bad']],
-    [['impatient'], ['patient']],
+    # [['impatient'], ['patient']],  # confuse with patient vs doctor/healthy
     [['conscious'], ['unconscious']],
-    [['honest'], ['dishonest']],
+    [['honest'], ['fraudulent', 'dishonest']],
     [['brave'], ['cowardly']],
     [['unpopular'], ['popular']],
     [['uncomfortable'], ['comfortable']],
     [['pessimistic'], ['optimistic']],
     [['responsible'], ['irresponsible']],
     [['irrational'], ['rational']],
-    [['healthy'], ['unhealthy']],
-    [['friendly'], ['unfriendly']],
+    [['healthy'], ['sick', 'unhealthy']],
+    [['friendly'], ['unfriendly']],  # hostile
     [['asleep'], ['awake']],
     [['boring', 'uninteresting'], ['interesting']],
-    [['dangerous'], ['safe']],
+    [['dangerous'], ['harmless']],  # safe is not good according to 16-14
     [['ignorant'], ['knowledgeable']],
     [['hardworking'], ['lazy']],
-    [['correct'], ['incorrect']],
-    # [['passive', 'inactive', 'lazy'], ['active']],
+    [['correct'], ['wrong', 'incorrect']],
+    [['male'], ['female']],
+    [['inside'], ['outside']],
+    [['white'], ['black']],
+    [['passive'], ['active']],
     # [['sane'], ['mad', 'insane']],
     # [['wrong'], ['right', 'left']],
     # [['light'], ['heavy', 'dark']],
@@ -164,3 +168,5 @@ person_adjs = [
     # [['shy'], ['outgoing']],
     # [['kind'], ['cruel']],
 ]
+
+def person_adjs(): return _person_adjs

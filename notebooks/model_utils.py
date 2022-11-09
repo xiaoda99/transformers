@@ -825,10 +825,11 @@ def get_argmax_labels(model, hidden_states, labels, logits=None):
     argmax_labels[labels != -100] = logits.argmax(-1)[labels != -100]
     return argmax_labels
 
-def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token='Ġ->', eos_token='Ċ', nrows=None):
+def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_token='Ċ',
+        space_token='Ġ', nrows=None):
     assert input_ids.size(0) == 1  # bsz == 1
     if bos_indices is None:
-        bos_id = tokenizer.convert_tokens_to_ids(bos_token)
+        bos_id = tokenizer.convert_tokens_to_ids(bos_token.replace(' ', space_token))
         bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()#[1:]
     if nrows is not None:
         assert nrows == len(bos_indices)
@@ -928,7 +929,7 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
         loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100].tolist()  # 'none'
     return loss, top1_corrects, answer_probs, candidate_probs
 
-def predict(model, tokenizer, text, examples, k_shot=3, bos_token='Ġ->', eos_token=None, #'Ċ',
+def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_token=None, #'Ċ',
             custom_forward=True, verbose=True):
     input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
         text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
@@ -975,7 +976,8 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=None):
                 attn_labels[get_slice(rq, q), get_slice(rk, k)] = 1
     else:
         for r in ranges_q: attn_labels[get_slice(r, q), get_slice(r, k)] = 1
-    return attn_labels.tril()
+    attn_labels = attn_labels.tril()
+    return attn_labels / (attn_labels.sum(1, keepdim=True) + 1e-9)
 
 def get_head_matching_scores(data_tuple, attn_pattern, k_shot=3):
     text, input_ids, labels, ranges, *args, o = data_tuple
@@ -1261,7 +1263,8 @@ def data2str(data):
     return s
 
 def get_matched_head_attr(data):
-    return data.attr.head / (-sum(data.scores.values()) / len(data.scores) if len(getattr(data, 'scores', {})) > 0 else 1)
+    # return data.attr.head / (-sum(data.scores.values()) / len(data.scores) if len(getattr(data, 'scores', {})) > 0 else 1)
+    return data.attr.head * ((sum(data.scores.values()) / len(data.scores)).exp() if len(getattr(data, 'scores', {})) > 0 else 1)
 
 def add_node(parent, layer=None, head=None, topi=None, label_type='attn_labels', attribute_k=False, verbose=True):
     if parent is None:
@@ -1301,14 +1304,6 @@ def plot_tree(node):
 def show_result(result):
     print('\n'.join(result.texts[-1].split('\n')[:3]))
     n = node = result.node; plot_tree(node)
-    # while n is not None:
-    #     data = n.data
-    #     if data.attr is not None:
-    #         print(n.name)
-    #         plot_attrs(dict(data.scores,
-    #             head_attr=torch.cat([data.attr.head, data.attr.mlp.unsqueeze(-1)], dim=1),
-    #             matched_head_attr=get_matched_head_attr(data)), topk=10)
-    #     n = n.parent
     path = []
     while n is not None: path.append(n); n = n.parent
     for n in path[::-1]:
