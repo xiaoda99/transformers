@@ -346,7 +346,7 @@ en2fr = [
     ('truck', 'camion'),
 ]
 
-country2capital = [ #The capital of Germany is Berlin.
+_country2capital = [ #The capital of Germany is Berlin.
     ('Germany', 'Berlin'),
     ('France', 'Paris'),
     ('China', 'Beijing'),
@@ -364,20 +364,22 @@ country2capital = [ #The capital of Germany is Berlin.
     ('South Africa', 'Pretoria'),
     ('Egypt', 'Cairo'),
     ('Kenya', 'Nairobi'),
-    ('South Korea', 'Seoul'),
+    ('South Korea', 'Seoul'),  # remove South
     ('the Philippines', 'Manila'),
     ('Portugal', 'Lisbon'),
     ('Switzerland', 'Bern'),
     ('Thailand', 'Bangkok'),
     ('Turkey', 'Ankara'),
-    ('Spain', 'Madrid'),
     ('Greece', 'Athens'),
 ]
+
+def country2capital():  # convert to same form as TreeSet types_of_things
+    return {country: [capital] for country, capital in _country2capital}
 
 # https://github.com/knowitall/chunkedextractor/blob/master/src/main/resources/edu/knowitall/chunkedextractor/demonyms.csv
 demonyms = {country: resident for resident, country in csv.reader(open('demonyms.csv'))}
 demonyms.update({'the United States': 'American', 'the United Kingdom': 'British', 'United States': 'American', 'United Kingdom': 'British'})
-city2resident = [(capital, demonyms[country.replace('the ', '')]) for country, capital in country2capital]
+city2resident = [(capital, demonyms[country.replace('the ', '')]) for country, capital in _country2capital]
 
 def wrap_noun(noun):
     prompt_fn = lambda s: \
@@ -490,12 +492,17 @@ class SymSet(Set):
         self.opposite._inv_dict, self.similar._inv_dict = self.opposite._dict, self.similar._dict
         self.equal._inv_dict = self.equal._dict
         
-class BijectSet(Set):
+class BijectSet(Set):  # can be treated as a special case of TreeSet?
     def __init__(self, data):
-        super().__init__(data, ['proj', 'inv_proj'])
+        super().__init__(data, ['proj', 'inv_proj', 'equal'])
+        data = data()
         for a, b in data:
             self.proj._dict[a] = [b]
             self.inv_proj._dict[b] = [a]
+            self.equal._dict[a] = [a]
+            self.equal._dict[b] = [b]
+        self.proj._inv_dict, self.inv_proj._inv_dict = self.inv_proj._dict, self.proj._dict
+        self.equal._inv_dict = self.equal._dict
 
 class TreeSet(Set):
     def __init__(self, data):
@@ -503,6 +510,7 @@ class TreeSet(Set):
         data = data()
         for parent, children in data.items():
             self.child._dict[parent] = children
+            self.equal._dict[parent] = [parent]
             for child in children:
                 self.parent._dict[child] = [parent]
                 self.equal._dict[child] = [child]
@@ -627,21 +635,18 @@ class Ranges:
     query: tuple = None
     tgt: tuple = None
 
-def get_word_by_range(tokens, r, space_token='Ġ'):
-    return ''.join(tokens[k].replace(space_token, '' if i == 0 else ' ') for i, k in enumerate(range(*r)))
-
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
-def locate(tokens, substring, return_last=False, space_token='Ġ'):
-    whole_string = "".join(t.replace(space_token, ' ') for t in tokens)
+def locate(tokens, substring, return_last=False):
+    whole_string = "".join(t for t in tokens)
     assert substring in whole_string, f'{tokens}\n{substring} not int {whole_string}'
     char_loc = getattr(whole_string, 'index' if not return_last else 'rindex')(substring)
     loc = 0; tok_start, tok_end = None, None
     for i, t in enumerate(tokens):
-        _t = t.replace(space_token, '')
         loc += len(t)
+        _t = t[1:] if t.startswith(' ') else t
         if tok_start is None and loc > char_loc:
             assert substring.find(_t) in [0, 1], \
-                f'{whole_string}\n{tokens}\n{substring} not startswith {_t} at {i}'
+                f'{whole_string}\n{tokens}\n{substring} not startswith {_t} at {i}. loc = {loc}, char_loc = {char_loc}'
             tok_start = i
         if tok_end is None and loc >= char_loc + len(substring):
             assert substring.endswith(_t), f'{whole_string}\n{tokens}\n{substring} not endswith {_t} at {i}'
@@ -659,7 +664,70 @@ def example2ranges(example, tokens, bos_token):
         tgt = locate(tokens, tgt) if query and tgt else None
     )
 
+def move_ranges(r, offset):
+    for field in fields(r):
+        name = field.name; pair = getattr(r, name)
+        if pair is not None: setattr(r, name, tuple([i + offset for i in pair]))
+    return r
+
+def locate_ranges(examples, example_strs, tokenizer, bos_token):
+    ranges, all_tokens, newline_token = [], [], tokenizer.tokenize('\n')[0]  # 'Ċ'
+    assert len(examples) == len(example_strs)
+    for e, e_str in zip(examples, example_strs):
+        # tokens = tokenizer.tokenize(e_str)  # can not work with locate
+        tokens = [tokenizer.decode([i]) for i in tokenizer.encode(e_str)]
+        assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
+        r = example2ranges(e, tokens, bos_token)
+        ranges.append(move_ranges(r, len(all_tokens)))
+        all_tokens += tokens + [newline_token]
+    return ranges
+
 abstract_bos_token = ' ->'
+
+def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_token='Ċ',
+        space_token='Ġ', nrows=None):
+    assert input_ids.size(0) == 1  # bsz == 1
+    if bos_indices is None:
+        bos_id = tokenizer.convert_tokens_to_ids(bos_token.replace(' ', space_token))
+        bos_indices = (input_ids[0] == bos_id).nonzero().squeeze(1).tolist()#[1:]
+    if nrows is not None:
+        assert nrows == len(bos_indices)
+    else:
+        nrows = len(bos_indices)
+    if eos_token is not None:
+        eos_id = tokenizer.convert_tokens_to_ids(eos_token)
+        eos_indices = (input_ids[0] == eos_id).nonzero()[-nrows:].squeeze(1).tolist()
+    else:
+        # eos_indices = bos_indices[1:] + [input_ids.size(1)]
+        eos_indices = [bos_i + 2 for bos_i in bos_indices]
+    # labels = torch.ones(input_ids.size(0), input_ids.size(1) - 1).long() * (-100)
+    labels = torch.ones_like(input_ids) * (-100)
+    answers = []
+    for bos_i, eos_i in zip(bos_indices, eos_indices):
+        ans_ids = input_ids[0, bos_i + 1: eos_i]
+        labels[0, bos_i: eos_i - 1] = ans_ids
+        answers.append(ans_ids.numpy())
+    return bos_indices, eos_indices, answers, labels
+
+# bos_token='▁is'; eos_token='</s>' for s2s
+# bos_token='Ġ->', eos_token='Ċ' for gpt
+def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
+    example_strs = text.strip().split('\n')
+    input_ids = tokenizer.encode(text, return_tensors='pt')
+    ranges = locate_ranges(examples, example_strs, tokenizer, bos_token)
+    bos_indices = [r.bos[0] for r in ranges]
+    bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
+    if s2s:  # for t5 models
+        bos_i, eos_i = bos_indices[-1], eos_indices[-1]
+        assert eos_i == input_ids.size(1) - 1, f'{eos_i} != {input_ids.size()}[1] - 1'
+        assert tokenizer.convert_ids_to_tokens(input_ids[0, -1].item()) == eos_token == '</s>', \
+            f"{tokenizer.convert_ids_to_tokens(input_ids[0, -1].item())} != '</s>'"
+        input_ids = torch.cat([input_ids[:, : bos_i + 1], input_ids[:, -1:]], dim=1) # append trailing '</s>'
+        answers, labels = answers[-1:], labels[:, bos_i: eos_i - 1]
+        bos_indices, eos_indices = [bos_i - bos_i], [eos_i - bos_i]
+    else:
+        labels[:, :bos_indices[k_shot]] = -100  # 只算k_shot个示例后的loss
+    return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers
 
 def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
     cxt_len = len(examples[0][0])
