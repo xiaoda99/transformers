@@ -35,6 +35,8 @@ from pptree import Node, print_tree
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, \
     equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects
 
+from child_utils import make_data_tuple
+
 @dataclass
 class Outputs:
     inputs_embeds: torch.FloatTensor = None
@@ -870,7 +872,7 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
     input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
         text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
     candidates, answer_indices = None, None
-    if examples is not None and examples[0][-2] is not None:
+    if examples[0][2] is not None:
         candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for cxt, query, cands, *_ in examples]
         answer_indices = [cands[0].index(ans) for cxt, query, cands, (*_, ans), *cls in examples]
     with torch.no_grad():

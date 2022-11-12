@@ -9,6 +9,7 @@ from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass, fields
 import traceback
 import time
+import re
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -180,10 +181,13 @@ class Tenses:
     did: str = None
     done: str = None
 
-verbs = [v for v, _ in verb_form]
-try: verb_tenses = [lexeme(v) for v in verbs]
-except: verb_tenses = [lexeme(v) for v in verbs]
-verb_tenses = [Tenses(*(vt + [vt[0]] * (5 - len(vt)))) for vt in verb_tenses]
+def verb_tenses():
+    if not hasattr(verb_tenses, '_verb_tenses'):
+        verbs = [v for v, _ in verb_form]
+        try: _verb_tenses = [lexeme(v) for v in verbs]
+        except: _verb_tenses = [lexeme(v) for v in verbs]
+        verb_tenses._verb_tenses = [Tenses(*(vt + [vt[0]] * (5 - len(vt)))) for vt in _verb_tenses]
+    return verb_tenses._verb_tenses
 
 antonyms = [
     ('big', 'small'),
@@ -355,7 +359,7 @@ _country2capital = [ #The capital of Germany is Berlin.
     ('Japan', 'Tokyo'),
     ('Russia', 'Moscow'),
     ('Spain', 'Madrid'),
-    ('the United Kingdom', 'London'),
+    ('England', 'London'),
     ('Canada', 'Ottawa'),
     ('India', 'New Delhi'),
     ('Australia', 'Canberra'),
@@ -364,7 +368,7 @@ _country2capital = [ #The capital of Germany is Berlin.
     ('South Africa', 'Pretoria'),
     ('Egypt', 'Cairo'),
     ('Kenya', 'Nairobi'),
-    ('South Korea', 'Seoul'),  # remove South
+    ('South Korea', 'Seoul'),
     ('the Philippines', 'Manila'),
     ('Portugal', 'Lisbon'),
     ('Switzerland', 'Bern'),
@@ -376,10 +380,13 @@ _country2capital = [ #The capital of Germany is Berlin.
 def country2capital():  # convert to same form as TreeSet types_of_things
     return {country: [capital] for country, capital in _country2capital}
 
-# https://github.com/knowitall/chunkedextractor/blob/master/src/main/resources/edu/knowitall/chunkedextractor/demonyms.csv
-demonyms = {country: resident for resident, country in csv.reader(open('demonyms.csv'))}
-demonyms.update({'the United States': 'American', 'the United Kingdom': 'British', 'United States': 'American', 'United Kingdom': 'British'})
-city2resident = [(capital, demonyms[country.replace('the ', '')]) for country, capital in _country2capital]
+
+def city2resident():
+    if not hasattr(city2resident, 'demonyms'):
+        # https://github.com/knowitall/chunkedextractor/blob/master/src/main/resources/edu/knowitall/chunkedextractor/demonyms.csv
+        city2resident.demonyms = {country: resident for resident, country in csv.reader(open('demonyms.csv'))}
+        city2resident.demonyms.update({'the United States': 'American', 'the United Kingdom': 'British', 'England': 'English'})
+    return {capital: city2resident.demonyms[country.replace('the ', '')] for country, capital in _country2capital}
 
 def wrap_noun(noun):
     prompt_fn = lambda s: \
@@ -639,7 +646,9 @@ class Ranges:
 def locate(tokens, substring, return_last=False):
     whole_string = "".join(t for t in tokens)
     assert substring in whole_string, f'{tokens}\n{substring} not int {whole_string}'
-    char_loc = getattr(whole_string, 'index' if not return_last else 'rindex')(substring)
+    # index_fn = getattr(whole_string, 'index' if not return_last else 'rindex')
+    # char_loc = index_fn(substring)
+    char_loc = list(re.finditer(r"\b%s\b" % substring, whole_string))[-int(return_last)].span()[0]
     loc = 0; tok_start, tok_end = None, None
     for i, t in enumerate(tokens):
         loc += len(t)

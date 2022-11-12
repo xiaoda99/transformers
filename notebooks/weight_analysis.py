@@ -1,4 +1,11 @@
 from random import sample
+from collections import OrderedDict
+# from typing import Iterable
+from collections.abc import Iterable
+import numpy as np
+import math
+from functools import reduce
+from itertools import chain, product, combinations, cycle
 import matplotlib.pyplot as plt
 
 import torch
@@ -8,7 +15,8 @@ import torch.nn.functional as F
 import einops
 from einops import rearrange
 
-from model_utils import *
+# from model_utils import *
+from common_utils import iterable, show_topk
 
 
 def get_head_weights(model, layer, head=None, transpose=True, absorb_ln=False):
@@ -183,7 +191,6 @@ def compute_eigv_pos012(model, l1, h1, wv1, wo1, heads0, heads2, eigv_positivity
                 eigv_pos012[(l0, h0, l2, h2)] = eigv_pos0, eigv_pos
     return eigv_pos012
 
-wn2i = OrderedDict(zip('qkvo', range(4)))  # q:0, k:1, v:2, o:3
 
 def weightprod(model, heads, pattern, weBTA=None, BA=True, use_frobenius=False, absorb_ln=False):
     iterables = [head for head in heads if iterable(head)]
@@ -198,6 +205,7 @@ def weightprod(model, heads, pattern, weBTA=None, BA=True, use_frobenius=False, 
     assert len(heads) == len(pattern), f'{len(heads)} != len({pattern})'
     last_dim = None
     ws = []
+    wn2i = OrderedDict(zip('qkvo', range(4)))  # q:0, k:1, v:2, o:3
     for head, wns in zip(heads, pattern):
         def add_w(w):
             nonlocal last_dim
@@ -398,3 +406,37 @@ def lookup_top_entries(tokenizer, m, keyword, topk=20):
     i = ids[0]
     indices_fn = tokenizer.convert_ids_to_tokens
     return show_topk(*m[i].round().int().topk(topk), indices_fn=indices_fn)
+
+def get_head2scores(node):
+    head2scores = []
+    while 'root' not in node.name:
+        scores = node.parent.data.scores
+        score, *the_other_scores = list(scores.values())  # should use OrderedDict for scores
+        head2score = list(zip(node.data.layer, node.data.head, score.numpy().round(3)[node.data.layer, node.data.head]))
+        head2score = [(l, h, s) for l, h, s in head2score if (l, h) != (1, 7) and
+            all(s > _score[l, h] for _score in the_other_scores)]
+        head2scores.append(head2score)
+        node = node.parent
+    return head2scores
+
+def head_chain_to_str(head_chain): return ' '.join([f'{l}-{h}' for l, h in head_chain])
+
+def analyze_head_chains(model, head2scores, chain_len=None, plot=True):
+    if chain_len is None: chain_len = len(head2scores)
+    print(head2scores)
+    head_chain_results = []
+    for head_chain_with_scores in product(*head2scores[:chain_len]):
+        head_chain, scores = zip(*[((l, h), s) for l, h, s in head_chain_with_scores])
+        if any(h0[0] >= h1[0] for h0, h1 in zip(head_chain, head_chain[1:])):
+            continue  # layers should be increasing
+        reduced_score = scores[-1] - scores[0]
+        eigv_pos = plot_eigv(weightprod(model, list(head_chain), 'e vo vo qk e',
+            weBTA=model.weBTAs[0]), plot=False)[0]
+        head_chain_results.append((head_chain, eigv_pos, reduced_score))
+    if plot:
+        head_chains, ys, xs = zip(*head_chain_results)
+        plt.scatter(xs, ys)
+        for i, head_chain in enumerate(head_chains):
+            plt.annotate(head_chain_to_str(head_chain), (xs[i], ys[i]))
+        plt.show()
+    return head_chain_results
