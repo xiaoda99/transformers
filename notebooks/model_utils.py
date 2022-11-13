@@ -1211,7 +1211,8 @@ def add_node(parent, layer=None, head=None, topi=None, label_type='attn_labels',
     else:
         if parent is not None and parent.data.attr is None:
             print('parent has not been attributed yet, replace it instead of adding to it.')
-            parent = parent.parent; parent.children = []
+            _id = id(parent); parent = parent.parent
+            parent.children = [child for child in parent.children if id(child) != _id]
         if layer is None or topi is not None:
             head_attr = get_matched_head_attr(parent.data)
             layer, head = topk_md(head_attr, 10, transpose=True)[topi][:2] if type(topi) == int \

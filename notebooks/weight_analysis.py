@@ -15,8 +15,8 @@ import torch.nn.functional as F
 import einops
 from einops import rearrange
 
-# from model_utils import *
-from common_utils import iterable, show_topk
+from model_utils import get_matched_head_attr
+from common_utils import iterable, show_topk, topk_md
 
 
 def get_head_weights(model, layer, head=None, transpose=True, absorb_ln=False):
@@ -390,6 +390,21 @@ def get_knn(pairwise_sim, heads, src_left=True, topk=10, sim_threshold=0.9):
 
 def rescale(a, threshold, upper_bound=1): return (a - threshold) * 1. / (upper_bound - threshold)
 
+def get_matrix(model, layer, head, qk=True, compute_eigv=True):
+    blocks = model.transformer.h
+    wu = model.lm_head.weight.data
+    ln_f = model.transformer.ln_f
+    wq, wk, wv, wo = get_head_weights(model, layer, head, transpose=True)
+    e = blocks[layer].ln_1(model.es[1])
+    if qk:
+        A, B = e @ wq, e @ wk
+        m = A @ B.T
+    else:
+        A, B = wu @ wo.T, e @ wv  #  wu, ln_f(e @ wv @ wo)  # slow for eig
+        m = wu @ ln_f(B @ wo).T  # a little better than A @ B.T
+    if compute_eigv: print(plot_eigv((B.T @ A).eig()[0], plot=False))
+    return m
+
 def sample_all_top_entries(tokenizer, m, b, transpose=False, n_samples=50):
     if transpose: m, b = m.T, b.T # transpose=False: q->k, o->i; transpose=True: k->q, i->o
     indices = b.max(1).values.nonzero()[:, 0].tolist()
@@ -402,10 +417,30 @@ def sample_all_top_entries(tokenizer, m, b, transpose=False, n_samples=50):
 def lookup_top_entries(tokenizer, m, keyword, topk=20):
     if not keyword.startswith(' '): keyword = ' ' + keyword
     ids = tokenizer.encode(keyword)
-    if len(ids) > 1: print(tokenizer.tokenize(keyword)); return None
+    if len(ids) > 1:
+        # print(tokenizer.tokenize(keyword))
+        return None
     i = ids[0]
     indices_fn = tokenizer.convert_ids_to_tokens
     return show_topk(*m[i].round().int().topk(topk), indices_fn=indices_fn)
+
+def interpret_circuit(model, tokenizer, task, node, topi):
+    # node = node.parent.parent.parent
+    assert node.data.step in [-1, 1], str(node.data.step)
+    qk = node.data.step == 1
+    # task = result.task
+    # topi = [0, 1, 2]
+    if isinstance(topi, int): topi = [topi]
+    head_attr = get_matched_head_attr(node.data)
+    for l, h in np.array(topk_md(head_attr, 10)[:2]).T[topi]:
+        print(l, h)
+        m = get_matrix(model, l, h, qk=qk, compute_eigv=True)
+        if not qk: m = m.T
+        vocab_fn = task[0]
+        hop = 1; rel = vocab_fn()[hop].relations[0]
+        for x in rel.dom():
+            if len(tokenizer.tokenize(' ' + x)) == 1:
+                print(f'{x}->{rel.f(x)} {lookup_top_entries(tokenizer, m, x, topk=5)}')
 
 def get_head2scores(node):
     head2scores = []
