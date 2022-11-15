@@ -170,6 +170,12 @@ def mr(fn):
         return reduce_objects([fn(d, *args, **kwargs) for d in data])
     return mapreduced_fn
     
+def maybe_mr(bool_fn, reduce_fn=all):
+    def wrapped_fn(x, *args, **kwargs):
+        return reduce_fn([bool_fn(i, *args, **kwargs) for i in x]) \
+            if isinstance(x, Iterable) else bool_fn(x, *args, **kwargs)
+    return wrapped_fn
+
 def iterable(item):
     return isinstance(item, Iterable) and not isinstance(item, (tuple, str, torch.Tensor))
 

@@ -189,6 +189,11 @@ def verb_tenses():
         verb_tenses._verb_tenses = [Tenses(*(vt + [vt[0]] * (5 - len(vt)))) for vt in _verb_tenses]
     return verb_tenses._verb_tenses
 
+def does2did():
+    d = {vt.does: [vt.did] for vt in verb_tenses()}
+    d['sings'] = ['sang']; d['leaves'] = ['left']
+    return d
+
 antonyms = [
     ('big', 'small'),
     ('long', 'short'),
@@ -271,42 +276,46 @@ def types_of_things(): return {
 # Sunday Monday -> day
 # fast slow -> speed
 
-capabilities = [ # A x can y.
+_capabilities_of_things = [ # A x can y.
     ('knife', 'cut'),
-    ('calculator', 'calculate'), # or compute
+    ('calculator', 'add'), # calculate
     ('phone', 'call'),
     ('printer', 'print'),
     ('pen', 'write'),
-    ('saw', 'saw'),  # cut
+    ('pencil', 'write'),
+    ('saw', 'cut'),  # saw
     ('oven', 'bake'),
     ('pot', 'cook'), # boil
     ('gun', 'shoot'),
     ('dagger', 'stab'),
     # ('pan', 'fry'),
-    ('brush', 'paint'),
     ('shovel', 'dig'),
-    ('hammer', 'hit'),
+    # ('hammer', 'hammer'),
     ('axe', 'chop'),
-    ('drill', 'bore'),  # or drill
+    # ('drill', 'drill'),  # bore
     ('lamp', 'light'),
-    ('fan', 'blow'),
+    ('fan', 'cool'),  # blow
     ('washing machine', 'wash'),  # or washer
-    ('opener ', 'open'),  # or washer
-    ('dryer', 'dry'),
-    ('lighter', 'light'),
+    ('opener', 'open'),  # or washer
+    # ('dryer', 'dry'),
+    # ('lighter', 'light'),
     
     ('TV', 'watch'),  # show
     ('car', 'drive'),
 
     ('plane', 'fly'),
     ('bicycle', 'ride'),
-    ('glider', 'glide'),
-    ('skateboard', 'skate'),
-    ('swing', 'swing'),
-    ('piano ', 'play'),
-    ('violin  ', 'play'),
+    ('glider', 'fly'),  # glide
+    # ('skateboard', 'skate'),
+    ('piano', 'play'),
+    ('violin', 'play'),
     # ('book', 'read'), # teach
 ]
+
+def capabilities_of_things():
+    d = defaultdict(list)
+    for thing, cap in _capabilities_of_things: d[cap].append(thing)
+    return d
 
 adj2very = [
     ('good', 'excellent'),
@@ -517,7 +526,7 @@ class TreeSet(Set):
         data = data()
         for parent, children in data.items():
             self.child._dict[parent] = children
-            self.equal._dict[parent] = [parent]
+            # self.equal._dict[parent] = [parent]
             for child in children:
                 self.parent._dict[child] = [parent]
                 self.equal._dict[child] = [child]
@@ -631,8 +640,8 @@ def make_examples(task, nrows=4, vocab_for_each_row=True, **kwargs):
 def _item2str(item, vocab=None, reverse=False):
     return (f'{item[1]} {item[0]}' if reverse else f'{item[0]} {item[1]}') if isinstance(item, tuple) else f'{item}'
 
-def _cxt2str(cxt, vocab=None, prefix='', sep=', ', item2str=_item2str):
-    return prefix + sep.join([item2str(item, vocab) for item in cxt])
+def _cxt2str(cxt, vocab=None, prefix='', suffix='', sep=', ', item2str=_item2str):
+    return prefix + sep.join([item2str(item, vocab) for item in cxt]) + suffix
 
 @dataclass
 class Ranges:
@@ -645,10 +654,14 @@ class Ranges:
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
 def locate(tokens, substring, return_last=False):
     whole_string = "".join(t for t in tokens)
-    assert substring in whole_string, f'{tokens}\n{substring} not int {whole_string}'
-    # index_fn = getattr(whole_string, 'index' if not return_last else 'rindex')
-    # char_loc = index_fn(substring)
-    char_loc = list(re.finditer(r"\b%s\b" % substring, whole_string))[-int(return_last)].span()[0]
+    assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
+    if '->' in substring:
+        index_fn = getattr(whole_string, 'index' if not return_last else 'rindex')
+        char_loc = index_fn(substring)
+    else:
+        matches = list(re.finditer(r"\b%s\b" % substring, whole_string))
+        assert len(matches) > 0, f'{tokens}\n{substring} not match {whole_string}'
+        char_loc = matches[-int(return_last)].span()[0]
     loc = 0; tok_start, tok_end = None, None
     for i, t in enumerate(tokens):
         loc += len(t)

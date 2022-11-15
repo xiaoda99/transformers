@@ -425,15 +425,12 @@ def lookup_top_entries(tokenizer, m, keyword, topk=20):
     return show_topk(*m[i].round().int().topk(topk), indices_fn=indices_fn)
 
 def interpret_circuit(model, tokenizer, task, node, topi):
-    # node = node.parent.parent.parent
     assert node.data.step in [-1, 1], str(node.data.step)
     qk = node.data.step == 1
-    # task = result.task
-    # topi = [0, 1, 2]
     if isinstance(topi, int): topi = [topi]
     head_attr = get_matched_head_attr(node.data)
-    for l, h in np.array(topk_md(head_attr, 10)[:2]).T[topi]:
-        print(l, h)
+    for l, h in np.array(topk_md(head_attr, 20)[:2]).T[topi]:
+        print(l, h, 'qk' if qk else 'io')
         m = get_matrix(model, l, h, qk=qk, compute_eigv=True)
         if not qk: m = m.T
         vocab_fn = task[0]

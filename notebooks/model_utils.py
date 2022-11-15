@@ -33,7 +33,7 @@ sys.path.insert(0, '/nas/xd/projects/pptree')
 from pptree import Node, print_tree
 
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, \
-    equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects
+    equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr
 
 from child_utils import make_data_tuple
 
@@ -477,6 +477,12 @@ def mlp_forward(block, hidden_states, layer=None, output_intermediate=False,
                 labels=None, loss_reduction=None, scaled=False):
     if layer is not None:
         model = block
+        assert not isinstance(layer, Iterable), str(layer)
+        # if isinstance(layer, Iterable):
+        #     assert len(layer) == 1, f'{len(layer)} != 1'
+        #     layer = layer[0]
+        #     assert len(hidden_states) == 1, f'{len(hidden_states)} != 1'
+        #     hidden_states = hidden_states[0]
         block = model.transformer.h[layer]
     hidden_states = scaled_ln(block.ln_2, hidden_states, scaled=scaled)
     if layer is None: return block.mlp(hidden_states, output_intermediate=output_intermediate)
@@ -1137,7 +1143,7 @@ def attribute_step(data_tuple, model, node, attribute_k=False):
     fwd_fn = partial(sum_forward, outputs=o, labels=_labels, output_layer=output_layer)
     keys = ['attn_weights', 'mlp_mask', 'embed_mask']
     x = OrderedDict((key, get_x(key, o, to_layer=to_layer)) for key in keys)
-    attr, ys, logits = attribute(fwd_fn, model, x, fns, num_points=4 if attribute_k else 7) 
+    attr, ys, logits = attribute(fwd_fn, model, x, fns, num_points=4 if attribute_k else 7)
     # fwd_fn = partial(sum_forward, outputs=o, labels=_labels, reduce_fn=torch.cat, scaled=False)
     # attr2 = attr #attribute2(fwd_fn, model, x, fns)
     o.attn_attr[node.name] = attr.attn # associate non-averageable attn attr to current node. tricky
@@ -1156,15 +1162,15 @@ def get_x(key, outputs, to_layer=None):
     if to_layer is not None and x.ndim >= 2 and x.size(1) == L: x[:, to_layer:] = 0
     return x
 
-def plot_attr(attr, attr2):
-    fig, axs = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(8, 4))  # (12, 4)
-    def concat_attrs(head_attr, mlp_attr, embed_attr):
-        return torch.cat([head_attr, einops.repeat(mlp_attr, 'l -> l 2'), ], dim=1)
-    for ax, a in zip(axs, [concat_attrs(attr.head, attr.mlp, attr.embed), concat_attrs(attr2.head, attr2.mlp, attr2.embed)]):
-        res = sns.heatmap(a, cbar=False, ax=ax)
-        _ = res.set_yticklabels(res.get_ymajorticklabels(), rotation=0)
-        # res.tick_params(top=False, right=True, labeltop=False, labelright=True)
-    plt.show()
+# def plot_attr(attr, attr2):
+#     fig, axs = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(8, 4))  # (12, 4)
+#     def concat_attrs(head_attr, mlp_attr, embed_attr):
+#         return torch.cat([head_attr, einops.repeat(mlp_attr, 'l -> l 2'), ], dim=1)
+#     for ax, a in zip(axs, [concat_attrs(attr.head, attr.mlp, attr.embed), concat_attrs(attr2.head, attr2.mlp, attr2.embed)]):
+#         res = sns.heatmap(a, cbar=False, ax=ax)
+#         _ = res.set_yticklabels(res.get_ymajorticklabels(), rotation=0)
+#         # res.tick_params(top=False, right=True, labeltop=False, labelright=True)
+#     plt.show()
 
 def plot_attrs(attrs, figsize=(4, 4), topk=None):
     fig, axs = plt.subplots(1, len(attrs), sharey=False, figsize=(figsize[0] * len(attrs), figsize[1]))
@@ -1200,11 +1206,13 @@ def data2str(data):
     if attribute_k: s = s + ' ' + 'attr_k'
     return s
 
+def get_head_mlp_attr(data): return torch.cat([data.attr.head, data.attr.mlp.unsqueeze(-1)], dim=1)
+
 def get_matched_head_attr(data):
     # return data.attr.head / (-sum(data.scores.values()) / len(data.scores) if len(getattr(data, 'scores', {})) > 0 else 1)
     return data.attr.head * ((sum(data.scores.values()) / len(data.scores)).exp() if len(getattr(data, 'scores', {})) > 0 else 1)
 
-def add_node(parent, layer=None, head=None, topi=None, label_type='attn_labels', attribute_k=False, verbose=True):
+def add_node(parent, layer=None, head=None, topi=None, head_attr_fn=None, label_type='attn_labels', attribute_k=False, verbose=True):
     if parent is None:
         si = -1; node = Node('[-1] root ' + label_type)
         node.data = AttrData(step=si, label_type=label_type)
@@ -1214,7 +1222,8 @@ def add_node(parent, layer=None, head=None, topi=None, label_type='attn_labels',
             _id = id(parent); parent = parent.parent
             parent.children = [child for child in parent.children if id(child) != _id]
         if layer is None or topi is not None:
-            head_attr = get_matched_head_attr(parent.data)
+            if head_attr_fn is None: head_attr_fn = get_matched_head_attr
+            head_attr = head_attr_fn(parent.data)
             layer, head = topk_md(head_attr, 10, transpose=True)[topi][:2] if type(topi) == int \
                 else np.array(topk_md(head_attr, 10)[:2])[:, topi] # list
         si = parent.data.step
@@ -1230,6 +1239,7 @@ def add_node_to_result(result, node_name='node', label_type='attn_labels', **kwa
     parent = getattr(result, node_name, None)
     node = add_node(parent, label_type=label_type, **kwargs)
     setattr(result, node_name, node)
+    if 'root' in node.name: setattr(result, node_name.replace('node', 'root'), node)
     return node
 
 def plot_tree(node):
@@ -1240,18 +1250,22 @@ def plot_tree(node):
     print_tree(root)
     node.name = node.name.replace('*', '').replace('...', '')
 
-def show_result(result):
+def show_result(result, node_name='node', topk=10):
     print('\n'.join(result.texts[-1].split('\n')[:3]))
-    n = node = result.node; plot_tree(node)
+    n = node = getattr(result, node_name); plot_tree(node)
     path = []
     while n is not None: path.append(n); n = n.parent
     for n in path[::-1]:
         data = n.data
         if data.attr is not None:
             print(n.name)
-            plot_attrs(dict(data.scores,
-                head_attr=torch.cat([data.attr.head, data.attr.mlp.unsqueeze(-1)], dim=1),
-                matched_head_attr=get_matched_head_attr(data)), topk=10)
+            H = data.attr.head.size(1)
+            aux_scores = {'bos->bos': mr(get_head_matching_scores)(result.data_tuples, 'bos->bos', k_shot=3)} \
+                if data.step == -1 or maybe_mr(lambda x: x == H)(data.head) else {} # 1st step (i.e. pred head) or mlp step
+            scores = dict(data.scores, **aux_scores)
+            scores = {k: v.exp() for k, v in scores.items()}
+            plot_attrs(dict(scores, head_attr=get_head_mlp_attr(data),
+                matched_head_attr=get_matched_head_attr(data)), topk=topk)
     return node, result.data_tuples
 
 def get_argmax_attn_labels(o, layer, head, labels=None):
@@ -1262,9 +1276,10 @@ def get_argmax_attn_labels(o, layer, head, labels=None):
     return attn_labels
 
 def node2fn(node, model, outputs, labels, attn_mask=None):
+    H = outputs.attentions[0].size(1)
     d = node.data
     si, layer, head, label_type, attribute_k = d.step, d.layer, d.head, d.label_type, d.attribute_k
-    if head is None:
+    if head is None or not isinstance(head, Iterable) and head == H:
         return partial(mlp_forward, layer=layer, labels=labels if label_type is not None else None)
     def get_kwargs(layer, head):
         if label_type in ['argmax_attn_labels', 'attn_labels']:
@@ -1430,7 +1445,7 @@ def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x
         ystop = ystop or attn.size(0)
         attn = attn[ystart: ystop]
         ytokens = ytokens[ystart: ystop]
-        y_pos = [p - ystart for p in y_pos]
+        if y_pos is not None: y_pos = [p - ystart for p in y_pos]
     square = attn.size(0) == attn.size(1)
     if ax is None:
         if not square:
@@ -1460,20 +1475,10 @@ def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x
     if x_pos is not None: ax.vlines(x=x_pos, ymin=0, ymax=attn.size(0)-0.5*use_imshow, **kwargs)
     # plt.show()
 
-def plot_attns(data_tuples, tokenizer, l, h, v, attn_pattern=None, figsize=(20, 20)):
-    print(l, h, v)
-    for text, input_ids, labels, ranges, *args, o in data_tuples[:4]:
-        attn = o.attentions[l][0, h]
-        tokens = [t.replace('Ġ', '').replace('Ċ', '-'*12) for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
-        y_pos, x_pos = attn_pattern2labels(ranges, attn_pattern, attn.size()).nonzero().T \
-            if attn_pattern is not None else (None, None)
-        plot_attn(attn, tokens, y_pos=y_pos, x_pos=x_pos, figsize=figsize, fontsize=9, transpose=True)
-        plt.show()
-
-def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, k_shot=0, attn_patterns=None):
+def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None, k_shot=0, plot_attr=True):
     # print(l, h, v)#, get_head_rank(attr2.head, l, h))#, eigv_positivity[l, h], pos_score[l, h])
-    if True:
-        text, input_ids, labels, ranges, *args, o = data_tuple
+    text, input_ids, labels, ranges, *args, o = data_tuple
+    if plot_attr:
         H = o.attentions[0].size(1)
         fns = path2fns(node, partial(node2fn, model=model, outputs=o, labels=labels))
         fwd_fn = partial(sum_forward, outputs=o, output_layer=l)
@@ -1487,28 +1492,39 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, k_shot=0, attn_patt
         if iterable(logits): logits = sum(logits)
         if logits.size(-1) == model.lm_head.out_features:  # lm_logits
             _ = show_predictions(tokenizer, *args, logits=logits[-1:], labels=_labels, topk=4, sep='\t')
-
         if h == H: return
-        aw, aa = o.attentions[l][0, h], o.attn_attr[node.name][l, h]
-        bos_indices = args[1]; ystart = (node.data.step <= 0)*bos_indices[k_shot]; ystop = aa.size(0)
-        # fig, axs = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(20, 10*(ystop-ystart)/aa.size(0)))
-        fig, axs = plt.subplots(1, 2, sharex=False, sharey=False, figsize=(40*(ystop-ystart)/aa.size(0), 20))
-        tokens = [t.replace('Ġ', '').replace('Ċ', '-'*12) for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
-        # y_pos, x_pos, _ = topk_md(aa, k=nrows-k_shot)
-        y_pos, x_pos = None, None
-        if attn_patterns is not None:
-            all_attn_labels = [attn_pattern2labels(ranges, ap, aw.size()) for ap in attn_patterns]
-            if len(all_attn_labels) == 1:
-                attn_labels = all_attn_labels[0]
-            else:  # steps that have multiple attn patterns, e.g. ['ans->ans0]', 'ans->ans0+'] of relating heads
-                all_attn_labels = [(al, (al * aa).sum()) for al in all_attn_labels]
-                attn_labels = max(all_attn_labels, key=lambda x: x[1])[0] # find the pattern that best matches aa
-            y_pos, x_pos = attn_labels.nonzero().T
-        if True: #with Timer():
-            for ax, a in zip(axs, [aw, aa]):
-                plot_attn(a, tokens, ax=ax, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
-                    fontsize=9, transpose=True, use_imshow=False)
-            plt.show()
+
+    aw, aa = o.attentions[l][0, h], o.attn_attr[node.name][l, h]
+    bos_indices = args[1]; ystop = aw.size(0)
+    attns, ystart = ([aw, aa], (node.data.step <= 0)*bos_indices[k_shot]) if plot_attr else ([aw], 0)
+
+    fig, axs = plt.subplots(1, len(attns), sharex=False, sharey=False, figsize=(20*len(attns)*(ystop-ystart)/aw.size(0), 20))
+    if len(attns) == 1: axs = [axs]
+    tokens = [t.replace('Ġ', '').replace('Ċ', '-'*12) for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
+    y_pos, x_pos = None, None
+    if attn_patterns is not None:
+        all_attn_labels = [attn_pattern2labels(ranges, ap, aw.size()) for ap in attn_patterns]
+        if len(all_attn_labels) == 1:
+            attn_labels = all_attn_labels[0]
+        else:  # steps that have multiple attn patterns, e.g. ['ans->ans0]', 'ans->ans0+'] of relating heads
+            all_attn_labels = [(al, (al * aa).sum()) for al in all_attn_labels]
+            attn_labels = max(all_attn_labels, key=lambda x: x[1])[0] # find the pattern that best matches aa
+        y_pos, x_pos = attn_labels.nonzero().T
+    if True: #with Timer():
+        for ax, a in zip(axs, attns):
+            plot_attn(a, tokens, ax=ax, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
+                fontsize=9, transpose=True, use_imshow=False)
+        plt.show()
+
+attn_patterns_by_step = {-1: ['bos->ans0]'], 0: ['bos->ans]'], 1: ['ans]->ans0]', 'ans]->ans0+']}
+
+def plot_attn_attrs(data_tuples, model, tokenizer, node, topi=[0], head_attr_fn=None, **kwargs):
+    if head_attr_fn is None: head_attr_fn = get_matched_head_attr
+    for l, h in zip(*np.array(topk_md(head_attr_fn(node.data), 10)[:2])[:, topi]):
+        print(l, h)
+        for data_tuple in data_tuples:
+            plot_attn_attr(data_tuple, model, tokenizer, node, l, h,
+                attn_patterns=attn_patterns_by_step[node.data.step], **kwargs)
 
 def cluster(emb, labels, n_clusters=3):
     assert emb.shape[0] == labels.shape[0], '%d ！= %d' % (emb.shape[0], labels.shape[0])
