@@ -412,6 +412,7 @@ def attn_forward(block, hq, hk, hv, by_head=None, #compute_head_input=True,
 
 def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=None,
             attn_weights=None, attn_mask=None, attn_labels=None, hidden_states0=None, attribute_k=False, trim=True, scaled=True):
+    assert not isinstance(layer, Iterable)  # should use mixed_forward, which is clearer and simpler
     if isinstance(layer, Iterable):  # tuple, list or np.ndarray
         if not isinstance(hidden_states, (list, tuple)): hidden_states = [hidden_states] * len(layer)
         if attn_labels is not None:
@@ -477,12 +478,6 @@ def mlp_forward(block, hidden_states, layer=None, output_intermediate=False,
                 labels=None, loss_reduction=None, scaled=False):
     if layer is not None:
         model = block
-        assert not isinstance(layer, Iterable), str(layer)
-        # if isinstance(layer, Iterable):
-        #     assert len(layer) == 1, f'{len(layer)} != 1'
-        #     layer = layer[0]
-        #     assert len(hidden_states) == 1, f'{len(hidden_states)} != 1'
-        #     hidden_states = hidden_states[0]
         block = model.transformer.h[layer]
     hidden_states = scaled_ln(block.ln_2, hidden_states, scaled=scaled)
     if layer is None: return block.mlp(hidden_states, output_intermediate=output_intermediate)
@@ -490,6 +485,44 @@ def mlp_forward(block, hidden_states, layer=None, output_intermediate=False,
     logits, loss = lm_head_forward(model, hidden_states, labels=labels, loss_reduction=loss_reduction, scaled=scaled) \
         if labels is not None else (None, None)
     return Outputs(hidden_states=(hidden_states,), logits=logits, loss=loss)
+
+def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=None,
+    outputs=None, attn_attr=None, attribute_k=False, logits_after_sum=True, **kwargs):
+    H = outputs.attentions[0].size(1)
+    if any(h == H for h in head): assert 'attn_labels' not in label_type
+    logits_after_sum = 'attn_labels' not in label_type
+    # if not isinstance(hidden_states, (list, tuple)): hidden_states = [hidden_states] * len(layer)
+    assert len(layer) == len(head) == len(hidden_states), f'{len(layer)}, {len(head)}, {len(hidden_states)}'
+    fwd_outputs = []
+    for l, h, hs in zip(layer, head, hidden_states):
+        if h < H:  # self-attn
+            def get_kwargs(layer, head):
+                if label_type in ['argmax_attn_labels', 'attn_labels']:
+                    attn_labels = get_argmax_attn_labels(outputs, layer, head, labels=labels) \
+                        if label_type.startswith('argmax') else attn_attr[layer, head]
+                    kwargs = {'attn_labels': attn_labels, 'hidden_states0': outputs.hidden_states[layer]}
+                    # if attn_mask is not None: kwargs['attn_mask'] = attn_mask
+                    return kwargs
+                kwargs = {'attn_weights': outputs.attentions[layer]}
+                if label_type in ['labels', 'argmax_labels']:
+                    kwargs['labels'] = get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels) \
+                        if label_type == 'argmax_labels' else labels
+                return kwargs
+            o = head_forward(model, hs, l, h, attribute_k=attribute_k, **get_kwargs(l, h), **kwargs)
+        else:  # mlp
+            o = mlp_forward(model, hs, layer=l, labels=labels, **kwargs)
+        fwd_outputs.append(o)
+
+    def try_sum(l):
+        none_flags = [i is None for i in l]
+        assert all(none_flags) or not any(none_flags)
+        return sum(l) if not any(none_flags) else None
+    all_hidden_states, all_logits, all_loss = zip(*[
+        (o.hidden_states[0] if len(o.hidden_states) == 1 else None, o.logits, o.loss) for o in fwd_outputs])
+    hidden_states, logits, loss = [try_sum(l) for l in [all_hidden_states, all_logits, all_loss]]
+    if logits_after_sum: logits, loss = lm_head_forward(model, hidden_states, labels=labels, **kwargs)
+    hidden_states = (hidden_states,) if hidden_states is not None else ()
+    return Outputs(hidden_states=hidden_states, logits=logits, loss=loss)
 
 def lm_head_forward(model, hidden_states, labels=None, loss_reduction=None, compact=False, scaled=False):
     if compact and labels is not None:
@@ -1279,6 +1312,9 @@ def node2fn(node, model, outputs, labels, attn_mask=None):
     H = outputs.attentions[0].size(1)
     d = node.data
     si, layer, head, label_type, attribute_k = d.step, d.layer, d.head, d.label_type, d.attribute_k
+    return partial(mixed_forward, layer=layer, head=head, labels=labels, label_type=label_type,
+        outputs=outputs, attn_attr=outputs.attn_attr[node.parent.name], attribute_k=attribute_k, scaled=True)
+
     if head is None or not isinstance(head, Iterable) and head == H:
         return partial(mlp_forward, layer=layer, labels=labels if label_type is not None else None)
     def get_kwargs(layer, head):
@@ -1476,29 +1512,33 @@ def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x
     # plt.show()
 
 def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None, k_shot=0, plot_attr=True):
-    # print(l, h, v)#, get_head_rank(attr2.head, l, h))#, eigv_positivity[l, h], pos_score[l, h])
     text, input_ids, labels, ranges, *args, o = data_tuple
     if plot_attr:
         H = o.attentions[0].size(1)
         fns = path2fns(node, partial(node2fn, model=model, outputs=o, labels=labels))
         fwd_fn = partial(sum_forward, outputs=o, output_layer=l)
-        _labels = labels if len(fns) == 0 else None
+        _labels, label_type = (labels, 'labels') if len(fns) == 0 else (None, None)
         # _labels = get_argmax_labels(model, o.hidden_states[-2], _labels)
-        fn = partial(head_forward, layer=l, head=h, attn_weights=o.attentions[l], labels=_labels) \
-            if h < H else partial(mlp_forward, layer=l, labels=_labels)
+        if not isinstance(l, Iterable):
+            fn = partial(head_forward, layer=l, head=h, attn_weights=o.attentions[l], labels=_labels) \
+                if h < H else partial(mlp_forward, layer=l, labels=_labels)
+        else:
+            fn = partial(mixed_forward, layer=l, head=h, labels=labels, label_type=label_type, outputs=o)
         keys = ['embed_mask', 'mlp_mask', 'attn_weights']
-        x = OrderedDict((key, get_x(key, o, to_layer=l)) for key in keys)
+        to_layer = max(l) if isinstance(l, Iterable) else l
+        x = OrderedDict((key, get_x(key, o, to_layer=to_layer)) for key in keys)
         _, ys, logits = attribute(fwd_fn, model, x, [fn] + fns, num_points=3, forward_only=True); print(ys)
-        if iterable(logits): logits = sum(logits)
+        if isinstance(logits, (list, tuple)): logits = sum(logits)
         if logits.size(-1) == model.lm_head.out_features:  # lm_logits
             _ = show_predictions(tokenizer, *args, logits=logits[-1:], labels=_labels, topk=4, sep='\t')
-        if h == H: return
+        if isinstance(h, Iterable) or h == H: return
 
     aw, aa = o.attentions[l][0, h], o.attn_attr[node.name][l, h]
     bos_indices = args[1]; ystop = aw.size(0)
     attns, ystart = ([aw, aa], (node.data.step <= 0)*bos_indices[k_shot]) if plot_attr else ([aw], 0)
 
-    fig, axs = plt.subplots(1, len(attns), sharex=False, sharey=False, figsize=(20*len(attns)*(ystop-ystart)/aw.size(0), 20))
+    _, axs = plt.subplots(1, len(attns), sharex=False, sharey=False,
+                figsize=(20*len(attns)*(ystop-ystart)/aw.size(0), 20))
     if len(attns) == 1: axs = [axs]
     tokens = [t.replace('Ġ', '').replace('Ċ', '-'*12) for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
     y_pos, x_pos = None, None
@@ -1518,16 +1558,18 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
 
 attn_patterns_by_step = {-1: ['bos->ans0]'], 0: ['bos->ans]'], 1: ['ans]->ans0]', 'ans]->ans0+']}
 
-def plot_attn_attrs(data_tuples, model, tokenizer, node, topi=[0], head_attr_fn=None, **kwargs):
+def plot_attn_attrs(data_tuples, model, tokenizer, node, topi=[0], head_attr_fn=None, mix=False, **kwargs):
     if head_attr_fn is None: head_attr_fn = get_matched_head_attr
-    for l, h in zip(*np.array(topk_md(head_attr_fn(node.data), 10)[:2])[:, topi]):
-        print(l, h)
+    heads = np.array(topk_md(head_attr_fn(node.data), 10)[:2])[:, topi]
+    heads = zip(*heads) if not mix else [heads]
+    for l, h in heads:
+        print(f'{l}-{h}' if not mix else ' + '.join([f'{_l}-{_h}' for _l, _h in zip(l, h)]))
         for data_tuple in data_tuples:
             plot_attn_attr(data_tuple, model, tokenizer, node, l, h,
                 attn_patterns=attn_patterns_by_step[node.data.step], **kwargs)
 
 def cluster(emb, labels, n_clusters=3):
-    assert emb.shape[0] == labels.shape[0], '%d ！= %d' % (emb.shape[0], labels.shape[0])
+    assert emb.shape[0] == labels.shape[0], '%d != %d' % (emb.shape[0], labels.shape[0])
     centroids = emb.reshape(n_clusters, len(labels) // n_clusters, emb.shape[-1]).mean(axis=1)
     kmeans = KMeans(n_clusters=n_clusters)#, init=centroids)
     labels_ = kmeans.fit(emb).labels_
