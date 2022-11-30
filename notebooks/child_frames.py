@@ -122,18 +122,18 @@ _person_adjs = [
     [['rich'], ['poor']],
     [['big'], ['small']],
     [['insensitive'], ['sensitive']],
-    [['quiet'], ['noisy']],
+    [['quiet'], ['loud']],  # noisy
     [['young'], ['old']],
     [['fast'], ['slow']],
     [['ugly'], ['beautiful']],
     [['clean'], ['dirty']],
     # [['polite'], ['rude', 'impolite']],  # brutal, harsh
-    [['gentle'], ['harsh']],
+    # [['gentle'], ['harsh']],
     [['strong'], ['weak']],
     [['good'], ['bad']],
     # [['impatient'], ['patient']],  # confuse with patient vs doctor/healthy
     [['conscious'], ['unconscious']],
-    [['honest'], ['fraudulent', 'dishonest']],
+    [['honest'], ['dishonest']],  # fraudulent
     [['brave'], ['cowardly']],
     [['unpopular'], ['popular']],
     [['uncomfortable'], ['comfortable']],
@@ -144,9 +144,9 @@ _person_adjs = [
     [['friendly'], ['unfriendly']],  # hostile
     [['asleep'], ['awake']],
     [['boring', 'uninteresting'], ['interesting']],
-    [['dangerous'], ['harmless']],  # safe is not good according to 16-14
+    [['dangerous'], ['safe']],  # harmless, safe is not good according to 16-14
     [['ignorant'], ['knowledgeable']],
-    [['hardworking'], ['lazy']],
+    # [['hardworking'], ['lazy']],
     [['correct'], ['wrong', 'incorrect']],
     [['male'], ['female']],
     [['inside'], ['outside']],
@@ -170,3 +170,9 @@ _person_adjs = [
 ]
 
 def person_adjs(): return _person_adjs
+    # ans = []
+    # for vec in _person_adjs:
+    #     for tmp in vec:
+    #         for a in tmp:
+    #             ans.append(a.capitalize())
+    # return ans

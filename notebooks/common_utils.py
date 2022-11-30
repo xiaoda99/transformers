@@ -198,6 +198,12 @@ def maybe_map(fn, *iters):
 
 def lget(l, i, default=None): return l[i] if len(l) > i else default
 
+def list_get(l, i, reduce_fn=None):
+    if reduce_fn is None: reduce_fn = lambda x: x
+    if i is None: return reduce_fn(l) 
+    if not isinstance(i, Iterable): return l[i]
+    return reduce_fn([l[j] for j in i])
+
 import inspect
 def get_default_value(fn, name):
     # https://stackoverflow.com/questions/12627118/get-a-function-arguments-default-value

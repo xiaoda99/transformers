@@ -3,13 +3,14 @@ import os
 import json
 import csv
 from collections import defaultdict, OrderedDict, Counter, Iterable
-from functools import partial
+from functools import partial, wraps
 import string
 from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass, fields
 import traceback
 import time
 import re
+import numpy as np
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -63,9 +64,11 @@ units_of_mass = ['nanogram', 'microgram', 'milligram', 'gram', 'kilogram', 'ton'
 things = ['atom', 'molecule', 'cell', 'tissue', 'organ', 'system', 'person', 'community', 'city', 'state', 'country', 'continent', 'planet', 'star', 'galaxy', 'universe']
 sizes = ['tiny', 'small', 'large', 'huge',]# 'medium', 'gigantic']
 # degrees = ['bachelor', 'master', 'doctor', 'postdoc']
-posets = [list(string.ascii_uppercase)[:14], list(string.ascii_lowercase)[:14], list(string.ascii_uppercase)[14:], list(string.ascii_lowercase)[14:], digits, cardinals, ordinals,
-    times_of_day, days_of_week, months, seasons, ages_of_life, times_of_history, #units_of_time, 
-    things, sizes]# units_of_length, units_of_mass, SI_prefixes_small, SI_prefixes_large]
+
+# posets = [list(string.ascii_uppercase)[:14], list(string.ascii_lowercase)[:14], list(string.ascii_uppercase)[14:], list(string.ascii_lowercase)[14:], digits, cardinals, ordinals,
+#     times_of_day, days_of_week, months, seasons, ages_of_life, times_of_history, #units_of_time, 
+#     things, sizes]# units_of_length, units_of_mass, SI_prefixes_small, SI_prefixes_large]
+posets = [times_of_day,clock_of_day,years, days_of_week, months, seasons]
 closed_posets = [list(string.ascii_uppercase)[:7], list(string.ascii_lowercase)[:7],][:] + [digits, cardinals, #ordinals[:5], 
     days_of_week, months, ]#seasons, times_of_history, ages_of_life, sizes]
 open_posets = [times_of_day, ages_of_life, times_of_history, units_of_length, units_of_mass, things, sizes, ]
@@ -277,6 +280,7 @@ def types_of_things(): return {
 # fast slow -> speed
 
 _capabilities_of_things = [ # A x can y.
+    # avoid the hammer->hammer, saw->saw, glider->glide pattern
     ('knife', 'cut'),
     ('calculator', 'add'), # calculate
     ('phone', 'call'),
@@ -338,15 +342,18 @@ adj2very = [
     ('happy', 'ecstatic'),
 ]
 
-en2fr = [
+_en2fr = [
     ('apple', 'pomme'),
-    ('cat', 'chat'),
     ('banana', 'banane'),
+    ('pear', 'poire'),
+    # ('grapes', 'raisins'),
     # ('watermelon', 'pastèque'),
-    ('morning', 'matin'),
     ('butter', 'beurre'),
     ('cheese', 'fromage'),
+    ('cat', 'chat'),
     ('dog', 'chien'),
+    ('pig', 'cochon'),
+    # ('bear', 'ours'),
     ('sugar', 'sucre'),
     ('coffee', 'café'),
     ('tea', 'thé'),
@@ -354,10 +361,13 @@ en2fr = [
     ('milk', 'lait'),
     ('bread', 'pain'),
     ('flower', 'fleur'),
-    ('grape', 'raisin'),
     ('car', 'voiture'),
     ('truck', 'camion'),
+    ('book', 'livre'),
+    ('knife', 'couteau'),
 ]
+
+def en2fr(): return {en: [wrap_noun_to_french(en)] for en, _ in _en2fr}
 
 _country2capital = [ #The capital of Germany is Berlin.
     ('Germany', 'Berlin'),
@@ -415,6 +425,38 @@ tea: There is tea.
         return text
     return extract_fn(query_openai(prompt_fn(noun)))
 
+def wrap_noun_to_french(noun):
+    prompt_fn = lambda s: \
+f'''dog: Martin a un chien.
+apple: Martin a une pomme.
+tea: Martin a du thé.
+{s}: Martin a'''
+    def extract_fn(text):
+        assert text.endswith('.'); text = text[:-1]
+        return text.strip()  # strip leading spaces
+    return extract_fn(query_openai(prompt_fn(noun))) if noun != 'tea' else 'du thé'
+
+def wrap_noun2(noun):
+    prompt_fn = lambda s: \
+f'''summer: Martin arrived in the summer.
+Friday: Martin arrived on Friday.
+morning: Martin arrived in the morning.
+February: Martin arrived in February.
+noon: Martin arrived at noon.
+2020: Martin arrived in 2020.
+{s}: Martin arrived'''
+    # print(query_openai(prompt_fn(noun)))
+    def extract_fn(text):
+        text = text.strip()
+        if text.endswith('.'): text = text[:-1]
+        if not text.split()[-1].startswith(noun[:2]): # e.g. 'red' -> 'a red apple'
+            # print(f'{noun} -> {text}. Skip abnormal wrap')
+            text = noun
+        return text
+    # print(query_openai(prompt_fn(noun)))
+    return extract_fn(query_openai(prompt_fn(noun)))
+
+
 grammar_correction = [
     ('Anna and Mike is going skiing.', 'Anna and Mike are going skiing.'),
     ('Anna and Pat are married; he has been together for 20 years.', 'Anna and Pat are married; they have been together for 20 years.'),
@@ -441,18 +483,6 @@ remove_two = [
     ('0, 1, 18, 9, 9, 0, 15, 6, 1', '18, 15, 6'),
     ('0, 17, 4, 8, 4, 10, 1', '0, 17, 8, 10, 1'),
 ]
-
-# https://stackoverflow.com/questions/20336524/verify-correct-use-of-a-and-an-in-english-texts-python
-def starts_with_vowel_sound(word, pronunciations=None):
-    if pronunciations is None: pronunciations = cmudict.dict()
-    for syllables in pronunciations.get(word, []):
-        return syllables[0][-1].isdigit() 
-
-def add_a_or_an(word):
-    word = lower(word)
-    if word.endswith('s') and word not in ['bus'] and not word.endswith('ss'): # plies, scissors, etc. but not grass, dress, etc.
-        return f'a pair of {word}'
-    return ('an' if starts_with_vowel_sound(word) else 'a') + ' ' + word
 
 class Relation(object):
     def __init__(self, _dict): self._dict = _dict
@@ -485,15 +515,26 @@ class EqSet(Set):
         data = data()
         for rel_name, d in zip(self.rel_names, [{data[i]: [data[i]] for i in range(0, len(data))}]):
             setattr(self, rel_name, Relation(_dict=d))
+            self.equal._inv_dict = self.equal._dict
 
 class PoSet(Set):
     def __init__(self, data):
         super().__init__(data, ['prev', 'next', 'equal'])
         data = data()
-        for rel_name, d in zip(self.rel_names, [{data[i]: data[i - 1] for i in range(1, len(data))},
-                                                {data[i]: data[i + 1] for i in range(0, len(data) - 1)},
-                                                {data[i]: data[i] for i in range(0, len(data))}]):
+        vector = choice(data)
+        # for vector in data:
+        for rel_name, d in zip(self.rel_names, [{vector[i]: [vector[i - 1]] for i in range(1, len(vector))},
+                                                {vector[i]: [vector[i + 1]] for i in range(0, len(vector) - 1)},
+                                                {vector[i]: [vector[i]] for i in range(0, len(vector))}]):
+            # if rel_name == 'prev':
+            #     self.prev._dict.update(d)
+            # elif rel_name == 'next':
+            #     self.next._dict.update(d)
+            # elif rel_name == 'equal':
+            #     self.equal._dict.update(d)
             setattr(self, rel_name, Relation(_dict=d))
+        self.prev._inv_dict, self.next._inv_dict = self.next._dict, self.prev._dict
+        self.equal._inv_dict = self.equal._dict
 
 class SymSet(Set):
     def __init__(self, data):
@@ -541,21 +582,53 @@ def MlM_gen(rels, cxt_len=3):
     # print(rel._dict)
     query = choice(list(rel.dom())) # 选择查询
     candidates[hop] = [choice(r.f(query)) for r in rels[hop][:1]]
-    
+    # print("query:", query)
     # candidates[hop] = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
     candidates[hop] += sample(list(rel.codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
         cxt_len - len(candidates[hop])) # 选择候选
-    
+    # print("candidates:", candidates)
     hop = 1; rel = rels[hop][0]
+    # print(rel._dict)
     # candidates[hop] = sample(list(rel.dom()), cxt_len)
-    ans = choice(list(rel.codom()))
+    ans = choice(list(rel.codom())) #查询结果
+    # print("ans",ans)
     candidates[hop] = [choice(rel.inv_f(ans))] + sample(list(rel.dom() - set(rel.inv_f(ans))), cxt_len - 1)
-    cxt = sample(list(zip(*candidates.values())), cxt_len)
-
-    candidates = ([rel.f(x[1])[0] for x in cxt], [x[1] for x in cxt])
+    # print("candidates:", candidates)
+    # print(list(zip(*candidates.values())))
+    cxt = sample(list(zip(*candidates.values())), cxt_len) # cxt [('Warren', 'afternoon'), ('Maria', 'evening')] 乱序作用
+    # print(cxt)
+    candidates = ([rel.f(x[1])[0] for x in cxt], [x[1] for x in cxt]) # (['noon', 'afternoon'], ['afternoon', 'evening'])
+    # print(candidates)
     def transform_fn(cxt, query):
         hop = 0; rel = rels[hop][0]; tgt, ans0 = seq(cxt).find(lambda x: rel.b(query, x[0]))#[1]
         hop = 1; rel = rels[hop][0]; ans = rel.f(ans0)[0]
+        return tgt, ans0, ans
+    return cxt, query, candidates, transform_fn(cxt, query)
+
+def negate(bool_fn):
+    @wraps(bool_fn)  # https://stackoverflow.com/questions/42561843/python-negate-boolean-function
+    def wrapperd_fn(*args, **kwargs): return not bool_fn(*args, **kwargs)
+    return wrapperd_fn
+
+def MNlM_gen(rels, cxt_len=2, do_negate=True):
+    candidates = OrderedDict()
+    rels = [s.relations for s in rels]
+    hop = 0; rel = rel0 = rels[hop][0]; bool_fn0 = rel.b
+    query = choice(list(rel.dom())) # 选择查询
+    candidates[hop] = [choice(r.f(query)) for r in rels[hop][:1]]
+    # candidates[hop] = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
+    candidates[hop] += sample(list(rel.codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
+        cxt_len - len(candidates[hop])) # 选择候选
+    hop = 1; rel = rel1 = rels[hop][0]
+    # candidates[hop] = sample(list(rel.dom()), cxt_len)
+    ans = choice(list(rel.codom())) #查询结果
+    candidates[hop] = [choice(rel.inv_f(ans))] + sample(list(rel.dom() - set(rel.inv_f(ans))), cxt_len - 1)
+    if do_negate: assert cxt_len == 2; candidates[hop] = candidates[hop][::-1]; bool_fn0 = negate(bool_fn0)
+    cxt = sample(list(zip(*candidates.values())), cxt_len) # cxt [('Warren', 'afternoon'), ('Maria', 'evening')] 乱序作用
+    candidates = ([rel.f(x[1])[0] for x in cxt], [x[1] for x in cxt]) # (['noon', 'afternoon'], ['afternoon', 'evening'])
+    def transform_fn(cxt, query):
+        tgt, ans0 = seq(cxt).find(lambda x: bool_fn0(query, x[0]))#[1]
+        ans = rel1.f(ans0)[0]
         return tgt, ans0, ans
     return cxt, query, candidates, transform_fn(cxt, query)
 
@@ -624,11 +697,6 @@ def make_examples(task, nrows=4, vocab_for_each_row=True, **kwargs):
     for i in range(nrows * 2):
         if vocab_for_each_row: vocab = vocab_fn()
         cxt, query, candidates, ans, *a = example_gen_fn(vocab, **kwargs)
-        # try:
-        #     cxt, query, candidates, ans, *a = example_gen_fn(vocab, **kwargs)
-        # except:
-        #     traceback.print_exc()  # print(traceback.format_exc())
-        #     continue
         if isinstance(query, list): query = tuple(query)
         if (tuple(cxt), query, ans) not in qa_set:
             qa_set.add((tuple(cxt), query, ans))
@@ -650,9 +718,12 @@ class Ranges:
     ans0: tuple = None
     query: tuple = None
     tgt: tuple = None
+    candidates: tuple = None
+    example: tuple = None
 
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
 def locate(tokens, substring, return_last=False):
+    if substring is None: return None
     whole_string = "".join(t for t in tokens)
     assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
     if '->' in substring:
@@ -677,13 +748,15 @@ def locate(tokens, substring, return_last=False):
     return (tok_start, tok_end)
 
 def example2ranges(example, tokens, bos_token):
-    cxt, query, options, (tgt, ans0, ans), *cls = example
+    cxt, query, candidates, (tgt, ans0, ans), *cls = example
     return Ranges(
         bos = locate(tokens, bos_token, return_last=True),
         ans = locate(tokens, ans, return_last=True),
-        ans0 = locate(tokens, ans0) if ans0 else None,
-        query = locate(tokens, query, return_last=True) if query else None,
-        tgt = locate(tokens, tgt) if query and tgt else None
+        ans0 = locate(tokens, ans0),
+        query = locate(tokens, query, return_last=True),
+        tgt = locate(tokens, tgt),
+        candidates = tuple(map(np.array, zip(*[locate(tokens, cand) for cand in candidates[1]]))) if candidates else None,
+        example = (0, len(tokens))
     )
 
 def move_ranges(r, offset):
@@ -774,15 +847,19 @@ def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
 
     return examples, '\n'.join(example2str(v, e) for v, e in zip(vocabs, examples)) + '\n', bos_token
 
-def generate(task, do_g2c=False, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True):
+def generate(task, do_g2c=False, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True, no_query = False):
     if do_g2c:
         vocab_fn, gen_fn, *a = task
         task = (vocab_fn, g2c(gen_fn), *a)
     counts = []
-    while len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3:
+    if no_query:
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
         answer_indices = [cands[0].index(ans) for _, _, cands, (tgt, ans0, ans), *cls in examples]
-        counts = [v for k, v in Counter(answer_indices).most_common()]
+    else:
+        while len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3:
+            vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
+            answer_indices = [cands[0].index(ans) for _, _, cands, (tgt, ans0, ans), *cls in examples]
+            counts = [v for k, v in Counter(answer_indices).most_common()]
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())
         label_probs = F.one_hot(torch.LongTensor(answer_indices))

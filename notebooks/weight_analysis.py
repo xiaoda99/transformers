@@ -15,7 +15,7 @@ import torch.nn.functional as F
 import einops
 from einops import rearrange
 
-from model_utils import get_matched_head_attr
+# from model_utils import get_matched_head_attr
 from common_utils import iterable, show_topk, topk_md
 
 
@@ -424,20 +424,15 @@ def lookup_top_entries(tokenizer, m, keyword, topk=20):
     indices_fn = tokenizer.convert_ids_to_tokens
     return show_topk(*m[i].round().int().topk(topk), indices_fn=indices_fn)
 
-def interpret_circuit(model, tokenizer, task, node, topi):
-    assert node.data.step in [-1, 1], str(node.data.step)
-    qk = node.data.step == 1
-    if isinstance(topi, int): topi = [topi]
-    head_attr = get_matched_head_attr(node.data)
-    for l, h in np.array(topk_md(head_attr, 20)[:2]).T[topi]:
-        print(l, h, 'qk' if qk else 'io')
-        m = get_matrix(model, l, h, qk=qk, compute_eigv=True)
-        if not qk: m = m.T
-        vocab_fn = task[0]
-        hop = 1; rel = vocab_fn()[hop].relations[0]
-        for x in rel.dom():
-            if len(tokenizer.tokenize(' ' + x)) == 1:
-                print(f'{x}->{rel.f(x)} {lookup_top_entries(tokenizer, m, x, topk=5)}')
+def interpret_circuit(model, tokenizer, task, l, h, qk):
+    print(l, h, 'qk' if qk else 'io')
+    m = get_matrix(model, l, h, qk=qk, compute_eigv=True)
+    if not qk: m = m.T
+    vocab_fn = task[0]
+    hop = 1; rel = vocab_fn()[hop].relations[0]
+    for x in rel.dom():
+        if len(tokenizer.tokenize(' ' + x)) == 1:
+            print(f'{x}->{rel.f(x)} {lookup_top_entries(tokenizer, m, x, topk=5)}')
 
 def get_head2scores(node):
     head2scores = []
