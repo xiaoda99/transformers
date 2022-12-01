@@ -456,7 +456,22 @@ noon: Martin arrived at noon.
     # print(query_openai(prompt_fn(noun)))
     return extract_fn(query_openai(prompt_fn(noun)))
 
+def conj():
+    ss = ["", "So", "Therefore,", "Yes,"]
+    s = choice(ss)
+    return s if s == "" else s + " "
 
+def xxx_be():
+    ss = [
+        ["is"],
+        ["definitely is", "sometimes is", "always is"],
+        ["may be", "must be", "should be"],
+        ["may sometimes be", "must always be", "should always be", "has always been"],
+        [", in all respects, is", ", anyhow, is", ", as far as I know, is", ", generally speaking, is"],
+    ]
+    s = choice(choice(ss))
+    return s if s.startswith(",") else " " + s
+    
 grammar_correction = [
     ('Anna and Mike is going skiing.', 'Anna and Mike are going skiing.'),
     ('Anna and Pat are married; he has been together for 20 years.', 'Anna and Pat are married; they have been together for 20 years.'),
@@ -768,11 +783,11 @@ def move_ranges(r, offset):
 def locate_ranges(examples, example_strs, tokenizer, bos_token):
     ranges, all_tokens, newline_token = [], [], tokenizer.tokenize('\n')[0]  # 'Ċ'
     assert len(examples) == len(example_strs)
-    for e, e_str in zip(examples, example_strs):
+    for i, (e, e_str) in enumerate(zip(examples, example_strs)):
         # tokens = tokenizer.tokenize(e_str)  # can not work with locate
         tokens = [tokenizer.decode([i]) for i in tokenizer.encode(e_str)]
         assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
-        r = example2ranges(e, tokens, bos_token)
+        r = example2ranges(e, tokens, bos_token[i] if isinstance(bos_token, (tuple, list)) else bos_token)
         ranges.append(move_ranges(r, len(all_tokens)))
         all_tokens += tokens + [newline_token]
     return ranges
@@ -843,9 +858,14 @@ def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
         if len(cls) > 0:  # g2c
             cls = cls[0]
             s += boc_token + ' ' + cls2str(cls)
-        return s
-
-    return examples, '\n'.join(example2str(v, e) for v, e in zip(vocabs, examples)) + '\n', bos_token
+        if bos_token == '':
+            query_str = strs[1]; assert query_str != ''
+            _bos_token = "'s" if query_str.endswith("'s") else query_str.split()[-1]
+        else:
+            _bos_token = bos_token
+        return s, _bos_token
+    example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
+    return examples, '\n'.join(example_strs) + '\n', bos_tokens
 
 def generate(task, do_g2c=False, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True, no_query = False):
     if do_g2c:
