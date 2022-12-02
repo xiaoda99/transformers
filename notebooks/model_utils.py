@@ -395,11 +395,6 @@ def scale_to(tensor, target):
     assert torch.allclose(tensor.norm(dim=-1), target.norm(dim=-1))  # debug
     return tensor
 
-def merge_attn_weights(aw, aw2):
-    replaced_i = aw2.sum(1) > 0  # ij->i
-    aw[replaced_i] = aw2[replaced_i]
-    return aw
-
 def maybe_composed_attn_forward(model, block, hq, hk, hv, by_head=True, ranges=None, **kwargs):
     self = block.attn
     composed_heads, has_pred_heads = getattr(self, 'composed_heads', None), getattr(self, 'has_pred_heads', False)
@@ -407,21 +402,20 @@ def maybe_composed_attn_forward(model, block, hq, hk, hv, by_head=True, ranges=N
     attn_output, aw, head_input, head_output = attn_forward(block, hq, hk, hv, by_head=by_head, **kwargs)
     
     if composed_heads:
-        # for layer, head in model.copy_pred_heads:
-        #     if layer == block.layer: attn_output = attn_output - head_output[:, head] * 0.75
-        # for layer, head in model.copy_rel_heads:
-        #     if layer == block.layer: attn_output = attn_output - head_output[:, head]
         try:
             use_composed_heads(self)
-            aw2 = (torch.stack([merge_attn_weights(aw[0, h], attn_pattern2labels(ranges, qk_head, aw.size()[-2:]))  # ij
-                            for qk_head, (l, h) in self.composed_heads]).unsqueeze(0)  # m*[ij]->mij->1mij
+            attn_size = aw.size()[-2:]
+            aw2 = (torch.stack([attn_pattern2labels(ranges, qk_head, attn_size)  # ij
+                    for qk_head, (l, h) in self.composed_heads]).unsqueeze(0)  # m*[ij]->mij->1mij
                     if self.q_proj is None else None)
-            attn_output2, aw2, _, head_output2 = attn_forward(block, hq, hk, hv, by_head=['head_output'], attn_weights=aw2)
-            if True or not has_pred_heads:  # relating heads
-                replaced_heads = [h for _, (l, h) in composed_heads]
-                head_output[:, replaced_heads], aw[:, replaced_heads] = head_output2, aw2
-                attn_output = head_output.sum(1)  # bnie->bie
-            else:  # predicting heads
+            _, aw2, _, head_output2 = attn_forward(block, hq, hk, hv, by_head=['head_output'], attn_weights=aw2)
+            for i, ((_, (l, h)), range_i) in enumerate(zip(composed_heads, self.ranges_i)):
+                assert range_i.endswith('->*')
+                range_i = attn_pattern2labels(ranges, range_i, attn_size)[:, 0] != 0  # ij-i
+                aw[:, h, range_i] = aw2[:, i, range_i]  # bnij->brj = bmij->brj
+                head_output[:, h, range_i] = head_output2[:, i, range_i]  # bnie->bre = bmie->bre
+            attn_output = head_output.sum(1)  # bnie->bie  # assume no out_proj.b
+            if False:  # predicting heads
                 old = head_output[:, [h for _, (l, h) in composed_heads]]  # bmie
                 attn_output = attn_output + (scale_to(head_output2, old) - old).sum(1) # bmie->bie
                 # old_logits, new_logits = [], []  # debug
@@ -1346,7 +1340,7 @@ def add_node(parent, layer=None, head=None, topi=None, head_attr_fn=None, label_
             _id = id(parent); parent = parent.parent
             parent.children = [child for child in parent.children if id(child) != _id]
         if layer is None or topi is not None:
-            if head_attr_fn is None: head_attr_fn = get_matched_head_attr
+            if head_attr_fn is None: head_attr_fn = get_head_mlp_attr  # get_matched_head_attr
             head_attr = head_attr_fn(parent.data)
             layer, head = topk_md(head_attr, 10, transpose=True)[topi][:2] if type(topi) == int \
                 else np.array(topk_md(head_attr, 10)[:2])[:, topi] # list
