@@ -35,7 +35,7 @@ from pptree import Node, print_tree
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, \
     equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get
 
-from child_utils import make_data_tuple
+from child_utils import make_data_tuple, get_answer_index
 from weight_analysis import get_head_weights
 
 @dataclass
@@ -339,10 +339,11 @@ def restore_heads(self):
         setattr(self, name , getattr(self, name + '0'))
         # delattr(self, name + '0')
 
-def trim_heads(self, kept_heads):
+def trim_heads(self, kept_heads, proj_names=None, new_weight=False):
+    if proj_names is None: proj_names = ['q_proj', 'k_proj', 'v_proj', 'out_proj']
     backup_heads(self)
-    for proj_name in ['q_proj', 'k_proj', 'v_proj', 'out_proj']:
-        # assert getattr(self, proj_name).bias is None #lxy，报错
+    for proj_name in proj_names:
+        assert getattr(self, proj_name).bias is None #lxy，报错
         weight = getattr(self, proj_name).weight
         if proj_name == 'out_proj':
             patterns = ['e (n d) -> n d e', 'n d e -> e (n d)']
@@ -352,6 +353,7 @@ def trim_heads(self, kept_heads):
             size = (self.embed_dim, self.head_dim * len(kept_heads))
         weight = rearrange(weight, patterns[0], n=self.num_heads)[kept_heads] #[kept_heads,head_dim,embed_dim]
         weight = rearrange(weight, patterns[1])
+        if new_weight: weight = weight.clone().etach()
         proj = nn.Linear(*size, bias=False)
         proj.weight = nn.Parameter(weight)
         setattr(self, proj_name, proj)
@@ -395,6 +397,12 @@ def scale_to(tensor, target):
     assert torch.allclose(tensor.norm(dim=-1), target.norm(dim=-1))  # debug
     return tensor
 
+def make_dropout_head_mask(dropout_heads, ranges_i, ranges, hidden_states_size, L, H, p=0.5):
+    bsz, qlen, _ = hidden_states_size  # bie
+    head_mask = torch.ones(bsz, H, qlen)  # bni
+    head_mask = []
+    return head_mask
+
 def maybe_composed_attn_forward(model, block, hq, hk, hv, by_head=True, ranges=None, **kwargs):
     self = block.attn
     composed_heads, has_pred_heads = getattr(self, 'composed_heads', None), getattr(self, 'has_pred_heads', False)
@@ -409,8 +417,9 @@ def maybe_composed_attn_forward(model, block, hq, hk, hv, by_head=True, ranges=N
                     for qk_head, (l, h) in self.composed_heads]).unsqueeze(0)  # m*[ij]->mij->1mij
                     if self.q_proj is None else None)
             _, aw2, _, head_output2 = attn_forward(block, hq, hk, hv, by_head=['head_output'], attn_weights=aw2)
-            for i, ((_, (l, h)), range_i) in enumerate(zip(composed_heads, self.ranges_i)):
+            for i, ((qk_head, (l, h)), range_i) in enumerate(zip(composed_heads, self.ranges_i)):
                 assert range_i.endswith('->*')
+                if type(qk_head) == str: assert qk_head.split('->')[0] == range_i.split('->')[0], f'{qk_head}.q != {range_i}.q'
                 range_i = attn_pattern2labels(ranges, range_i, attn_size)[:, 0] != 0  # ij-i
                 aw[:, h, range_i] = aw2[:, i, range_i]  # bnij->brj = bmij->brj
                 head_output[:, h, range_i] = head_output2[:, i, range_i]  # bnie->bre = bmie->bre
@@ -555,6 +564,7 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
 
     def get_kwargs(layer, head):
         if label_type and 'attn_labels' in label_type:
+            assert head < H
             attn_size = outputs.attentions[0].size()[-2:]
             if label_type.startswith('argmax'):
                 attn_labels = get_argmax_attn_labels(outputs, layer, head, labels=labels)
@@ -569,21 +579,24 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
                 mask_type = label_type.split('/')[1]
                 kwargs['attn_mask'] = attn_pattern2labels(ranges, 'bos->'+mask_type, attn_size)
             return kwargs
-        kwargs = {'attn_weights': outputs.attentions[layer]}
+        kwargs = {'attn_weights': outputs.attentions[layer]} if head < H else {}
         if label_type in ['labels', 'argmax_labels']:
             kwargs['labels'] = get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels) \
                 if label_type == 'argmax_labels' else labels
         return kwargs
 
+    if len(layer) > 1: assert label_type in [None, 'labels'], f'{len(layer)}, {label_type}'
     fwd_outputs = [head_forward(model, hs, l, h, attribute_k=attribute_k, **get_kwargs(l, h), **kwargs) 
-        if h < H else mlp_forward(model, hs, layer=l, labels=labels, **kwargs)
+        if h < H else mlp_forward(model, hs, layer=l, **get_kwargs(l, h), **kwargs)
         for l, h, hs in zip(layer, head, hidden_states)]
     if len(fwd_outputs) == 1: return fwd_outputs[0]
 
     def try_sum(l):
         none_flags = [i is None for i in l]
-        assert all(none_flags) or not any(none_flags)
+        assert all(none_flags) or not any(none_flags), str([i.size() if isinstance(i, torch.Tensor) else i for i in l])
         return sum(l) if not any(none_flags) else None
+    assert all(isinstance(o.hidden_states, tuple) and len(o.hidden_states) in [0, 1] for o in fwd_outputs), \
+        str([(type(o.hidden_states), len(o.hidden_states)) for o in fwd_outputs])
     all_hidden_states, all_logits, all_loss = zip(*[
         (o.hidden_states[0] if len(o.hidden_states) == 1 else None, o.logits, o.loss) for o in fwd_outputs])
     hidden_states, logits, loss = [try_sum(l) for l in [all_hidden_states, all_logits, all_loss]]
@@ -979,9 +992,10 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
     input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
         text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
     candidates, answer_indices = None, None
-    if examples[0][2] is not None:
-        candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[0]] for cxt, query, cands, *_ in examples]
-        answer_indices = [cands[0].index(ans) for cxt, query, cands, (*_, ans), *cls in examples]
+    cxt, query, cands, *_ = examples[0]
+    if cands is not None:
+        candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[-1]] for cxt, query, cands, *_ in examples]
+        answer_indices = [get_answer_index(e) for e in examples]
     with torch.no_grad():
         o = forward0(model, input_ids.to(model.device), labels=labels.to(model.device), by_head=['head_input'], ranges=ranges) \
             if isinstance(model, nn.Module) and custom_forward else model(input_ids.to(getattr(model, 'device', 'cpu')))
@@ -1609,7 +1623,7 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         H = o.attentions[0].size(1)
         fns = path2fns(node, partial(node2fn, outputs=o, ranges=ranges, labels=labels))
         fwd_fn = partial(sum_forward, outputs=o, output_layer=l)
-        _labels, label_type = (labels, 'labels') if len(fns) == 0 else (None, None)
+        label_type = 'labels' if len(fns) == 0 else None
         fn = partial(mixed_forward, layer=l, head=h, labels=labels, label_type=label_type, outputs=o, ranges=ranges)
         keys = ['embed_mask', 'mlp_mask', 'attn_weights']
         to_layer = max(l) if isinstance(l, Iterable) else l
@@ -1653,7 +1667,7 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
 attn_patterns_by_step = {-1: ['bos->ans0]'], 0: ['bos->ans]', 'bos->query]'], 1: ['ans]->ans0]', 'ans]->ans0+']}
 
 def plot_attn_attrs(data_tuples, model, tokenizer, node, topi=[0], head_attr_fn=None, attn_patterns=None, mix=False, **kwargs):
-    if head_attr_fn is None: head_attr_fn = get_matched_head_attr  # or get_head_mlp_attr
+    if head_attr_fn is None: head_attr_fn = get_head_mlp_attr  # or get_matched_head_attr
     heads = np.array(topk_md(head_attr_fn(node.data), 10)[:2])[:, topi]
     heads = zip(*heads) if not mix else [heads]
     attn_patterns=attn_patterns or attn_patterns_by_step.get(node.data.step)

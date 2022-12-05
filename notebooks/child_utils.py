@@ -15,9 +15,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from pattern.en import conjugate, lemma, lexeme, PRESENT, SG
-# from nltk.corpus import cmudict  # nltk.download('cmudict')
-
 import torch
 import torch.nn.functional as F 
 
@@ -27,11 +24,6 @@ from openai_utils import query_openai
 sys.path.insert(0, '/nas/xd/projects/PyFunctional')
 from functional import seq
 from functional.pipeline import Sequence
-
-
-# from transformers import GPT2Tokenizer
-# cache_dir = '/nas/xd/.cache/torch/transformers/'
-# _tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
 
 uppercase = list(string.ascii_uppercase)
 lowercase = list(string.ascii_lowercase)
@@ -72,125 +64,6 @@ posets = [times_of_day,clock_of_day,years, days_of_week, months, seasons]
 closed_posets = [list(string.ascii_uppercase)[:7], list(string.ascii_lowercase)[:7],][:] + [digits, cardinals, #ordinals[:5], 
     days_of_week, months, ]#seasons, times_of_history, ages_of_life, sizes]
 open_posets = [times_of_day, ages_of_life, times_of_history, units_of_length, units_of_mass, things, sizes, ]
-
-# from https://eslyes.com/namesdict/popular_names.htm
-boys = [
-    'James', 'David',  'Christopher',  'George',  'Ronald',
-    'John', 'Richard',  'Daniel',  'Kenneth',  'Anthony',
-    'Robert', 'Charles',  'Paul',  'Steven',  'Kevin',
-    'Michael', 'Joseph',  'Mark',  'Edward',  'Jason',
-    'William',  'Thomas',  'Donald',  'Brian',  'Jeff',]
-girls = [
-    'Mary','Jennifer', 'Lisa', 'Sandra', 'Michelle',
-    'Patricia','Maria', 'Nancy', 'Donna', 'Laura',
-    'Linda','Susan', 'Karen', 'Carol', 'Sarah',
-    'Barbara','Margaret', 'Betty', 'Ruth', 'Kimberly',
-    'Elizabeth', 'Dorothy', 'Helen', 'Sharon', 'Deborah',]
-
-# https://www.verywellfamily.com/top-1000-baby-boy-names-2757618
-# https://www.verywellfamily.com/top-1000-baby-girl-names-2757832
-boys = [l.strip() for l in open('boy_names_1000.txt').readlines()]
-girls = [l.strip() for l in open('girl_names_1000.txt').readlines()]
-# persons = boys + girls
-
-noun2adj = [  # The adjective form of x is y
-    ('rain','rainy'),
-    ('sun','sunny'),
-    ('friend','friendly'),
-    ('danger','dangerous'),
-    ('difference','different'),
-    ('sadness','sad'),
-    ('progress','progressive'),
-    ('success','successful'),
-    ('wisdom','wise'),
-    ('love','loving'),
-    ('kindness','kind'),
-    ('truth','true'),
-    ('beauty','beautiful'),
-    ('freedom','free'),
-    ('courage','courageous'),
-    ('silence','silent'),
-]
-
-lxy = [  # The adjective form of x is y
-    ('apple','Apple'),
-    ('high','High'),
-    ('kill','Kill'),
-    ('local','Local'),
-    ('sun','Sun'),
-    ('human','Human'),
-    ('photo','Photo'),
-    ('success','Success'),
-    ('wake','Wake'),
-    ('love','Love'),
-    ('wear','Wear'),
-    ('truth','Truth'),
-    ('order','Order'),
-    ('freedom','Freedom'),
-    ('watch','Watch'),
-    ('special','Special'),
-]
-
-verb_form =[
-    ('sleep','slept'),
-    ('go','went'),
-    ('come','came'),
-    ('leave','left'),
-    ('talk','talked'),
-    ('speak','spoke'),
-    ('hear','heard'),
-    ('listen','listened'),
-    ('see','saw'),
-    ('look','looked'),
-    ('eat','ate'),
-    ('drink','drank'),
-    ('stand','stood'),
-    ('sit','sat'),
-    ('walk','walked'),
-    ('run','ran'),
-    ('swim','swam'),
-    ('fly','flew'),
-    ('sing','sang'),
-    ('dance','danced'),
-    ('fall','fell'),
-    ('write','wrote'),
-    ('draw','drew'),
-    ('drive','drove'),
-    ('ride','rode'),
-    ('play','played'),
-    ('forget','forgot'),
-    ('know','knew'),
-    ('read','read'),
-    ('cut','cut'),
-    ('hit','hit'),
-    ('hurt','hurt'),
-    # ('can','could'),
-    # ('do','did'),
-    # ('are','were'),
-    # ('begin','began'),
-    # ('take','took'),
-    # ('have','had'),
-    # ('try','tried'),
-    # ('want','wanted'),
-]
-
-# or conjugate(verb='give',tense=PRESENT,number=SG)
-# https://stackoverflow.com/questions/3753021/using-nltk-and-wordnet-how-do-i-convert-simple-tense-verb-into-its-present-pas
-@dataclass
-class Tenses:
-    do: str = None
-    does: str = None
-    doing: str = None
-    did: str = None
-    done: str = None
-
-def verb_tenses():
-    if not hasattr(verb_tenses, '_verb_tenses'):
-        verbs = [v for v, _ in verb_form]
-        try: _verb_tenses = [lexeme(v) for v in verbs]
-        except: _verb_tenses = [lexeme(v) for v in verbs]
-        verb_tenses._verb_tenses = [Tenses(*(vt + [vt[0]] * (5 - len(vt)))) for vt in _verb_tenses]
-    return verb_tenses._verb_tenses
 
 def does2did():
     d = {vt.does: [vt.did] for vt in verb_tenses()}
@@ -456,12 +329,12 @@ noon: Martin arrived at noon.
     # print(query_openai(prompt_fn(noun)))
     return extract_fn(query_openai(prompt_fn(noun)))
 
-def conj():
+def conj(positive=True):
     ss = ["", "So", "Therefore,", "Yes,"]
     s = choice(ss)
     return s if s == "" else s + " "
 
-def xxx_be():
+def xxx_be(positive=True):
     ss = [
         ["is"],
         ["definitely is", "sometimes is", "always is"],
@@ -589,34 +462,57 @@ class TreeSet(Set):
         self.child._inv_dict, self.parent._inv_dict = self.parent._dict, self.child._dict
         self.equal._inv_dict = self.equal._dict
 
-def MlM_gen(rels, cxt_len=3):
+def ith_gen(rels, cxt_len=3):
+    hop = 0; cxt = sample(rels[hop][0].codom(), cxt_len)
+    query, candidates, ans = None, (cxt, cxt), cxt[1]
+    return cxt, query, candidates, ans
+
+def MlM_gen0(rels, cxt_len=3):
     candidates = OrderedDict()
     rels = [s.relations for s in rels]
-    # print(rels)
     hop = 0; rel = rels[hop][0]
-    # print(rel._dict)
     query = choice(list(rel.dom())) # 选择查询
     candidates[hop] = [choice(r.f(query)) for r in rels[hop][:1]]
-    # print("query:", query)
     # candidates[hop] = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
     candidates[hop] += sample(list(rel.codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
         cxt_len - len(candidates[hop])) # 选择候选
-    # print("candidates:", candidates)
-    hop = 1; rel = rels[hop][0]
-    # print(rel._dict)
-    # candidates[hop] = sample(list(rel.dom()), cxt_len)
+    hop += 1; rel = rels[hop][0]
     ans = choice(list(rel.codom())) #查询结果
-    # print("ans",ans)
     candidates[hop] = [choice(rel.inv_f(ans))] + sample(list(rel.dom() - set(rel.inv_f(ans))), cxt_len - 1)
-    # print("candidates:", candidates)
-    # print(list(zip(*candidates.values())))
-    cxt = sample(list(zip(*candidates.values())), cxt_len) # cxt [('Warren', 'afternoon'), ('Maria', 'evening')] 乱序作用
-    # print(cxt)
+    cxt = sample(list(zip(*candidates.values())), cxt_len) # cxt [('Warren', 'afternoon'), ('Maria', 'evening')] 乱序作用    
     candidates = ([rel.f(x[1])[0] for x in cxt], [x[1] for x in cxt]) # (['noon', 'afternoon'], ['afternoon', 'evening'])
-    # print(candidates)
     def transform_fn(cxt, query):
         hop = 0; rel = rels[hop][0]; tgt, ans0 = seq(cxt).find(lambda x: rel.b(query, x[0]))#[1]
         hop = 1; rel = rels[hop][0]; ans = rel.f(ans0)[0]
+        return tgt, ans0, ans
+    return cxt, query, candidates, transform_fn(cxt, query)
+
+def MlM_gen(rels, cxt_len=3, do_negate=False):
+    candidates = OrderedDict()
+    rels = [s.relations for s in rels]
+    hop = 0; rel = rel0 = rels[hop][0]; bool_fn0 = rel.b
+    query = choice(list(rel.dom())) # 选择查询
+    candidates[hop - 1] = [query]
+    candidates[hop] = [choice(r.f(query)) for r in rels[hop][:1]]
+    # candidates[hop] = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
+    candidates[hop] += sample(list(rel.codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
+        cxt_len - len(candidates[hop])) # 选择候选
+    candidates[hop - 1] += [rel.inv_f(tgt)[0] for tgt in candidates[hop][1:]]
+    hop += 1; rel = rel1 = rels[hop][0]
+    ans = choice(list(rel.codom())) #查询结果
+    candidates[hop] = [choice(rel.inv_f(ans))] + sample(list(rel.dom() - set(rel.inv_f(ans))), cxt_len - 1)
+    # cxt = sample(list(zip(*candidates.values())), cxt_len) # cxt [('Warren', 'afternoon'), ('Maria', 'evening')] 乱序作用
+    candidates[hop + 1] = [ans] + [rel.f(x)[0] for x in candidates[hop][1:]]
+    if do_negate:
+        assert cxt_len == 2; bool_fn0 = negate(bool_fn0)
+        for h in [hop, hop + 1]: candidates[h] = candidates[h][::-1]
+    tuples = list(zip(*candidates.values())); shuffle(tuples)
+    cxt = [t[1:3] for t in tuples]
+    candidates = tuple(list(c) for c in zip(*tuples))
+    # candidates = ([rel.f(x[1])[0] for x in cxt], [x[1] for x in cxt]) # (['noon', 'afternoon'], ['afternoon', 'evening'])
+    def transform_fn(cxt, query):
+        tgt, ans0 = seq(cxt).find(lambda x: bool_fn0(query, x[0]))#[1]
+        ans = rel1.f(ans0)[0]
         return tgt, ans0, ans
     return cxt, query, candidates, transform_fn(cxt, query)
 
@@ -672,11 +568,18 @@ def IlMlI_gen(rels, cxt_len=3):
     hop = 2; candidates = ([rels[hop][0].f(x[0])[0] for x in cxt], [x[0] for x in cxt])
     return cxt, query, candidates, ans
 
+def swap_qa(g_fn):
+    def wrapped(*args,**kwargs):
+        cxt, query, candidates, (tgt, ans0, ans) = g_fn(*args,**kwargs)
+        query, tgt, ans0, ans = (query, tgt, ans0, ans)[::-1] # query, (tgt, ans0, ans) = ans, (ans0, tgt, query)
+        return cxt, query, candidates[::-1], (tgt, ans0, ans)
+    return wrapped
+
 def g2c(g_fn, cls_labels=['Yes', 'No']):
     def wrapped(*args,**kwargs):
         cxt, query, candidates, (tgt, ans0, ans) = g_fn(*args,**kwargs)
-        (_ans, _ans0), label = ((ans, ans0), cls_labels[0]) if random() < 0.5 else \
-            (choice([(c, c0) for c, c0 in zip(*candidates) if c != ans]), cls_labels[1])
+        (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
+            (choice([(c0, c) for *_, c0, c in zip(*candidates) if c != ans]), cls_labels[1])
         return cxt, query, candidates, (tgt, _ans0, _ans), label
         if tuple(candidates[0]) == tuple(candidates[1]):
             return (cxt, (query, choice(list(set(candidates[0]) - {query, ans}))), [labels], labels[1]) \
@@ -741,11 +644,12 @@ def locate(tokens, substring, return_last=False):
     if substring is None: return None
     whole_string = "".join(t for t in tokens)
     assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
-    if '->' in substring:
+    if substring.strip() in ['->', '?']:
         index_fn = getattr(whole_string, 'index' if not return_last else 'rindex')
         char_loc = index_fn(substring)
     else:
-        matches = list(re.finditer(r"\b%s\b" % substring, whole_string))
+        try: matches = list(re.finditer(r"\b%s\b" % substring, whole_string))
+        except Exception: print(f'sub = {substring}, whole = {whole_string}'); raise
         assert len(matches) > 0, f'{tokens}\n{substring} not match {whole_string}'
         char_loc = matches[-int(return_last)].span()[0]
     loc = 0; tok_start, tok_end = None, None
@@ -839,7 +743,12 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_to
         labels[:, :bos_indices[k_shot]] = -100  # 只算k_shot个示例后的loss
     return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers
 
-def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
+def query2wh(vocab, query2str):
+    wh = 'who'
+    if query2str(wh, vocab).startswith(wh): wh = wh.capitalize()
+    return wh
+
+def make_input_str(task, vocabs, examples, abstract=0, do_swap_qa=False, options_position=None):
     cxt_len = len(examples[0][0])
     if abstract != 0:
         item2str, query2str = (partial(_item2str, reverse=abstract == 2), _str)
@@ -849,43 +758,44 @@ def make_input_str(task, vocabs, examples, abstract=0, options_position=None):
         cxt2str, bos_token, ans2str = partial(_cxt2str, item2str=item2str), abstract_bos_token, _str
     else:
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)]
-    boc_token, cls2str = '?', _str
     def example2str(vocab, example):
-        cxt, query, options, (tgt, ans0, ans), *cls = example
+        cxt, query, candidates, (tgt, ans0, ans), *cls = example
+        if do_swap_qa: query, ans, real_ans = query2wh(vocabs[0], query2str), query, ans
         strs = [cxt2str(cxt, vocab), query2str(query, vocab)]
-        if options_position is not None: strs.insert(options_position, options2str(options))
+        if options_position is not None: strs.insert(options_position, options2str([c[-1] for c in candidates]))
         s = '. '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
-        if len(cls) > 0:  # g2c
-            cls = cls[0]
-            s += boc_token + ' ' + cls2str(cls)
         if bos_token == '':
             query_str = strs[1]; assert query_str != ''
             _bos_token = "'s" if query_str.endswith("'s") else query_str.split()[-1]
         else:
             _bos_token = bos_token
+        if do_swap_qa: _bos_token = '?'; s += _bos_token + ' ' + ans2str(real_ans)
+        if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
     return examples, '\n'.join(example_strs) + '\n', bos_tokens
 
-def generate(task, do_g2c=False, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True, no_query = False):
-    if do_g2c:
-        vocab_fn, gen_fn, *a = task
-        task = (vocab_fn, g2c(gen_fn), *a)
+def get_answer_index(example):
+    cxt, query, cands, (*_, ans), *cls = example
+    return cands[-1].index(ans)
+
+def generate(task, do_negate=False, do_swap_qa=False, do_g2c=False, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True, no_query=False):
+    # unpack, modify and repack to avoid in-place modification of task
+    if do_negate: vocab_fn, gen_fn, *a = task; task = (vocab_fn, partial(gen_fn, do_negate=True), *a)
+    if do_swap_qa: vocab_fn, gen_fn, *a = task; task = (vocab_fn, swap_qa(gen_fn), *a)
+    if do_g2c: vocab_fn, gen_fn, *a = task; task = (vocab_fn, g2c(gen_fn), *a)
     counts = []
-    if no_query:
+    while len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3:
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
-        answer_indices = [cands[0].index(ans) for _, _, cands, (tgt, ans0, ans), *cls in examples]
-    else:
-        while len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3:
-            vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
-            answer_indices = [cands[0].index(ans) for _, _, cands, (tgt, ans0, ans), *cls in examples]
-            counts = [v for k, v in Counter(answer_indices).most_common()]
+        answer_indices = [get_answer_index(e) for e in examples]
+        if no_query: break
+        counts = [v for k, v in Counter(answer_indices).most_common()]
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())
         label_probs = F.one_hot(torch.LongTensor(answer_indices))
         _ = plt.figure(figsize=(10, 0.7))
         _ = sns.heatmap(label_probs.T, cbar=False); plt.show()
-    examples, text, bos_token = make_input_str(task, vocabs, examples, abstract=abstract)
+    examples, text, bos_token = make_input_str(task, vocabs, examples, abstract=abstract, do_swap_qa=do_swap_qa)
 
     if verbose: print(text)
     return examples, text, bos_token
