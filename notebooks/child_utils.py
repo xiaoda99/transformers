@@ -18,7 +18,7 @@ import seaborn as sns
 import torch
 import torch.nn.functional as F 
 
-from common_utils import join_lists, my_isinstance, lget
+from common_utils import join_lists, my_isinstance, lget, fn2str
 from openai_utils import query_openai
 
 sys.path.insert(0, '/nas/xd/projects/PyFunctional')
@@ -373,7 +373,12 @@ remove_two = [
 ]
 
 class Relation(object):
-    def __init__(self, _dict): self._dict = _dict
+    def __init__(self, name, _dict):
+        self.name = name
+        self._dict = _dict
+        self._inv_dict = None
+        self.inv_rel = None
+
     def f(self, x): return self._dict.get(x, [])
     def inv_f(self, x): return self._inv_dict.get(x, [])
     # def el(self): return self._el
@@ -386,7 +391,7 @@ class Set(object):
         self.data = data
         self.rel_names = rel_names
         for rel_name in self.rel_names:
-            setattr(self, rel_name, Relation(_dict=defaultdict(list)))
+            setattr(self, rel_name, Relation(name=rel_name, _dict=defaultdict(list)))
 
     def use(self, rel_names):
         if isinstance(rel_names, str): rel_names = [rel_names]
@@ -402,8 +407,9 @@ class EqSet(Set):
         super().__init__(data, ['equal'])
         data = data()
         for rel_name, d in zip(self.rel_names, [{data[i]: [data[i]] for i in range(0, len(data))}]):
-            setattr(self, rel_name, Relation(_dict=d))
-            self.equal._inv_dict = self.equal._dict
+            setattr(self, rel_name, Relation(name=rel_name, _dict=d))
+        self.equal._inv_dict = self.equal._dict
+        self.equal.inv_rel = self.equal
 
 class PoSet(Set):
     def __init__(self, data):
@@ -414,13 +420,7 @@ class PoSet(Set):
         for rel_name, d in zip(self.rel_names, [{vector[i]: [vector[i - 1]] for i in range(1, len(vector))},
                                                 {vector[i]: [vector[i + 1]] for i in range(0, len(vector) - 1)},
                                                 {vector[i]: [vector[i]] for i in range(0, len(vector))}]):
-            # if rel_name == 'prev':
-            #     self.prev._dict.update(d)
-            # elif rel_name == 'next':
-            #     self.next._dict.update(d)
-            # elif rel_name == 'equal':
-            #     self.equal._dict.update(d)
-            setattr(self, rel_name, Relation(_dict=d))
+            setattr(self, rel_name, Relation(name=rel_name, _dict=d))
         self.prev._inv_dict, self.next._inv_dict = self.next._dict, self.prev._dict
         self.equal._inv_dict = self.equal._dict
 
@@ -461,126 +461,115 @@ class TreeSet(Set):
                 self.equal._dict[child] = [child]
         self.child._inv_dict, self.parent._inv_dict = self.parent._dict, self.child._dict
         self.equal._inv_dict = self.equal._dict
+        self.child.inv_rel, self.parent.inv_rel = self.parent, self.child
+        self.equal.inv_rel = self.equal
 
-def ith_gen(rels, cxt_len=3):
-    hop = 0; cxt = sample(rels[hop][0].codom(), cxt_len)
-    query, candidates, ans = None, (cxt, cxt), cxt[1]
-    return cxt, query, candidates, ans
+def enumerate_sample(cxt_len, rel):
+    return list(range(cxt_len)), sample(list(rel.dom()), cxt_len)
 
-def MlM_gen0(rels, cxt_len=3):
-    candidates = OrderedDict()
-    rels = [s.relations for s in rels]
-    hop = 0; rel = rels[hop][0]
-    query = choice(list(rel.dom())) # 选择查询
-    candidates[hop] = [choice(r.f(query)) for r in rels[hop][:1]]
-    # candidates[hop] = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
-    candidates[hop] += sample(list(rel.codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
-        cxt_len - len(candidates[hop])) # 选择候选
-    hop += 1; rel = rels[hop][0]
-    ans = choice(list(rel.codom())) #查询结果
-    candidates[hop] = [choice(rel.inv_f(ans))] + sample(list(rel.dom() - set(rel.inv_f(ans))), cxt_len - 1)
-    cxt = sample(list(zip(*candidates.values())), cxt_len) # cxt [('Warren', 'afternoon'), ('Maria', 'evening')] 乱序作用    
-    candidates = ([rel.f(x[1])[0] for x in cxt], [x[1] for x in cxt]) # (['noon', 'afternoon'], ['afternoon', 'evening'])
-    def transform_fn(cxt, query):
-        hop = 0; rel = rels[hop][0]; tgt, ans0 = seq(cxt).find(lambda x: rel.b(query, x[0]))#[1]
-        hop = 1; rel = rels[hop][0]; ans = rel.f(ans0)[0]
-        return tgt, ans0, ans
-    return cxt, query, candidates, transform_fn(cxt, query)
+def grouped_sample(cxt_len, rel, n_groups=2, reverse=False, min_group_size=None, max_group_size=None):
+    group_sizes = []
+    while not group_sizes or (min_group_size and min(group_sizes) != min_group_size) \
+                        or (max_group_size and max(group_sizes) != max_group_size):
+        cut_points = sorted(sample(range(1, cxt_len - 1), n_groups - 1))
+        group_sizes = [stop - start for start, stop in zip([0] + cut_points, cut_points + [cxt_len])]
+        group_sizes = sorted(group_sizes, reverse=reverse)
+        # print('In grouped_sample:', group_sizes)  # debug
+    groups = sample(list(rel.dom()), n_groups)
+    cxt = join_lists([list(zip([size] * size, sample(rel.f(group), size) if rel.name != 'equal' else [group] * size))
+                    for group, size in zip(groups, group_sizes)])
+    return tuple(map(list, zip(*cxt)))
 
-def MlM_gen(rels, cxt_len=3, do_negate=False):
-    candidates = OrderedDict()
-    rels = [s.relations for s in rels]
-    hop = 0; rel = rel0 = rels[hop][0]; bool_fn0 = rel.b
-    query = choice(list(rel.dom())) # 选择查询
-    candidates[hop - 1] = [query]
-    candidates[hop] = [choice(r.f(query)) for r in rels[hop][:1]]
-    # candidates[hop] = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
-    candidates[hop] += sample(list(rel.codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
-        cxt_len - len(candidates[hop])) # 选择候选
-    candidates[hop - 1] += [rel.inv_f(tgt)[0] for tgt in candidates[hop][1:]]
-    hop += 1; rel = rel1 = rels[hop][0]
-    ans = choice(list(rel.codom())) #查询结果
-    candidates[hop] = [choice(rel.inv_f(ans))] + sample(list(rel.dom() - set(rel.inv_f(ans))), cxt_len - 1)
-    # cxt = sample(list(zip(*candidates.values())), cxt_len) # cxt [('Warren', 'afternoon'), ('Maria', 'evening')] 乱序作用
-    candidates[hop + 1] = [ans] + [rel.f(x)[0] for x in candidates[hop][1:]]
-    if do_negate:
-        assert cxt_len == 2; bool_fn0 = negate(bool_fn0)
-        for h in [hop, hop + 1]: candidates[h] = candidates[h][::-1]
-    tuples = list(zip(*candidates.values())); shuffle(tuples)
-    cxt = [t[1:3] for t in tuples]
-    candidates = tuple(list(c) for c in zip(*tuples))
-    # candidates = ([rel.f(x[1])[0] for x in cxt], [x[1] for x in cxt]) # (['noon', 'afternoon'], ['afternoon', 'evening'])
-    def transform_fn(cxt, query):
-        tgt, ans0 = seq(cxt).find(lambda x: bool_fn0(query, x[0]))#[1]
-        ans = rel1.f(ans0)[0]
-        return tgt, ans0, ans
-    return cxt, query, candidates, transform_fn(cxt, query)
+def swap(l, dst, src=0):
+    if dst != src: l[dst], l[src] = l[src], l[dst]
+    return l
 
+def distractive_sample(cxt_len, rel, ans_i=0):
+    query = choice(list(rel.dom()))
+    ans = choice(rel.f(query))
+    distractors = sample(list(rel.codom() - set(rel.f(query))), cxt_len - 1)
+    distractors0 = [rel.inv_f(x)[0] for x in distractors]
+    return tuple([swap(l, ans_i) for l in [[query] + distractors0, [ans] + distractors]])
+ 
 def negate(bool_fn):
     @wraps(bool_fn)  # https://stackoverflow.com/questions/42561843/python-negate-boolean-function
     def wrapperd_fn(*args, **kwargs): return not bool_fn(*args, **kwargs)
     return wrapperd_fn
 
-def MNlM_gen(rels, cxt_len=2, do_negate=True):
-    candidates = OrderedDict()
+def MlM_gen(rels, cxt_len=3, cxt_sample_fn=None, query=None, has_local_hop=True, do_negate=False):
     rels = [s.relations for s in rels]
-    hop = 0; rel = rel0 = rels[hop][0]; bool_fn0 = rel.b
-    query = choice(list(rel.dom())) # 选择查询
-    candidates[hop] = [choice(r.f(query)) for r in rels[hop][:1]]
-    # candidates[hop] = [choice(r.f(query)) for i, r in enumerate(rels[hop]) if i == 0 or random() > 0.5] # w/ distractors
-    candidates[hop] += sample(list(rel.codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
-        cxt_len - len(candidates[hop])) # 选择候选
-    hop = 1; rel = rel1 = rels[hop][0]
-    # candidates[hop] = sample(list(rel.dom()), cxt_len)
-    ans = choice(list(rel.codom())) #查询结果
-    candidates[hop] = [choice(rel.inv_f(ans))] + sample(list(rel.dom() - set(rel.inv_f(ans))), cxt_len - 1)
-    if do_negate: assert cxt_len == 2; candidates[hop] = candidates[hop][::-1]; bool_fn0 = negate(bool_fn0)
-    cxt = sample(list(zip(*candidates.values())), cxt_len) # cxt [('Warren', 'afternoon'), ('Maria', 'evening')] 乱序作用
-    candidates = ([rel.f(x[1])[0] for x in cxt], [x[1] for x in cxt]) # (['noon', 'afternoon'], ['afternoon', 'evening'])
-    def transform_fn(cxt, query):
-        tgt, ans0 = seq(cxt).find(lambda x: bool_fn0(query, x[0]))#[1]
-        ans = rel1.f(ans0)[0]
-        return tgt, ans0, ans
-    return cxt, query, candidates, transform_fn(cxt, query)
-
-def IlMlI_gen(rels, cxt_len=3):
-    hop = 0
-    query = choice(list(rels[hop][0].dom()))
-    candidates0 = [choice(r.f(query)) for r in rels[hop][:1]]
-    candidates0 += sample(list(rels[hop][0].codom() - set(join_lists([r.f(query) for r in rels[hop]]))), 
-        cxt_len - len(candidates0))
-    candidates0 = candidates0[:1] + sample(candidates0[1:], cxt_len - 1)
-
-    hop = 1
-    query1 = choice(list(rels[hop][0].dom()))
-    candidates1 = [query1] + [choice(r.f(query1)) for r in rels[hop][:1]]
-    candidates1 += sample(list(rels[hop][0].codom() - {query1} - set(join_lists([r.f(query1) for r in rels[hop]]))), 
-        cxt_len - len(candidates1))
-    # assert len(candidates1) == len(set(candidates1)), str(candidates1)
-    cxt = sample(list(zip(candidates0, candidates1)), cxt_len)
+    candidates = OrderedDict()
+    fixed_query = query is not None
+    position_relevant = cxt_sample_fn is not None and cxt_sample_fn.__name__ == 'enumerate_sample'
     
+    hop = 0; rel = rel0 = rels[hop][0]
+    bool_fn0, (candidates[hop - 1], candidates[hop]) = (rel.b, distractive_sample(cxt_len, rel)) \
+        if not fixed_query else (lambda x, y: x == y, cxt_sample_fn(cxt_len, rel))
+    if not fixed_query: query = candidates[hop - 1][0]
+    elif not position_relevant: assert query == candidates[hop - 1][0], f'{query} != {candidates[hop - 1][0]}'
+
+    hop = 1; rel = rel1 = rels[hop][0]
+    candidates[hop], candidates[hop + 1] = distractive_sample(cxt_len, rel.inv_rel)[::-1] \
+        if has_local_hop else (candidates[hop - 1].copy(), [rel.f(x)[0] for x in candidates[hop - 1]])
+    
+    if do_negate:
+        assert cxt_len == 2; bool_fn0 = negate(bool_fn0)
+        for h in [hop, hop + 1]: candidates[h] = candidates[h][::-1]
+
+    tuples = list(zip(*candidates.values()))
+    if not position_relevant: shuffle(tuples)
+    cxt = [t[int(not fixed_query):3] for t in tuples]
+    candidates = tuple(list(c) for c in zip(*tuples))
+
     def transform_fn(cxt, query):
-        hop = 0; ans = seq(cxt).find(lambda x: rels[hop][0].b(query, x[0]))[1]
-        hop = 1; ans = seq(cxt).find(lambda x: x[0] != query and rels[hop][0].b(ans, x[1]))[0]
-        hop = 2; ans = choice(rels[hop][0].f(ans))
-        return ans
-    ans = transform_fn(cxt, query)
-    hop = 2; candidates = ([rels[hop][0].f(x[0])[0] for x in cxt], [x[0] for x in cxt])
-    return cxt, query, candidates, ans
+        *_, tgt, ans = seq(cxt).find(lambda x: bool_fn0(query, x[0])); chain = (tgt, ans)
+        ans = rel1.f(ans)[0]; chain += (ans,)
+        return chain
+    ans_chain = transform_fn(cxt, query)
+    if fixed_query: cxt, query = [x[1:] for x in cxt], None
+    if not has_local_hop: cxt = [x[0] for x in cxt]
+    return cxt, query, candidates, ans_chain
+
+def MlMlM_gen(rels, cxt_len=3):
+    rels = [s.relations for s in rels]
+    candidates = OrderedDict()
+    
+    hop = 0; rel = rel0 = rels[hop][0]; bool_fn0 = rel.b
+    candidates[hop - 1], candidates[hop] = distractive_sample(cxt_len, rel)
+    query = candidates[hop - 1][0]
+
+    hop = 1; rel = rel1 = rels[hop][0]; bool_fn1 = rel.b
+    (query1, *_), candidates[hop] = distractive_sample(cxt_len - 1, rel)
+    candidates[hop] = [query1] + candidates[hop]
+
+    hop = 2; rel = rel2 = rels[hop - 2][0]
+    candidates[hop] = candidates[hop - 2]
+    candidates[hop + 1] = [rel.f(x)[0] for x in candidates[hop]]
+
+    tuples = list(zip(*candidates.values())); shuffle(tuples)
+    cxt = [t[1:3] for t in tuples]
+    candidates = tuple(list(c) for c in zip(*tuples))
+
+    def transform_fn(cxt, query):
+        tgt, ans = seq(cxt).find(lambda x: bool_fn0(query, x[0])); chain = (tgt, ans)
+        ans, _ = seq(cxt).find(lambda x: x[0] != query and bool_fn1(ans, x[1])); chain += (ans,)
+        ans = rel2.f(ans)[0]; chain += (ans,)
+        return chain
+    return cxt, query, candidates, transform_fn(cxt, query)
 
 def swap_qa(g_fn):
     def wrapped(*args,**kwargs):
-        cxt, query, candidates, (tgt, ans0, ans) = g_fn(*args,**kwargs)
-        query, tgt, ans0, ans = (query, tgt, ans0, ans)[::-1] # query, (tgt, ans0, ans) = ans, (ans0, tgt, query)
-        return cxt, query, candidates[::-1], (tgt, ans0, ans)
+        cxt, query, candidates, ans_chain = g_fn(*args,**kwargs)
+        (query, *ans_chain) = (query, *ans_chain)[::-1]
+        return cxt, query, candidates[::-1], tuple(ans_chain)
     return wrapped
 
 def g2c(g_fn, cls_labels=['Yes', 'No']):
     def wrapped(*args,**kwargs):
-        cxt, query, candidates, (tgt, ans0, ans) = g_fn(*args,**kwargs)
+        cxt, query, candidates, (*a, ans0, ans) = g_fn(*args,**kwargs)
         (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
-            (choice([(c0, c) for *_, c0, c in zip(*candidates) if c != ans]), cls_labels[1])
-        return cxt, query, candidates, (tgt, _ans0, _ans), label
+            (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and q != query]), cls_labels[1])
+        return cxt, query, candidates, (*a, _ans0, _ans), label
         if tuple(candidates[0]) == tuple(candidates[1]):
             return (cxt, (query, choice(list(set(candidates[0]) - {query, ans}))), [labels], labels[1]) \
                 if random() > 0.5 else (cxt, (query, ans), [labels], labels[0])
@@ -667,7 +656,7 @@ def locate(tokens, substring, return_last=False):
     return (tok_start, tok_end)
 
 def example2ranges(example, tokens, bos_token):
-    cxt, query, candidates, (tgt, ans0, ans), *cls = example
+    cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
     return Ranges(
         bos = locate(tokens, bos_token, return_last=True),
         ans = locate(tokens, ans, return_last=True),
@@ -759,7 +748,7 @@ def make_input_str(task, vocabs, examples, abstract=0, do_swap_qa=False, options
     else:
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)]
     def example2str(vocab, example):
-        cxt, query, candidates, (tgt, ans0, ans), *cls = example
+        cxt, query, candidates, (*_, ans), *cls = example
         if do_swap_qa: query, ans, real_ans = query2wh(vocabs[0], query2str), query, ans
         strs = [cxt2str(cxt, vocab), query2str(query, vocab)]
         if options_position is not None: strs.insert(options_position, options2str([c[-1] for c in candidates]))
@@ -779,17 +768,18 @@ def get_answer_index(example):
     cxt, query, cands, (*_, ans), *cls = example
     return cands[-1].index(ans)
 
-def generate(task, do_negate=False, do_swap_qa=False, do_g2c=False, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True, no_query=False):
+def generate(task, do_negate=False, do_swap_qa=False, do_g2c=False, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True):
     # unpack, modify and repack to avoid in-place modification of task
     if do_negate: vocab_fn, gen_fn, *a = task; task = (vocab_fn, partial(gen_fn, do_negate=True), *a)
     if do_swap_qa: vocab_fn, gen_fn, *a = task; task = (vocab_fn, swap_qa(gen_fn), *a)
     if do_g2c: vocab_fn, gen_fn, *a = task; task = (vocab_fn, g2c(gen_fn), *a)
-    counts = []
-    while len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3:
+    counts = [9, 1]; i = 0
+    while len(counts) > 1 and (len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3):
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
         answer_indices = [get_answer_index(e) for e in examples]
-        if no_query: break
-        counts = [v for k, v in Counter(answer_indices).most_common()]
+        ind_counts = Counter(answer_indices).most_common()
+        counts = [v for k, v in ind_counts]
+        i += 1; assert i < 10, str(ind_counts)
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())
         label_probs = F.one_hot(torch.LongTensor(answer_indices))
@@ -802,7 +792,12 @@ def generate(task, do_negate=False, do_swap_qa=False, do_g2c=False, nrows=8, cxt
 
 def task2str(task):
     vocab_fn, gen_fn, *_ = task
-    return f"{gen_fn.__name__}({', '.join(str(v) for v in vocab_fn())})"
+    return f"{fn2str(gen_fn)}({', '.join(str(v) for v in vocab_fn())})"
+
+def is_compatible_gen_args(task, args):
+    vocab_fn, gen_fn, *_ = task
+    if args.get('do_swap_qa') and isinstance(gen_fn, partial) and 'query' in gen_fn.keywords: return False
+    return True
 
 def inc(token):
     assert len(token) == 1 or token in ['->'], token

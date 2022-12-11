@@ -209,3 +209,13 @@ def get_default_value(fn, name):
     # https://stackoverflow.com/questions/12627118/get-a-function-arguments-default-value
     if isinstance(fn, types.FunctionType): return inspect.signature(fn).parameters[name].default
     assert isinstance(fn, partial); return fn.keywords[name]
+
+def fn2str(fn, excluded_keys=[]):
+    if isinstance(fn, types.FunctionType): return fn.__name__
+    assert isinstance(fn, partial), str(fn)
+    def convert_value(k, v):
+        if k in excluded_keys: return '...'
+        if isinstance(v, torch.Tensor): return v.size()
+        if isinstance(v, types.FunctionType): return v.__name__
+        return v
+    return fn.func.__name__ + '(' + ', '.join(f'{k}={convert_value(k, v)}' for k, v in fn.keywords.items()) + ')'

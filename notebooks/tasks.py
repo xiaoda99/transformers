@@ -11,6 +11,12 @@ patterns = ['M', 'A?', 'IA', 'MA',
 # TreeSet(name_genders), TreeSet(name_prons), # resolve iu in speech,  item[0]
 # BijectSet(place_landmarks), BijectSet(sport_players) # count, item[1]
 
+# locate-and-copy tasks
+# has query: [same, coref, ...] * [self, local prev, local next] * [pos, neg]
+# fixed query (positional query): ith
+# no query: special, duplicate, set diff
+# IlMlI
+
 trash_tasks = [
     (lambda: [[TreeSet(types_of_things).child], [EqSet(persons).equal]], g2c(MlM_gen),
         partial(_cxt2str, sep='. ', item2str=lambda item, vocab: f"The {item[0]} is {item[1]}'s"),
@@ -24,13 +30,40 @@ trash_tasks = [
     (lambda: [[SymSet(person_adjs).equal], [EqSet(persons).equal]], MlM_gen,
      partial(_cxt2str, item2str=lambda i, _: f'{i[1]} is {i[0]}'), lambda q, _: f'So who is {q}', '?'
     ),  # gpt-neox good
-    (lambda: [[EqSet(persons).equal], [PoSet(digits).equal], [EqSet(persons).equal]], g2c(IlMlI_gen),
+    (lambda: [[EqSet(persons).equal], [PoSet(digits).equal], [EqSet(persons).equal]], g2c(MlMlM_gen),
         partial(_cxt2str, item2str=lambda item, vocab: f'{item[0]} {item[1]}'),
         lambda query, vocab: f'{query[0]} and {query[1]} are same?'
     ),
-    (lambda: [[EqSet(persons).equal], [PoSet(digits).equal], [EqSet(persons).equal]], IlMlI_gen,
+    (lambda: [[EqSet(persons).equal], [PoSet(digits).equal], [EqSet(persons).equal]], MlMlM_gen,
         partial(_cxt2str, item2str=lambda item, vocab: f'{item[0]} is {item[1]}'),
         lambda query, vocab: f'{query} is the same as', # bare query is better for gpt-neox!?
+    ),
+]
+
+no_query_tasks = [
+    (lambda: [TreeSet(types_of_things).use('equal'), TreeSet(types_of_things).use('equal')], partial(MlM_gen, cxt_sample_fn=enumerate_sample, query=1, has_local_hop=False),
+     partial(_cxt2str, prefix='There are ', sep=', ', item2str=lambda i, _: f'{wrap_noun(i)}'), lambda q, _: 'Which is in the middle', "?"
+    ),
+    (lambda: [TreeSet(types_of_things).use('equal'), TreeSet(types_of_things).use('parent')], partial(MlM_gen, cxt_sample_fn=enumerate_sample, query=1, has_local_hop=False),
+     partial(_cxt2str, prefix='There are ', sep=', ', item2str=lambda i, _: f'{wrap_noun(i)}'), lambda q, _: 'Which is in the middle', "?"
+    ),
+    (lambda: [TreeSet(types_of_things).use('equal'), TreeSet(types_of_things).use('equal')], partial(MlM_gen, cxt_sample_fn=grouped_sample, query=1, has_local_hop=False),
+     partial(_cxt2str, prefix='There are ', sep=', ', item2str=lambda i, _: f'{wrap_noun(i)}'), lambda q, _: 'Which is different', "?"
+    ),
+    (lambda: [TreeSet(types_of_things).use('equal'), EqSet(persons).use('equal')], partial(MlM_gen, cxt_sample_fn=grouped_sample, query=1, has_local_hop=True),
+     partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[1]} has {wrap_noun(i[0])}'), lambda q, _: 'Who has the different thing', "?"
+    ),
+    (lambda: [TreeSet(types_of_things).use('child'), TreeSet(types_of_things).use('equal')], partial(MlM_gen, cxt_sample_fn=grouped_sample, query=1, has_local_hop=False),
+     partial(_cxt2str, prefix='There are ', sep=', ', item2str=lambda i, _: f'{wrap_noun(i)}'), lambda q, _: 'Which is different', "?"
+    ),
+    (lambda: [TreeSet(types_of_things).use('child'), EqSet(persons).use('equal')], partial(MlM_gen, cxt_sample_fn=grouped_sample, query=1, has_local_hop=True),
+     partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[1]} has {wrap_noun(i[0])}'), lambda q, _: 'Who has the different thing', "?"
+    ),
+]
+
+multi_hop_tasks = [
+    (lambda: [EqSet(persons).use('equal'), TreeSet(types_of_things).use('equal')], MlMlM_gen,
+     partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} has {wrap_noun(i[1])}'), lambda q, _: f'Who has the same thing as {q}', "?"
     ),
 ]
 
@@ -76,10 +109,10 @@ tasks = [
 ]
 
 neg_tasks = [
-    (lambda: [EqSet(persons).use('equal'), TreeSet(types_of_things).use('equal')], MNlM_gen,
+    (lambda: [EqSet(persons).use('equal'), TreeSet(types_of_things).use('equal')], MlM_gen,
      partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} has {wrap_noun(i[1])}'), lambda q, _: f"No, it is {q}", "'s"
     ),
-    (lambda: [EqSet(persons).use('equal'), SymSet(person_adjs).use('equal')], MNlM_gen,
+    (lambda: [EqSet(persons).use('equal'), SymSet(person_adjs).use('equal')], MlM_gen,
      partial(_cxt2str, sep='. ', item2str=lambda i, _: f"{i[0]}'s {i[1]}"), lambda q, _: f'No, {q}', " is"
     ),
 ]

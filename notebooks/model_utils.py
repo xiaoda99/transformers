@@ -7,10 +7,11 @@ import math
 from dataclasses import dataclass, field, fields
 from functools import reduce, partial
 from itertools import chain, product, combinations, cycle
-import matplotlib.pyplot as plt
-import seaborn as sns
+import types
 from tqdm import tqdm
 from pprint import pprint
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 # from sklearn.manifold import TSNE, MDS
 # from sklearn.decomposition import PCA
@@ -33,7 +34,7 @@ sys.path.insert(0, '/nas/xd/projects/pptree')
 from pptree import Node, print_tree
 
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, \
-    equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get
+    equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str
 
 from child_utils import make_data_tuple, get_answer_index
 from weight_analysis import get_head_weights
@@ -1183,8 +1184,9 @@ def compose_forward_fns(forward_fns, **kwargs):
             if my_isinstance(outputs, Outputs) and len(outputs.hidden_states) > 0:
                 outputs = outputs.hidden_states[-1]
             outputs = fn(model, outputs, **kwargs)
-        assert isinstance(outputs.hidden_states, tuple), f'{type(outputs.hidden_states)} {show_fn(fn)}'
-        assert len(outputs.hidden_states) in [0, 1], f'{len(outputs.hidden_states)} != 1 {show_fn(fn)}'
+        _fn2str = partial(fn2str, excluded_keys=['outputs', 'ranges'])
+        assert isinstance(outputs.hidden_states, tuple), f'{type(outputs.hidden_states)} {_fn2str(fn)}'
+        assert len(outputs.hidden_states) in [0, 1], f'{len(outputs.hidden_states)} != 1 {_fn2str(fn)}'
         return outputs.hidden_states[0] if len(outputs.hidden_states) == 1 else None, \
             -outputs.loss if outputs.loss is not None else None, \
             outputs.logits
@@ -1437,11 +1439,6 @@ def node2path(node, except_last=False):
 
 def path2fns(node, node2fn, except_last=False):
     return [node2fn(n) for n in node2path(node, except_last=except_last)]
-
-def show_fn(fn):
-    return (fn.func.__name__, 
-        {k: v.size() if isinstance(v, torch.Tensor) else (v if k not in ['outputs', 'ranges'] else '...')
-        for k, v in fn.keywords.items()})
 
 # losses2 = []
 # sum_output = head_outputs * 0
