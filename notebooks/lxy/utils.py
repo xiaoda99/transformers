@@ -293,22 +293,14 @@ def get_exmaples_axxx_Axxx_reverse(k):
 
 verb_form =[
     ('sleep','slept'),
-    ('go','went'),
     ('talk','talked'),
-    ('can','could'),
-    ('do','did'),
-    ('forget','forgot'),
-    ('leave','left'),
-    ('are','were'),
     ('begin','began'),
     ('stand','stood'),
-    ('take','took'),
-    ('have','had'),
     ('fly','flew'),
     ('speak','spoke'),
     ('come','came'),
     ('try','tried'),
-    ('want','wanted'),
+
 ]
 def get_exmaples_verb_form(k):
     ans = []

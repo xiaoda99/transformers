@@ -17,28 +17,31 @@ patterns = ['M', 'A?', 'IA', 'MA',
 # no query: special, duplicate, set diff
 # IlMlI
 
-trash_tasks = [
-    (lambda: [[TreeSet(types_of_things).child], [EqSet(persons).equal]], g2c(MlM_gen),
-        partial(_cxt2str, sep='. ', item2str=lambda item, vocab: f"The {item[0]} is {item[1]}'s"),
-        # lambda query, vocab: f'So does the {query[0]} belong to {query[1]}',
-        lambda query, vocab: f'{query[0]} {query[1]}'#f"So is the {query[0]} {query[1]}'s",
-    ), 
-    (lambda: [[TreeSet(types_of_things).child], [EqSet(persons).equal]], MlM_gen,
-     # partial(_cxt2str, prefix='There are ', item2str=lambda i, _: f"{i[1]}'s {i[0]}"), lambda q, _: f"So whose {q}", '?' # worse 
-     partial(_cxt2str, sep='. ', item2str=lambda i, _: f"The {i[0]} is {i[1]}'s"), lambda q, _: f'So the {q} belongs', 'Ġto'
-    ),
-    (lambda: [[SymSet(person_adjs).equal], [EqSet(persons).equal]], MlM_gen,
-     partial(_cxt2str, item2str=lambda i, _: f'{i[1]} is {i[0]}'), lambda q, _: f'So who is {q}', '?'
-    ),  # gpt-neox good
-    (lambda: [[EqSet(persons).equal], [PoSet(digits).equal], [EqSet(persons).equal]], g2c(MlMlM_gen),
-        partial(_cxt2str, item2str=lambda item, vocab: f'{item[0]} {item[1]}'),
-        lambda query, vocab: f'{query[0]} and {query[1]} are same?'
-    ),
-    (lambda: [[EqSet(persons).equal], [PoSet(digits).equal], [EqSet(persons).equal]], MlMlM_gen,
-        partial(_cxt2str, item2str=lambda item, vocab: f'{item[0]} is {item[1]}'),
-        lambda query, vocab: f'{query} is the same as', # bare query is better for gpt-neox!?
-    ),
-]
+# trash_tasks = [
+#     (lambda: [[TreeSet(types_of_things).child], [EqSet(persons).equal]], g2c(MlM_gen),
+#         partial(_cxt2str, sep='. ', item2str=lambda item, vocab: f"The {item[0]} is {item[1]}'s"),
+#         # lambda query, vocab: f'So does the {query[0]} belong to {query[1]}',
+#         lambda query, vocab: f'{query[0]} {query[1]}'#f"So is the {query[0]} {query[1]}'s",
+#     ), 
+#     (lambda: [[TreeSet(types_of_things).child], [EqSet(persons).equal]], MlM_gen,
+#      # partial(_cxt2str, prefix='There are ', item2str=lambda i, _: f"{i[1]}'s {i[0]}"), lambda q, _: f"So whose {q}", '?' # worse 
+#      partial(_cxt2str, sep='. ', item2str=lambda i, _: f"The {i[0]} is {i[1]}'s"), lambda q, _: f'So the {q} belongs', 'Ġto'
+#     ),
+#     (lambda: [[SymSet(person_adjs).equal], [EqSet(persons).equal]], MlM_gen,
+#      partial(_cxt2str, item2str=lambda i, _: f'{i[1]} is {i[0]}'), lambda q, _: f'So who is {q}', '?'
+#     ),  # gpt-neox good
+#     (lambda: [[EqSet(persons).equal], [PoSet(digits).equal], [EqSet(persons).equal]], g2c(MlMlM_gen),
+#         partial(_cxt2str, item2str=lambda item, vocab: f'{item[0]} {item[1]}'),
+#         lambda query, vocab: f'{query[0]} and {query[1]} are same?'
+#     ),
+#     (lambda: [[EqSet(persons).equal], [PoSet(digits).equal], [EqSet(persons).equal]], MlMlM_gen,
+#         partial(_cxt2str, item2str=lambda item, vocab: f'{item[0]} is {item[1]}'),
+#         lambda query, vocab: f'{query} is the same as', # bare query is better for gpt-neox!?
+#     ),
+#     (lambda: [[EqSet(persons).equal], [BijectSet(city2resident).proj]], MlM_gen,
+#      partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} lives in {i[1]}'), lambda q, _: f'{q}', 'Ġis'
+#     ), # a little worse than capital -> country
+# ]
 
 no_query_tasks = [
     (lambda: [TreeSet(types_of_things).use('equal'), TreeSet(types_of_things).use('equal')], partial(MlM_gen, cxt_sample_fn=enumerate_sample, query=1, has_local_hop=False),
@@ -67,35 +70,34 @@ multi_hop_tasks = [
     ),
 ]
 
-tasks = [
-    (lambda: [EqSet(persons).use('equal'), TreeSet(types_of_things).use('equal')], MlM_gen,
-     partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} has {wrap_noun(i[1])}'), lambda q, _: f'{q}', "'s"
+# for task,       do_swap_qa, rev_item2str in product(
+#     tasks[0:1],[False,True],[False,True]):
+tasks2 = [
+    (lambda: [TreeSet(genders_of_persons).use('equal'), PoSet(temporal_posets).use('prev')], MlM_gen,
+     partial(_cxt2str, item2str=lambda i, _: [f'{i[0]} arrived {wrap_noun2(i[1])}', f'{wrap_noun2(i[1]).capitalize()} arrived {i[0]}']), lambda q, _: f'{q} arrived just', ' after'
+    ), 
+    (lambda: [TreeSet(genders_of_persons).use('equal'), PoSet(temporal_posets).use('next')], MlM_gen,
+     partial(_cxt2str, item2str=lambda i, _: [f'{i[0]} arrived {wrap_noun2(i[1])}', f'{wrap_noun2(i[1]).capitalize()} arrived {i[0]}']), lambda q, _: f'{q} arrived just', ' before'
     ),
-    (lambda: [EqSet(persons).use('equal'), TreeSet(types_of_things).use('parent')], MlM_gen,
-     partial(_cxt2str, sep='. ', item2str=lambda i, _: f"{i[0]} has {wrap_noun(i[1])}"), lambda q, _: f'{q}', "'s"
-    ), # t: 21-5, 15-8, 19. p: 16-7, 18-5, [3-12, 13-7]. p+: 16-7, 16-0. 13-7:induction head qk, thing->type ov
-    (lambda: [EqSet(persons).use('equal'), SymSet(person_adjs).use('equal')], MlM_gen,
-     partial(_cxt2str, sep='. ', item2str=lambda i, _: f"{i[0]}'s {i[1]}"), lambda q, _: f'{conj()}{q}{xxx_be()}', "" #" is"
-    ),
-    (lambda: [EqSet(persons).use('equal'), SymSet(person_adjs).use('opposite')], MlM_gen,
+    # (lambda: [TreeSet(genders_of_persons).use('equal'), SymSet(person_adjs).use('equal')], MlM_gen,
+    #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f"{i[0]}'s {i[1]}"), lambda q, _: f'{conj()}{q}{xxx_be()}', "" #" is"
+    # ),
+    (lambda: [TreeSet(genders_of_persons).use('equal'), SymSet(person_adjs).use('opposite')], MlM_gen,
      partial(_cxt2str, sep='. ', item2str=lambda i, _: f"{i[0]}'s {i[1]}"), lambda q, _: f'{conj()}{q}{xxx_be(False)}', "" #" is"
     #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f"{i[0]}'s {i[1]}"), lambda q, _: f'{conj(False)}{q}{xxx_be()}', "" #" is"
     #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f"{i[0]}'s {i[1]}"), lambda q, _: f"So {q} is", " not"
     ), # t: 16-14, somewhat 14-7 # verbose acc: gpj-j > curie-001 > davinci-001 > gpt-neox!? abstract acc: gpt-neox > gpt-j. all poor (inc. davinci-002!)
-    (lambda: [EqSet(persons).use('equal'), TreeSet(country2capital).use('equal')], MlM_gen,
-     partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} lives in {i[1]}'), lambda q, _: f'{q} is', ' from'
-    ),
-    (lambda: [EqSet(persons).use('equal'), TreeSet(country2capital).use('parent')], MlM_gen,
-     partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} lives in {i[1]}'), lambda q, _: f'{q} is', ' from'
+]
+
+tasks = [
+    (lambda: [TreeSet(genders_of_persons).use('equal'), TreeSet(types_of_things).use('child')], MlM_gen,
+     partial(_cxt2str, item2str=lambda i, _: [f"{i[0]} has {wrap_noun(i[1])}", f"The {i[1]} is {i[0]}'s"]), lambda q, _: f'{q}', " likes"
+    ), # t: 21-5, 15-8, 19. p: 16-7, 18-5, [3-12, 13-7]. p+: 16-7, 16-0. 13-7:induction head qk, thing->type ov
+    (lambda: [TreeSet(genders_of_persons).use('equal'), TreeSet(countries_of_cities).use('child')], MlM_gen,
+     partial(_cxt2str, item2str=lambda i, _: [f'{i[0]} likes {i[1]}', f'{i[1]} attracts {i[0]}']), lambda q, _: f'{q} wants to go', ' to'
     ), # t: 19-12 >> 16-10 = 12-7
-    # (lambda: [[EqSet(persons).equal], [BijectSet(city2resident).proj]], MlM_gen,
-    #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} lives in {i[1]}'), lambda q, _: f'{q}', 'Ġis'
-    # ), # a little worse than capital -> country
-    (lambda: [EqSet(persons).use('equal'), TreeSet(capabilities_of_things).use('equal')], MlM_gen,
-     partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} has {wrap_noun(i[1])}'), lambda q, _: f'{q}', "'s"
-    ),
-    (lambda: [EqSet(persons).use('equal'), TreeSet(capabilities_of_things).use('parent')], MlM_gen,
-     partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} has {wrap_noun(i[1])}'), lambda q, _: f'{q}', ' can'
+    (lambda: [TreeSet(genders_of_persons).use('equal'), TreeSet(capabilities_of_things).use('child')], MlM_gen,
+     partial(_cxt2str, item2str=lambda i, _: [f"{i[0]} has {wrap_noun(i[1])}", f"The {i[1]} is {i[0]}'s"]), lambda q, _: f'{q}', ' can'
     ),  # t: 13-15, not very strong
     # (lambda: [EqSet(persons).use('equal'), TreeSet(does2did).use('equal')], MlM_gen,
     #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} {i[1]}'), lambda q, _: f'{q}', ' usually'

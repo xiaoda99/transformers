@@ -7,6 +7,7 @@ from functools import partial, wraps
 import string
 from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass, fields
+from copy import deepcopy
 import traceback
 import time
 import re
@@ -18,6 +19,7 @@ import seaborn as sns
 import torch
 import torch.nn.functional as F 
 
+from const import *
 from common_utils import join_lists, my_isinstance, lget, fn2str
 from openai_utils import query_openai
 
@@ -41,7 +43,7 @@ full_vocab = uppercase + digits
 times_of_day = ['dawn', 'morning', 'noon', 'afternoon', 'evening', 'night',]# 'midnight']
 clock_of_day = [f"{i} o'clock" for i in range (1, 13)]
 years = [f'{i}' for i in range(2010, 2020)]
-days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+days_of_week = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']#, 'Sunday']
 months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 seasons = ['spring', 'summer', 'autumn', 'winter']
 # ages_of_life = ['baby', 'child', 'teenager', 'young', 'adult', 'elder']
@@ -64,11 +66,7 @@ posets = [times_of_day,clock_of_day,years, days_of_week, months, seasons]
 closed_posets = [list(string.ascii_uppercase)[:7], list(string.ascii_lowercase)[:7],][:] + [digits, cardinals, #ordinals[:5], 
     days_of_week, months, ]#seasons, times_of_history, ages_of_life, sizes]
 open_posets = [times_of_day, ages_of_life, times_of_history, units_of_length, units_of_mass, things, sizes, ]
-
-def does2did():
-    d = {vt.does: [vt.did] for vt in verb_tenses()}
-    d['sings'] = ['sang']; d['leaves'] = ['left']
-    return d
+def temporal_posets(): return [clock_of_day, days_of_week, months, seasons, years]
 
 antonyms = [
     ('big', 'small'),
@@ -189,10 +187,25 @@ _capabilities_of_things = [ # A x can y.
     # ('book', 'read'), # teach
 ]
 
-def capabilities_of_things():
-    d = defaultdict(list)
-    for thing, cap in _capabilities_of_things: d[cap].append(thing)
-    return d
+# def capabilities_of_things():
+#     d = defaultdict(list)
+#     for thing, cap in _capabilities_of_things: d[cap].append(thing)
+#     return d
+
+def capabilities_of_things(): return {
+    'kill': ['dagger', 'knife', 'gun'],
+    'cook': ['oven', 'pot', 'pan'],
+    'write': ['pen', 'pencil'],
+    'fly': ['plane', 'glider', 'helicopter'],
+    'play': ['piano', 'violin', 'guitar'],
+    'drive': ['car', 'truck'],
+    'ride': ['bicycle', 'motorcycle', 'horse'],
+    'communicate': ['phone', 'telephone', 'telegraph', 'radio'], # internet, email
+    'clean': ['broom', 'mop', 'vacuum cleaner'],
+    'paint': ['brush', 'palette', 'roller', 'spray'],
+    'swim': ['swimsuit', 'goggles', 'fins'],
+    'calculate': ['computer', 'calculator', 'abacus'],
+}
 
 adj2very = [
     ('good', 'excellent'),
@@ -272,6 +285,28 @@ _country2capital = [ #The capital of Germany is Berlin.
 def country2capital():  # convert to same form as TreeSet types_of_things
     return {country: [capital] for country, capital in _country2capital}
 
+def countries_of_cities(): return {
+    'China': ['Beijing', 'Shanghai', 'Guangzhou'],
+    'Japan': ['Tokyo', 'Osaka', 'Kyoto'],
+    'the United Kingdom': ['London', 'Manchester', 'Birmingham'],  # England
+    'the United States': ['Washington, D.C', 'New York', 'Los Angeles'],
+    'Canada': ['Ottawa', 'Toronto', 'Vancouver'],
+    'Australia': ['Canberra', 'Sydney', 'Brisbane'],
+    'France': ['Paris', 'Marseille', 'Lyon'],
+    'Italy': ['Rome', 'Milan', 'Florence'],
+    'German': ['Berlin', 'Hamburg', 'Munich'],
+    'Spain': ['Madrid', 'Barcelona', 'Valencia'],
+    'Switzerland': ['Bern', 'Zurich', 'Geneva'],
+    'Brazil': ['Brasília', 'Sao Paulo', 'Rio de Janeiro'],
+    'India': ['New Delhi', 'Mumbai'],
+    'Russia': ['Moscow', 'St. Petersburg'],  # or Saint Petersburg
+    'Mexico': ['Mexico City', 'Guadalajara'],
+    'Thailand': ['Bangkok', 'Chiang Mai'],
+    'Egypt': ['Cairo', 'Alexandria'],
+    'South Korea': ['Seoul', 'Busan'],
+    'Turkey': ['Ankara', 'Istanbul'],
+    'Portugal': ['Lisbon', 'Porto'],
+}
 
 def city2resident():
     if not hasattr(city2resident, 'demonyms'):
@@ -310,14 +345,20 @@ tea: Martin a du thé.
     return extract_fn(query_openai(prompt_fn(noun))) if noun != 'tea' else 'du thé'
 
 def wrap_noun2(noun):
+    if noun in clock_of_day: return 'at ' + noun
+    if noun in days_of_week: return 'on ' + noun
+    if noun in months: return 'in ' + noun
+    if noun in seasons: return 'in the ' + noun
+    if noun in years: return 'in ' + noun
+    assert False
     prompt_fn = lambda s: \
-f'''summer: Martin arrived in the summer.
-Friday: Martin arrived on Friday.
-morning: Martin arrived in the morning.
-February: Martin arrived in February.
-noon: Martin arrived at noon.
-2020: Martin arrived in 2020.
-{s}: Martin arrived'''
+f'''summer: He arrived in the summer.
+Friday: He arrived on Friday.
+morning: He arrived in the morning.
+February: He arrived in February.
+5 o'clock: He arrived at 5 o'clock.
+2020: He arrived in 2020.
+{s}: He arrived'''
     # print(query_openai(prompt_fn(noun)))
     def extract_fn(text):
         text = text.strip()
@@ -378,14 +419,25 @@ class Relation(object):
         self._dict = _dict
         self._inv_dict = None
         self.inv_rel = None
+        self.neg_rel = None
 
     def f(self, x): return self._dict.get(x, [])
     def inv_f(self, x): return self._inv_dict.get(x, [])
-    # def el(self): return self._el
     def dom(self, xs=None): return set(self._dict.keys())
     def codom(self, ys=None): return set(join_lists(self._dict.values()))
     def b(self, x0, x1): return x1 in self._dict.get(x0, [])
-    
+
+class NegativeRelation(Relation):
+    def __init__(self, rel):
+        self.rel = self.neg_rel = rel
+        self.name = 'neg_' + rel.name if not rel.name.startswith('neg_') else rel.name[4:]
+    def f(self, x): return list(self.rel.codom() - set(self.rel.f(x)))
+    def inv_f(self, x): return list(self.rel.dom() - set(self.rel.inv_f(x)))
+    def dom(self, xs=None): return self.rel.dom()
+    def codom(self, ys=None): return self.rel.codom()
+    def b(self, x0, x1): return not self.rel.b(x0, x1)
+
+
 class Set(object):
     def __init__(self, data, rel_names):
         self.data = data
@@ -396,8 +448,24 @@ class Set(object):
     def use(self, rel_names):
         if isinstance(rel_names, str): rel_names = [rel_names]
         self.used_rel_names = rel_names
-        self.relations = [getattr(self, rel_name) for rel_name in rel_names]
+        self.relations = [getattr(self, rel_name) for rel_name in self.used_rel_names]
         return self
+
+    def negate_used(self):
+        self.used_rel_names = ['neg_' + rel_name if not rel_name.startswith('neg_') else rel_name[4:] for rel_name in self.used_rel_names]
+        self.relations = [getattr(self, rel_name) for rel_name in self.used_rel_names]
+        return self
+
+    def build_negative_relations(self):
+        neg_rel_names = []
+        for rel_name in self.rel_names:
+            rel = getattr(self, rel_name)
+            neg_rel_name = 'neg_' + rel_name
+            neg_rel = NegativeRelation(rel)
+            rel.neg_rel = neg_rel
+            setattr(self, neg_rel_name, neg_rel)
+            neg_rel_names.append(neg_rel_name)
+        self.rel_names += neg_rel_names
 
     def __str__(self):
         return f"{self.data.__name__}.{self.__class__.__name__}.{'|'.join(self.used_rel_names)}"
@@ -410,6 +478,7 @@ class EqSet(Set):
             setattr(self, rel_name, Relation(name=rel_name, _dict=d))
         self.equal._inv_dict = self.equal._dict
         self.equal.inv_rel = self.equal
+        self.build_negative_relations()
 
 class PoSet(Set):
     def __init__(self, data):
@@ -423,6 +492,9 @@ class PoSet(Set):
             setattr(self, rel_name, Relation(name=rel_name, _dict=d))
         self.prev._inv_dict, self.next._inv_dict = self.next._dict, self.prev._dict
         self.equal._inv_dict = self.equal._dict
+        self.prev.inv_rel, self.next.inv_rel = self.next, self.prev
+        self.equal.inv_rel = self.equal
+        self.build_negative_relations()
 
 class SymSet(Set):
     def __init__(self, data):
@@ -436,6 +508,9 @@ class SymSet(Set):
                     if i == 0: self.opposite._dict[e] = opposites[:1]
         self.opposite._inv_dict, self.similar._inv_dict = self.opposite._dict, self.similar._dict
         self.equal._inv_dict = self.equal._dict
+        self.similar.inv_rel, self.opposite.inv_rel = self.similar, self.opposite
+        self.equal.inv_rel = self.equal
+        self.build_negative_relations()
         
 class BijectSet(Set):  # can be treated as a special case of TreeSet?
     def __init__(self, data):
@@ -451,7 +526,7 @@ class BijectSet(Set):  # can be treated as a special case of TreeSet?
 
 class TreeSet(Set):
     def __init__(self, data):
-        super().__init__(data, ['child', 'parent', 'equal'])
+        super().__init__(data, ['child', 'parent', 'sibling', 'equal'])
         data = data()
         for parent, children in data.items():
             self.child._dict[parent] = children
@@ -459,22 +534,33 @@ class TreeSet(Set):
             for child in children:
                 self.parent._dict[child] = [parent]
                 self.equal._dict[child] = [child]
+                self.sibling._dict[child] = list(set(children) - {child})
         self.child._inv_dict, self.parent._inv_dict = self.parent._dict, self.child._dict
+        self.sibling._inv_dict = self.sibling._dict
         self.equal._inv_dict = self.equal._dict
         self.child.inv_rel, self.parent.inv_rel = self.parent, self.child
+        self.sibling.inv_rel = self.sibling
         self.equal.inv_rel = self.equal
+        self.build_negative_relations()
 
 def enumerate_sample(cxt_len, rel):
     return list(range(cxt_len)), sample(list(rel.dom()), cxt_len)
 
-def grouped_sample(cxt_len, rel, n_groups=2, reverse=False, min_group_size=None, max_group_size=None):
+def grouped_sample(cxt_len, rel, n_groups=2, reverse=False, min_group_size=None, max_group_size=None,
+                                                            min_group_count=None, max_group_count=None):
+    if min_group_size and not max_group_size: min_group_count, max_group_count = 1, None
+    elif not min_group_size and max_group_size: min_group_count, max_group_count = None, 1
     group_sizes = []
-    while not group_sizes or (min_group_size and min(group_sizes) != min_group_size) \
-                        or (max_group_size and max(group_sizes) != max_group_size):
+    i = 0
+    while (not group_sizes or (min_group_size and min(group_sizes) != min_group_size)
+                        or (max_group_size and max(group_sizes) != max_group_size)
+                        or (min_group_count and group_sizes.count(min(group_sizes)) != min_group_count)
+                        or (max_group_count and group_sizes.count(max(group_sizes)) != max_group_count)):
         cut_points = sorted(sample(range(1, cxt_len - 1), n_groups - 1))
         group_sizes = [stop - start for start, stop in zip([0] + cut_points, cut_points + [cxt_len])]
         group_sizes = sorted(group_sizes, reverse=reverse)
         # print('In grouped_sample:', group_sizes)  # debug
+        i += 1; assert i <= 10, str(group_sizes)
     groups = sample(list(rel.dom()), n_groups)
     cxt = join_lists([list(zip([size] * size, sample(rel.f(group), size) if rel.name != 'equal' else [group] * size))
                     for group, size in zip(groups, group_sizes)])
@@ -487,45 +573,41 @@ def swap(l, dst, src=0):
 def distractive_sample(cxt_len, rel, ans_i=0):
     query = choice(list(rel.dom()))
     ans = choice(rel.f(query))
-    distractors = sample(list(rel.codom() - set(rel.f(query))), cxt_len - 1)
+    distractors = list(rel.codom() - set(rel.f(query)))
+    k = cxt_len - 1
+    assert len(distractors) >= k or rel.name.startswith('neg_') and len(distractors) == 1, f'{rel.name} {len(distractors)}'
+    distractors = sample(distractors, k) if len(distractors) >= k else distractors * k
     distractors0 = [rel.inv_f(x)[0] for x in distractors]
     return tuple([swap(l, ans_i) for l in [[query] + distractors0, [ans] + distractors]])
- 
-def negate(bool_fn):
-    @wraps(bool_fn)  # https://stackoverflow.com/questions/42561843/python-negate-boolean-function
-    def wrapperd_fn(*args, **kwargs): return not bool_fn(*args, **kwargs)
-    return wrapperd_fn
 
-def MlM_gen(rels, cxt_len=3, cxt_sample_fn=None, query=None, has_local_hop=True, do_negate=False):
-    rels = [s.relations for s in rels]
+def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):
+    rels = [s.relations for s in vocabs]
     candidates = OrderedDict()
     fixed_query = query is not None
+    has_local_hop = vocabs[0].data != vocabs[1].data
     position_relevant = cxt_sample_fn is not None and cxt_sample_fn.__name__ == 'enumerate_sample'
     
     hop = 0; rel = rel0 = rels[hop][0]
     bool_fn0, (candidates[hop - 1], candidates[hop]) = (rel.b, distractive_sample(cxt_len, rel)) \
         if not fixed_query else (lambda x, y: x == y, cxt_sample_fn(cxt_len, rel))
-    if not fixed_query: query = candidates[hop - 1][0]
-    elif not position_relevant: assert query == candidates[hop - 1][0], f'{query} != {candidates[hop - 1][0]}'
+    # if not fixed_query: query = candidates[hop - 1][0]
+    # elif not position_relevant: assert query == candidates[hop - 1][0], f'{query} != {candidates[hop - 1][0]}'
 
     hop = 1; rel = rel1 = rels[hop][0]
-    candidates[hop], candidates[hop + 1] = distractive_sample(cxt_len, rel.inv_rel)[::-1] \
-        if has_local_hop else (candidates[hop - 1].copy(), [rel.f(x)[0] for x in candidates[hop - 1]])
-    
-    if do_negate:
-        assert cxt_len == 2; bool_fn0 = negate(bool_fn0)
-        for h in [hop, hop + 1]: candidates[h] = candidates[h][::-1]
+    candidates[hop], candidates[hop + 1] = distractive_sample(cxt_len, rel)[::-1] \
+        if has_local_hop else (candidates[hop - 1].copy(), [rel.inv_f(x)[0] for x in candidates[hop - 1]])
 
     tuples = list(zip(*candidates.values()))
+    query, *ans_chain = tuples[0]; ans_chain = tuple(ans_chain)
     if not position_relevant: shuffle(tuples)
     cxt = [t[int(not fixed_query):3] for t in tuples]
     candidates = tuple(list(c) for c in zip(*tuples))
 
-    def transform_fn(cxt, query):
-        *_, tgt, ans = seq(cxt).find(lambda x: bool_fn0(query, x[0])); chain = (tgt, ans)
-        ans = rel1.f(ans)[0]; chain += (ans,)
-        return chain
-    ans_chain = transform_fn(cxt, query)
+    # def transform_fn(cxt, query):
+    #     *_, tgt, ans = seq(cxt).find(lambda x: bool_fn0(query, x[0])); chain = (tgt, ans)
+    #     ans = rel1.inv_f(ans)[0]; chain += (ans,)
+    #     return chain
+    # ans_chain = transform_fn(cxt, query)
     if fixed_query: cxt, query = [x[1:] for x in cxt], None
     if not has_local_hop: cxt = [x[0] for x in cxt]
     return cxt, query, candidates, ans_chain
@@ -557,36 +639,6 @@ def MlMlM_gen(rels, cxt_len=3):
         return chain
     return cxt, query, candidates, transform_fn(cxt, query)
 
-def swap_qa(g_fn):
-    def wrapped(*args,**kwargs):
-        cxt, query, candidates, ans_chain = g_fn(*args,**kwargs)
-        (query, *ans_chain) = (query, *ans_chain)[::-1]
-        return cxt, query, candidates[::-1], tuple(ans_chain)
-    return wrapped
-
-def g2c(g_fn, cls_labels=['Yes', 'No']):
-    def wrapped(*args,**kwargs):
-        cxt, query, candidates, (*a, ans0, ans) = g_fn(*args,**kwargs)
-        (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
-            (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and q != query]), cls_labels[1])
-        return cxt, query, candidates, (*a, _ans0, _ans), label
-        if tuple(candidates[0]) == tuple(candidates[1]):
-            return (cxt, (query, choice(list(set(candidates[0]) - {query, ans}))), [labels], labels[1]) \
-                if random() > 0.5 else (cxt, (query, ans), [labels], labels[0])
-        else:
-            ans_idx = candidates[0].index(ans)
-            _ans = candidates[1][ans_idx]
-            p = random()
-            if p < 1/3: ans, label = ans, labels[0]
-            elif 1/3 <= p < 2/3: ans, label = _ans, labels[1]
-            else:
-                if len(list(set(candidates[0] + candidates[1]) - {ans, _ans})) == 0:
-                    print('empty', candidates[0], candidates[1], ans, _ans)
-                ans, label = choice(list(set(candidates[0] + candidates[1]) - {ans, _ans})), labels[2]
-            return cxt, (query, ans), [labels], label
-    # wrapped.__name__ = f'g2c({g_fn.__name__})'
-    return wrapped
-
 def _str(l, vocab=None, sep=' '):
     if l is None: return ''
     if isinstance(l, str) or not isinstance(l, Iterable): l = [l]
@@ -603,20 +655,25 @@ def make_examples(task, nrows=4, vocab_for_each_row=True, **kwargs):
     if not vocab_for_each_row: vocab = vocab_fn()
     for i in range(nrows * 2):
         if vocab_for_each_row: vocab = vocab_fn()
-        cxt, query, candidates, ans, *a = example_gen_fn(vocab, **kwargs)
+        cxt, query, candidates, ans_chain, *a = example_gen_fn(vocab, **kwargs)
         if isinstance(query, list): query = tuple(query)
-        if (tuple(cxt), query, ans) not in qa_set:
-            qa_set.add((tuple(cxt), query, ans))
+        if (tuple(cxt), query, ans_chain) not in qa_set:
+            qa_set.add((tuple(cxt), query, ans_chain))
             vocabs.append(vocab)
-            examples.append([cxt, query, candidates, ans, *a])
+            examples.append([cxt, query, candidates, ans_chain, *a])
         if len(examples) == nrows: break
     return vocabs, examples
 
 def _item2str(item, vocab=None, reverse=False):
     return (f'{item[1]} {item[0]}' if reverse else f'{item[0]} {item[1]}') if isinstance(item, tuple) else f'{item}'
 
-def _cxt2str(cxt, vocab=None, prefix='', suffix='', sep=', ', item2str=_item2str):
-    return prefix + sep.join([item2str(item, vocab) for item in cxt]) + suffix
+def _cxt2str(cxt, vocab=None, prefix='', suffix='', sep='. ', item2str=_item2str, rev_item2str=False):
+    def try_wrap(s):
+        # return [s] if type(s) == str else s
+        if type(s) == str: return [s]
+        assert type(s) == list and len(s) == 2, f'{type(s)} {len(s)} {s}'
+        return s
+    return prefix + sep.join([try_wrap(item2str(item, vocab))[int(rev_item2str)] for item in cxt]) + suffix
 
 @dataclass
 class Ranges:
@@ -637,7 +694,8 @@ def locate(tokens, substring, return_last=False):
         index_fn = getattr(whole_string, 'index' if not return_last else 'rindex')
         char_loc = index_fn(substring)
     else:
-        try: matches = list(re.finditer(r"\b%s\b" % substring, whole_string))
+        pattern = r"\b%s\b" if not substring.startswith(" ") else r"%s\b"
+        try: matches = list(re.finditer(pattern % substring, whole_string))
         except Exception: print(f'sub = {substring}, whole = {whole_string}'); raise
         assert len(matches) > 0, f'{tokens}\n{substring} not match {whole_string}'
         char_loc = matches[-int(return_last)].span()[0]
@@ -737,10 +795,10 @@ def query2wh(vocab, query2str):
     if query2str(wh, vocab).startswith(wh): wh = wh.capitalize()
     return wh
 
-def make_input_str(task, vocabs, examples, abstract=0, do_swap_qa=False, options_position=None):
+def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, options_position=None):
     cxt_len = len(examples[0][0])
-    if abstract != 0:
-        item2str, query2str = (partial(_item2str, reverse=abstract == 2), _str)
+    if abstract:
+        item2str, query2str = (partial(_item2str, reverse=rev_item2str), _str)
         if cxt_len == 1:
             item2str, query2str = (lambda i, _: f'{i[1]}', lambda q, _: '')
             examples = [(cxt, None, None, (None, ans0, ans), *cls) for cxt, query, options, (tgt, ans0, ans), *cls in examples]
@@ -749,8 +807,8 @@ def make_input_str(task, vocabs, examples, abstract=0, do_swap_qa=False, options
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)]
     def example2str(vocab, example):
         cxt, query, candidates, (*_, ans), *cls = example
-        if do_swap_qa: query, ans, real_ans = query2wh(vocabs[0], query2str), query, ans
-        strs = [cxt2str(cxt, vocab), query2str(query, vocab)]
+        # if do_swap_qa: query, ans, real_ans = query2wh(vocabs[0], query2str), query, ans
+        strs = [cxt2str(cxt, vocab, rev_item2str=rev_item2str), query2str(query, vocab).capitalize()]
         if options_position is not None: strs.insert(options_position, options2str([c[-1] for c in candidates]))
         s = '. '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
         if bos_token == '':
@@ -758,7 +816,7 @@ def make_input_str(task, vocabs, examples, abstract=0, do_swap_qa=False, options
             _bos_token = "'s" if query_str.endswith("'s") else query_str.split()[-1]
         else:
             _bos_token = bos_token
-        if do_swap_qa: _bos_token = '?'; s += _bos_token + ' ' + ans2str(real_ans)
+        # if do_swap_qa: _bos_token = '?'; s += _bos_token + ' ' + ans2str(real_ans)
         if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
@@ -768,24 +826,182 @@ def get_answer_index(example):
     cxt, query, cands, (*_, ans), *cls = example
     return cands[-1].index(ans)
 
-def generate(task, do_negate=False, do_swap_qa=False, do_g2c=False, nrows=8, cxt_len=3, abstract=0, plot=True, verbose=True):
-    # unpack, modify and repack to avoid in-place modification of task
-    if do_negate: vocab_fn, gen_fn, *a = task; task = (vocab_fn, partial(gen_fn, do_negate=True), *a)
-    if do_swap_qa: vocab_fn, gen_fn, *a = task; task = (vocab_fn, swap_qa(gen_fn), *a)
-    if do_g2c: vocab_fn, gen_fn, *a = task; task = (vocab_fn, g2c(gen_fn), *a)
+class InvalidTransException(Exception): pass
+
+def add_also(s):
+    return s.replace(' has ', ' may also have ').replace(' likes ', ' may also like ')
+
+def replace_rel(task, hop, replace_type=1):
+    if hop == 0: assert replace_type in [1], str(replace_type)
+    elif hop == 1: assert replace_type in [1, 2], str(replace_type)
+
+    vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
+    vocabs = vocab_fn()
+    if hop == 1 and vocabs[0].data.__name__ == vocabs[1].data.__name__:
+        raise InvalidTransException('unreplaceable rels[1] when rm_local_hop')
+    vocab = vocabs[hop]
+    rel_name = vocab.used_rel_names[0]
+    exchangeable_rels = {'equal', 'child'}
+    prefix, rel_base = ('neg_', rel_name[4:]) if rel_name.startswith('neg_') else ('', rel_name)
+    if rel_base not in exchangeable_rels:
+        raise InvalidTransException('unreplaceable rel: ' + rel_base)
+    new_rel_base = (exchangeable_rels - {rel_base}).pop() if replace_type == 1 else 'sibling'
+    if new_rel_base not in vocab.rel_names:
+        raise InvalidTransException('unreplaceable vocab: ' + str(vocab.rel_names))
+    new_rel_name = prefix + new_rel_base
+
+    def new_vocab_fn():
+        vocabs = vocab_fn()
+        vocabs[hop] = vocabs[hop].use(new_rel_name)
+        return vocabs
+    
+    if replace_type == 2:
+        item2str = cxt2str.keywords['item2str']
+        s = add_also(item2str(('QQQ', 'AAA'), None)[0])
+        bos_token = ' ' + s[:s.rindex('AAA')].strip().split()[-1]
+        def query2str(q, v):
+            s = add_also(item2str((q, 'AAA'), None)[0])
+            return s[:s.rindex(bos_token)].strip()
+
+    task = new_vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a
+    return task
+
+def swap_qa(task):
+    vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
+    # task = (vocab_fn, swap_qa(gen_fn), *a)
+    new_vocab_fn = lambda: vocab_fn()[::-1]  # would cause infinite recursion bug if use same name
+    item2str = cxt2str.keywords['item2str']
+    swapped_item2str = lambda i, v: item2str(i[::-1], v)
+    new_cxt2str = deepcopy(cxt2str)
+    new_cxt2str.keywords['item2str'] = swapped_item2str
+    def new_query2str(q, v):
+        wh = 'who' if vocab_fn()[0].data.__name__ in ['persons', 'genders_of_persons'] else 'which'
+        return (query2str(wh, v) + bos_token + ' ' + q).replace("who's", "whose").capitalize()
+    new_bos_token = '?'
+    task = (new_vocab_fn, gen_fn, new_cxt2str, new_query2str, new_bos_token, *a)
+    return task
+
+def negate_sent(s):
+    s0 = s
+    s = s.replace(" may also have", " may not have").replace(" may also like", " may not like") # replace_rel1=2
+    s = s.replace(" likes", " does not like").replace(" wants", " does not want").replace(" can", " can not")
+    assert s != s0,  s
+
+    singular_subs, plural_subs = ['the boy ', 'the girl '], ['boys ', 'girls ']
+    s = s.lower()
+    not_i = list(re.finditer(r"\bnot\b", s))[0].span()[0]
+    if any(sub in s[:not_i] for sub in singular_subs):
+        for old_sub, new_sub in zip(singular_subs, plural_subs):
+            s = s.replace(old_sub, new_sub)
+        s = s.replace(" does not", " do not")
+    return s.capitalize()
+
+def negate(task):
+    vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
+
+    def new_vocab_fn():
+        vocabs = vocab_fn()
+        return [vocabs[0].negate_used(), vocabs[1]]
+
+    s = negate_sent(query2str('QQQ', None) + bos_token)
+    new_bos_token = '?' if s.endswith('?') else ' ' + s.split()[-1]
+    def new_query2str(q, v):
+        s = negate_sent(query2str(q, v) + bos_token)
+        assert new_bos_token in s, f'{new_bos_token} not in {s}'
+        return s[:s.rindex(new_bos_token)].strip().capitalize()
+
+    task = (new_vocab_fn, gen_fn, cxt2str, new_query2str, new_bos_token, *a)
+    return task
+
+def remove_local_hop(task, remove_query=False):
+    vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
+    data_names = [v.data.__name__ for v in vocab_fn()]
+    rel_names = [v.relations[0].name for v in vocab_fn()]
+    is_negative = rel_names[0].startswith('neg_')
+    if rel_names[0] in ['equal', 'inv_equal']: raise InvalidTransException("invalid rel for rm_local_hop: " + str(rel_names))
+    if remove_query and not is_negative: raise InvalidTransException("invalid rel for rm_local_hop and rm_query" + str(rel_names))
+    
+    def new_vocab_fn(): vocabs = vocab_fn(); return [vocabs[0], deepcopy(vocabs[0]).use('equal')]
+    def new_gen_fn(*args, **kwargs):
+        cxt, query, candidates, (tgt, *a, ans0, ans) = gen_fn(*args,**kwargs)
+        query, candidates = None, ([None] * len(candidates[1]),) + candidates[1:]
+        return cxt, query, candidates, (tgt, *a, ans0, ans)
+    new_gen_fn.__name__ = f"{'rm_query'}({gen_fn.__name__})"
+
+    new_cxt2str = partial(_cxt2str, prefix='There are ', sep=', ', item2str=lambda i, _: wrap_noun(i) if not i[0].isupper() else i)
+    capitalized = data_names[0] in ['persons', 'genders_of_persons', 'country2capital', 'countries_of_cities']
+    end, new_bos_token = ("?", " The") if not capitalized else ("", "?")
+    wh = 'who' if data_names[0] in ['persons', 'genders_of_persons'] else 'which'
+    prep = 'like ' if rel_names[0] in ['sibling', 'neg_sibling'] else ''
+    if not is_negative: new_query2str = (lambda q, v: f"{wh} is {prep}{q}{end}")
+    elif not remove_query: new_query2str = (lambda q, v: f"{wh} is not {prep}{q}{end}")
+    else: new_query2str = (lambda q, v: f"{wh} is different{end}")
+    task = new_vocab_fn, new_gen_fn if remove_query else gen_fn, new_cxt2str, new_query2str, new_bos_token, *a
+    return task
+
+def _g2c(g_fn, cls_labels=['True', 'False']):
+    def wrapped(*args,**kwargs):
+        cxt, query, candidates, (*a, ans0, ans) = g_fn(*args,**kwargs)
+        (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
+            (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
+        return cxt, query, candidates, (*a, _ans0, _ans), label
+        if tuple(candidates[0]) == tuple(candidates[1]):
+            return (cxt, (query, choice(list(set(candidates[0]) - {query, ans}))), [labels], labels[1]) \
+                if random() > 0.5 else (cxt, (query, ans), [labels], labels[0])
+        else:
+            ans_idx = candidates[0].index(ans)
+            _ans = candidates[1][ans_idx]
+            p = random()
+            if p < 1/3: ans, label = ans, labels[0]
+            elif 1/3 <= p < 2/3: ans, label = _ans, labels[1]
+            else:
+                if len(list(set(candidates[0] + candidates[1]) - {ans, _ans})) == 0:
+                    print('empty', candidates[0], candidates[1], ans, _ans)
+                ans, label = choice(list(set(candidates[0] + candidates[1]) - {ans, _ans})), labels[2]
+            return cxt, (query, ans), [labels], label
+    wrapped.__name__ = f'g2c({g_fn.__name__})'
+    return wrapped
+
+def g2c(task):
+    vocab_fn, gen_fn, *a = task; task = (vocab_fn, _g2c(gen_fn), *a)
+    return task
+
+def transform_task(task, replace_rel0=0, replace_rel1=0, do_swap_qa=False, do_negate=False,
+                do_rm_local_hop=False, do_rm_query=False, do_g2c=False):
+    try:
+        if replace_rel0 != 0:  # original
+            if do_swap_qa and do_rm_local_hop: raise InvalidTransException('unreplaceable rel0')
+            task = replace_rel(task, 0, replace_rel0)
+        if replace_rel1 != 0:  # original
+            if not do_swap_qa and do_rm_local_hop: raise InvalidTransException('unreplaceable rel1')
+            if replace_rel1 == 2 and not do_swap_qa and not do_g2c: raise InvalidTransException('unreplaceable rel1=2')
+            task = replace_rel(task, 1, replace_rel1)
+        if do_swap_qa: task = swap_qa(task)
+        if do_negate: task = negate(task)
+        if do_rm_local_hop: task = remove_local_hop(task, remove_query=do_rm_query)
+        elif do_rm_query: raise InvalidTransException('rm_query w/o rm_local_hop')
+        if do_g2c: task = g2c(task)
+    except InvalidTransException as e:
+        # trans_args = {k: v for k, v in locals().items() if k not in ['task', 'e']}
+        # print(f'\ntransform_task failed: {e} ({args2str(trans_args)})')
+        return None
+    return task
+
+def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True, verbose=True):
     counts = [9, 1]; i = 0
     while len(counts) > 1 and (len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3):
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
+        # print('In generate: example =', examples[0])
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
         counts = [v for k, v in ind_counts]
-        i += 1; assert i < 10, str(ind_counts)
+        i += 1; assert i < 20, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:3]) + '\n' + str(ind_counts)  # cxt query ans
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())
         label_probs = F.one_hot(torch.LongTensor(answer_indices))
         _ = plt.figure(figsize=(10, 0.7))
         _ = sns.heatmap(label_probs.T, cbar=False); plt.show()
-    examples, text, bos_token = make_input_str(task, vocabs, examples, abstract=abstract, do_swap_qa=do_swap_qa)
+    examples, text, bos_token = make_input_str(task, vocabs, examples, rev_item2str=rev_item2str, abstract=abstract)
 
     if verbose: print(text)
     return examples, text, bos_token
@@ -794,9 +1010,23 @@ def task2str(task):
     vocab_fn, gen_fn, *_ = task
     return f"{fn2str(gen_fn)}({', '.join(str(v) for v in vocab_fn())})"
 
-def is_compatible_gen_args(task, args):
+def args2str(args):
+    # strs = [f'{k}={v}' if type(v) not in [bool, int] else (k if v else '') for k, v in args.items()]
+    strs = []
+    for k, v in args.items():
+        if type(v) == bool: s = k if v else ''
+        elif type(v) == int: s = f'{k}={v}' if v != 0 else ''
+        else: s = f'{k}={v}'
+        strs.append(s)
+    return ', '.join(s for s in strs if s != '')
+
+def validate_args(task, args, trans_args):
     vocab_fn, gen_fn, *_ = task
-    if args.get('do_swap_qa') and isinstance(gen_fn, partial) and 'query' in gen_fn.keywords: return False
+    rel_names = [vocab.relations[0].name for vocab in vocab_fn()]
+    if trans_args.get('do_swap_qa') and isinstance(gen_fn, partial) and 'query' in gen_fn.keywords: return False
+    if trans_args.get('do_rm_local_hop') and args.get('rev_item2str'): return False
+    if rel_names[1] == 'equal' and args['cxt_len'] == 1: return False
+    if rel_names[1] != 'equal': return False
     return True
 
 def inc(token):

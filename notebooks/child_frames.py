@@ -114,54 +114,62 @@ frames = [
 ]
 
 _person_adjs = [
+    # [['fat'], ['thin']],
+    # [['hot'], ['cold']],
+    # [['big'], ['small']],
+    # [['insensitive'], ['sensitive']],
+    # [['quiet'], ['loud']],  # noisy
+    # [['young'], ['old']],
+    # [['conscious'], ['unconscious']],
+    # [['asleep'], ['awake']],
+    # [['male'], ['female']],
+    # [['inside'], ['outside']],
+    # [['white'], ['black']],
     [['tall'], ['short']],
-    [['fat'], ['thin']],
-    [['hot'], ['cold']],
-    [['careless'], ['careful']],
-    [['sad', 'unhappy'], ['happy']],
+    [['careful'], ['careless']],
+    [['happy'], ['sad', 'unhappy']],
     [['rich'], ['poor']],
-    [['big'], ['small']],
-    [['insensitive'], ['sensitive']],
-    [['quiet'], ['loud']],  # noisy
-    [['young'], ['old']],
     [['fast'], ['slow']],
-    [['ugly'], ['beautiful']],
+    [['beautiful'], ['ugly']],
     [['clean'], ['dirty']],
-    # [['polite'], ['rude', 'impolite']],  # brutal, harsh
     # [['gentle'], ['harsh']],
     [['strong'], ['weak']],
     [['good'], ['bad']],
-    # [['impatient'], ['patient']],  # confuse with patient vs doctor/healthy
-    [['conscious'], ['unconscious']],
+    # [['patient'], ['impatient']],  # confuse with patient vs doctor/healthy
     [['honest'], ['dishonest']],  # fraudulent
     [['brave'], ['cowardly']],
-    [['unpopular'], ['popular']],
-    [['uncomfortable'], ['comfortable']],
-    [['pessimistic'], ['optimistic']],
+    [['popular'], ['unpopular']],
+    [['comfortable'], ['uncomfortable']],
+    [['optimistic'], ['pessimistic']],
     [['responsible'], ['irresponsible']],
-    [['irrational'], ['rational']],
+    [['rational'], ['irrational']],
     [['healthy'], ['sick', 'unhealthy']],
     [['friendly'], ['unfriendly']],  # hostile
-    [['asleep'], ['awake']],
-    [['boring', 'uninteresting'], ['interesting']],
-    [['dangerous'], ['safe']],  # harmless, safe is not good according to 16-14
-    [['ignorant'], ['knowledgeable']],
-    # [['hardworking'], ['lazy']],
-    [['correct'], ['wrong', 'incorrect']],
-    [['male'], ['female']],
-    [['inside'], ['outside']],
-    [['white'], ['black']],
-    [['passive'], ['active']],
+    [['interesting'], ['boring', 'uninteresting']],
+    [['safe'], ['dangerous']],  # harmless, safe is not good according to 16-14
+    [['knowledgeable'], ['ignorant']],
+    [['active'], ['passive']],
+    # by code-davinci-002
+    [['generous'], ['stingy']],
+    [['loyal'], ['disloyal']],
+    [['reliable'], ['unreliable']],
+    [['successful'], ['unsuccessful']],
+    [['correct'], ['incorrect']],
+    [['right'], ['wrong']],
+    [['clean'], ['dirty']],
+    [['lucky'], ['unlucky']],
+    # [['diligent', 'hardworking'], ['lazy']],
+    # [['polite'], ['rude', 'impolite']],  # brutal, harsh
+    # [['humble'], ['arrogant']],
+    # [['clever', 'smart', 'intelligent'], ['stupid']],
+
     # [['sane'], ['mad', 'insane']],
-    # [['wrong'], ['right', 'left']],
     # [['light'], ['heavy', 'dark']],
     # [['serious'], ['funny']],
-    # [['stupid'], ['clever', 'smart', 'intelligent'],
     # [['messy', 'untidy'], ['tidy', 'neat', 'clean']],
     # [['cerebral'], ['emotional']],
     # [['hesitant'], ['decisive']],
     # [['selfish'], ['selfless']],
-    # [['arrogant'], ['humble']],
     # [['determined'], ['indecisive']],
     # [['insecure'], ['confident']],
     # [['single'], ['married']],
@@ -176,3 +184,7 @@ def person_adjs(): return _person_adjs
     #         for a in tmp:
     #             ans.append(a.capitalize())
     # return ans
+
+from common_utils import join_lists
+def positivities_of_adjs():
+    return dict(zip(['positive', 'negtive'], map(join_lists, zip(*_person_adjs))))

@@ -40,6 +40,8 @@ def persons():
     boys, girls = all_persons(tokenizer)
     return boys + girls
 
+def genders_of_persons(): return {'the boy': boys, 'the girl': girls}
+
 verb_form =[
     ('sleep','slept'),
     ('go','went'),
@@ -101,6 +103,11 @@ def verb_tenses():
         verb_tenses._verb_tenses = [Tenses(*(vt + [vt[0]] * (5 - len(vt)))) for vt in _verb_tenses]
     return verb_tenses._verb_tenses
 
+def does2did():
+    d = {vt.does: [vt.did] for vt in verb_tenses()}
+    d['sings'] = ['sang']; d['leaves'] = ['left']
+    return d
+    
 noun2adj = [  # The adjective form of x is y
     ('rain','rainy'),
     ('sun','sunny'),

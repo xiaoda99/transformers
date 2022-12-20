@@ -78,6 +78,7 @@ class AttrData:
 @dataclass
 class Result:
     task: tuple = None
+    trans_args: dict = None
     args: dict = None
     all_examples: list = None
     texts: list = None
