@@ -1,5 +1,5 @@
 import sys
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 # from typing import Iterable
 from collections.abc import Iterable
 import numpy as np
@@ -382,10 +382,22 @@ def remove_composed_heads(attn_mod):
     for proj_name in ['q', 'k', 'v', 'out']:
         try_delattr(attn_mod, f'composed_{proj_name}_proj')
 
-def show_all_composed_heads(model):
+def get_all_composed_heads(model):
+    r = []
     for i, block in enumerate(model.transformer.h):
         composed_heads = getattr(block.attn, 'composed_heads', None)
-        if composed_heads: print(i, composed_heads)
+        if composed_heads: r.append((i, composed_heads))
+    return r
+
+def head2str(head): return f'{head[0]}-{head[1]}' if type(head) != str else head
+
+def composed_heads2str(model):
+    all_composed_heads = join_lists([composed_heads for l, composed_heads in get_all_composed_heads(model)])
+    d = defaultdict(list)
+    for qk_head, ov_head in all_composed_heads: d[qk_head].append(ov_head)
+    s = '_'.join(head2str(qk_head) + ':' + ','.join(head2str(h) for h in ov_heads) for qk_head, ov_heads in d.items())
+    if s != '': s = '_' + s
+    return s
 
 def use_composed_heads(attn_mod):
     backup_heads(attn_mod)

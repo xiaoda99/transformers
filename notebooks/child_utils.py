@@ -104,8 +104,8 @@ Types of clothes: shirt, pants, dress, coat, shoes
 Types of fruits: apple, grape, pear, banana, orange
 Types of animals: dog, cat, horse, rabbit, pig'''
 def types_of_things(): return {
-    'animal': ['chicken', 'duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'bear', 'tiger', 'cat', 'zebra', 'pig', 
-            'giraffe', 'monkey', 'rabbit', 'elephant', 'wolf', 'lion', 'deer', 'fox', 'gorilla', 'kangaroo', 'squirrel', 'mouse'], # 21-5, 15-8
+    'animal': ['chicken', 'duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig', 
+            'monkey', 'rabbit', 'elephant', 'wolf', 'deer', 'fox', 'gorilla', 'squirrel', 'mouse'], # 'bear', 'zebra', 'giraffe', 'kangaroo', 21-5, 15-8
     'fruit': ['apple', 'banana', 'pear', 'grapes', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberry',
             'blueberries', 'strawberries', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'], # may be food too?
     'drink': ['tea', 'coffee', 'beer', 'wine', 'whiskey', 'vodka', 'soda', 'juice', 'cocktail'],  # some as alcohol, 21-5, 15-8
@@ -114,22 +114,23 @@ def types_of_things(): return {
             ],  # last three as meat， 21-5， 15-8
     'weapon': ['gun', 'handgun', 'shotgun', 'rifle',  'pistol', 'revolver', 'grenade', 'cannon'], #'bomb', 'dagger', 'sword',], # 21-5, 15-8, though latter prefers firearm
     'color': ['white', 'black', 'red', 'yellow', 'blue', 'green', 'purple', 'pink', 'gray'],  # 15-8
-    # 'insect': ['bee', 'ant', 'mosquito', 'wasp', 'butterfly', 'beetle', 'spider'],  # , 'fly'
+    'insect': ['mosquito', 'beetle', 'bee'], #'spider', 'ant', 'wasp', 'butterfly'],  # , 'fly'
     # 'flower': ['rose', 'tulip', 'lily', 'daisy', 'sunflower'],
-    # 'vehicle': ['car', 'bus', 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage', 
-    #             'subway', 'taxi', 'van', 'boat'],  # transportation
-    # 'furniture': ['sofa', 'couch', 'desk', 'chair', 'table', 'bed', 'bookshelf'],# 'closet', 'wardrobe'],
+    'vehicle': ['car', 'Jeep', 'bus', 'taxi', 'motorcycle'],# 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage', 
+                # 'subway', 'van', 'boat'],  # transportation
+    # 'furniture': ['sofa', 'couch'], #'desk', 'chair', 'table', 'bed', 'bookshelf'],# 'closet', 'wardrobe'],
     # 'tool': ['hammer', 'spanner', 'awl', 'scissors', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'], #, 'axe' should be weapon?
-    # 'clothing': ['shirt', 'pants', 'dress', 'coat', 'socks', 'hat', 'tie', 'jacket', 'skirt', 'trousers', 'jeans'], #, 'shoes'
+    'clothing': ['shirt', 'T-shirt', 'jeans', 'jacket', 'pants', 'trousers', 'shoes', 'sweater', 'jersey', 'underwear', 'costume', 'uniform'],#'dress', 'coat', 'socks', 'hat', 'tie', 'skirt', ],
     # 'appliance': ['microwave', 'fridge', 'washer', 'dryer', 'washing machine'],  #, 'oven'
     # 'fish': [],
     # 'country': [],
     # 'language': [],
     # 'temperature': [],
     # 'age': [],
-    # 'sport': [],
     # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
-    # 'electronics': ['computer', 'laptop', 'iPad', 'phone', 'smartphone', 'television', 'camera', 'printer'],
+    'electronics': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
+    'sport': ['football', 'basketball', 'baseball'],# 'volleyball'],
+    'music': ['piano', 'violin', 'guitar'],
     # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
 }
@@ -195,10 +196,10 @@ _capabilities_of_things = [ # A x can y.
 def capabilities_of_things(): return {
     'kill': ['dagger', 'knife', 'gun'],
     'cook': ['oven', 'pot', 'pan'],
-    'write': ['pen', 'pencil'],
+    'write': ['pen', 'pencil', 'chalk', 'biro'],
     'fly': ['plane', 'glider', 'helicopter'],
     'play': ['piano', 'violin', 'guitar'],
-    'drive': ['car', 'truck'],
+    'drive': ['car', 'truck', 'Jeep'],
     'ride': ['bicycle', 'motorcycle', 'horse'],
     'communicate': ['phone', 'telephone', 'telegraph', 'radio'], # internet, email
     'clean': ['broom', 'mop', 'vacuum cleaner'],
@@ -293,19 +294,20 @@ def countries_of_cities(): return {
     'Canada': ['Ottawa', 'Toronto', 'Vancouver'],
     'Australia': ['Canberra', 'Sydney', 'Brisbane'],
     'France': ['Paris', 'Marseille', 'Lyon'],
-    'Italy': ['Rome', 'Milan', 'Florence'],
+    'Italy': ['Rome', 'Milan', 'Florence', 'Venice'],
     'German': ['Berlin', 'Hamburg', 'Munich'],
     'Spain': ['Madrid', 'Barcelona', 'Valencia'],
     'Switzerland': ['Bern', 'Zurich', 'Geneva'],
     'Brazil': ['Brasília', 'Sao Paulo', 'Rio de Janeiro'],
-    'India': ['New Delhi', 'Mumbai'],
-    'Russia': ['Moscow', 'St. Petersburg'],  # or Saint Petersburg
-    'Mexico': ['Mexico City', 'Guadalajara'],
-    'Thailand': ['Bangkok', 'Chiang Mai'],
-    'Egypt': ['Cairo', 'Alexandria'],
-    'South Korea': ['Seoul', 'Busan'],
-    'Turkey': ['Ankara', 'Istanbul'],
-    'Portugal': ['Lisbon', 'Porto'],
+    'India': ['New Delhi', 'Mumbai', 'Bangalore'],
+    'Thailand': ['Bangkok', 'Chiang Mai', 'Pattaya'],
+    'South Korea': ['Seoul', 'Busan', 'Incheon'],
+    'Russia': ['Moscow', 'Saint Petersburg', 'Novosibirsk'],  # or St. Petersburg
+    # 'Turkey': ['Ankara', 'Istanbul', 'Izmir'],
+    # 'Argentina': ['Buenos Aires', 'Cordoba', 'Rosario'],
+    # 'Mexico': ['Mexico City', 'Guadalajara', 'Monterrey'],
+    # 'Egypt': ['Cairo', 'Alexandria'],
+    # 'Portugal': ['Lisbon', 'Porto'],
 }
 
 def city2resident():
@@ -573,9 +575,10 @@ def swap(l, dst, src=0):
 def distractive_sample(cxt_len, rel, ans_i=0):
     query = choice(list(rel.dom()))
     ans = choice(rel.f(query))
-    distractors = list(rel.codom() - set(rel.f(query)))
+    distractors = list(rel.codom() - set(rel.f(query)) - ({query} if rel.name == 'sibling' else set()))
     k = cxt_len - 1
-    assert len(distractors) >= k or rel.name.startswith('neg_') and len(distractors) == 1, f'{rel.name} {len(distractors)}'
+    assert len(distractors) >= k or rel.name.startswith('neg_') and len(distractors) == 1, \
+        f'{rel.name}, query = {query}, f(query) = {rel.f(query)}, distractors = {distractors}'
     distractors = sample(distractors, k) if len(distractors) >= k else distractors * k
     distractors0 = [rel.inv_f(x)[0] for x in distractors]
     return tuple([swap(l, ans_i) for l in [[query] + distractors0, [ans] + distractors]])
@@ -688,6 +691,8 @@ class Ranges:
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
 def locate(tokens, substring, return_last=False):
     if substring is None: return None
+    substring = substring.lower()
+    tokens = [t.lower() for t in tokens]
     whole_string = "".join(t for t in tokens)
     assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
     if substring.strip() in ['->', '?']:
@@ -795,6 +800,8 @@ def query2wh(vocab, query2str):
     if query2str(wh, vocab).startswith(wh): wh = wh.capitalize()
     return wh
 
+def capitalize(s): return s[0].upper() + s[1:]  # different from str.capitalize() !
+
 def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, options_position=None):
     cxt_len = len(examples[0][0])
     if abstract:
@@ -808,7 +815,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
     def example2str(vocab, example):
         cxt, query, candidates, (*_, ans), *cls = example
         # if do_swap_qa: query, ans, real_ans = query2wh(vocabs[0], query2str), query, ans
-        strs = [cxt2str(cxt, vocab, rev_item2str=rev_item2str), query2str(query, vocab).capitalize()]
+        strs = [cxt2str(cxt, vocab, rev_item2str=rev_item2str), capitalize(query2str(query, vocab))]
         if options_position is not None: strs.insert(options_position, options2str([c[-1] for c in candidates]))
         s = '. '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
         if bos_token == '':
@@ -876,7 +883,7 @@ def swap_qa(task):
     new_cxt2str.keywords['item2str'] = swapped_item2str
     def new_query2str(q, v):
         wh = 'who' if vocab_fn()[0].data.__name__ in ['persons', 'genders_of_persons'] else 'which'
-        return (query2str(wh, v) + bos_token + ' ' + q).replace("who's", "whose").capitalize()
+        return (query2str(wh, v) + bos_token + ' ' + q).replace("who's", "whose")
     new_bos_token = '?'
     task = (new_vocab_fn, gen_fn, new_cxt2str, new_query2str, new_bos_token, *a)
     return task
@@ -884,17 +891,17 @@ def swap_qa(task):
 def negate_sent(s):
     s0 = s
     s = s.replace(" may also have", " may not have").replace(" may also like", " may not like") # replace_rel1=2
-    s = s.replace(" likes", " does not like").replace(" wants", " does not want").replace(" can", " can not")
+    s = s.replace(" likes", " does not like").replace(" wants ", " does not want ")
+    s = re.sub(r"\bcan\b", "can not", s)
     assert s != s0,  s
 
     singular_subs, plural_subs = ['the boy ', 'the girl '], ['boys ', 'girls ']
-    s = s.lower()
     not_i = list(re.finditer(r"\bnot\b", s))[0].span()[0]
-    if any(sub in s[:not_i] for sub in singular_subs):
-        for old_sub, new_sub in zip(singular_subs, plural_subs):
-            s = s.replace(old_sub, new_sub)
+    if any(sub in s[:not_i] for sub in plural_subs):
+        # for old_sub, new_sub in zip(singular_subs, plural_subs):
+        #     s = s.replace(old_sub, new_sub)
         s = s.replace(" does not", " do not")
-    return s.capitalize()
+    return s
 
 def negate(task):
     vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
@@ -902,15 +909,20 @@ def negate(task):
     def new_vocab_fn():
         vocabs = vocab_fn()
         return [vocabs[0].negate_used(), vocabs[1]]
+        
+    def new_gen_fn(*args, **kwargs):
+        cxt, query, candidates, (tgt, *a, ans0, ans) = gen_fn(*args,**kwargs)
+        if query in ['the boy', 'the girl']: query = query + 's'
+        return cxt, query, candidates, (tgt, *a, ans0, ans)
 
     s = negate_sent(query2str('QQQ', None) + bos_token)
     new_bos_token = '?' if s.endswith('?') else ' ' + s.split()[-1]
     def new_query2str(q, v):
         s = negate_sent(query2str(q, v) + bos_token)
         assert new_bos_token in s, f'{new_bos_token} not in {s}'
-        return s[:s.rindex(new_bos_token)].strip().capitalize()
+        return s[:s.rindex(new_bos_token)].strip()
 
-    task = (new_vocab_fn, gen_fn, cxt2str, new_query2str, new_bos_token, *a)
+    task = (new_vocab_fn, new_gen_fn, cxt2str, new_query2str, new_bos_token, *a)
     return task
 
 def remove_local_hop(task, remove_query=False):
@@ -988,14 +1000,15 @@ def transform_task(task, replace_rel0=0, replace_rel1=0, do_swap_qa=False, do_ne
     return task
 
 def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True, verbose=True):
-    counts = [9, 1]; i = 0
-    while len(counts) > 1 and (len(counts) < cxt_len or counts[-1] == 1 or counts[0] > counts[-1] * 3):
+    ans_counts = [('a', nrows)]; ind_counts = [(0, 9), (1, 1)]; i = 0
+    while len(ind_counts) > 1 and (len(ind_counts) < cxt_len or ind_counts[-1][1] == 1 or ind_counts[0][1] > ind_counts[-1][1] * 3) or \
+            ans_counts[0][1] > nrows / 4:
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
         # print('In generate: example =', examples[0])
+        ans_counts = Counter([ans for cxt, query, cands, (*_, ans), *cls in examples]).most_common()
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
-        counts = [v for k, v in ind_counts]
-        i += 1; assert i < 20, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:3]) + '\n' + str(ind_counts)  # cxt query ans
+        i += 1; assert i < 20, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:3]) + '\n' + str(ind_counts) + '\n' + str(ans_counts)
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())
         label_probs = F.one_hot(torch.LongTensor(answer_indices))

@@ -89,6 +89,8 @@ tasks2 = [
     ), # t: 16-14, somewhat 14-7 # verbose acc: gpj-j > curie-001 > davinci-001 > gpt-neox!? abstract acc: gpt-neox > gpt-j. all poor (inc. davinci-002!)
 ]
 
+# for task, replace_rel0, replace_rel1, do_swap_qa, do_negate, do_rm_local_hop, do_rm_query, rev_item2str in product(
+#     tasks[:], [0, 1],   [0, 1, 2],   [False,True],[False,True],[False,True],[False,True],[False,True]):
 tasks = [
     (lambda: [TreeSet(genders_of_persons).use('equal'), TreeSet(types_of_things).use('child')], MlM_gen,
      partial(_cxt2str, item2str=lambda i, _: [f"{i[0]} has {wrap_noun(i[1])}", f"The {i[1]} is {i[0]}'s"]), lambda q, _: f'{q}', " likes"
