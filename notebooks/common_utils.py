@@ -48,6 +48,16 @@ def topk_md(tensor, k, largest=True, transpose=False):
     rows, cols = np.unravel_index(indices.numpy(), tensor.shape)
     return (rows, cols, values.numpy()) if not transpose else list(zip(rows, cols, values.numpy()))
 
+def topi_md(tensor, rows, cols):  # somewhat reverse of topk_md
+    if not isinstance(rows): return (tensor > tensor[rows, cols]).sum().item()
+    all_sorted = torch.LongTensor(np.array(topk_md(tensor, tensor.numel())[:2]))
+    rows_cols = torch.LongTensor(np.array([rows, cols]))
+    if not isinstance(rows, Iterable): rows_cols = rows_cols.unsqueeze(1)
+    a = ((all_sorted.T @ rows_cols) == 2).nonzero() # (ln)2,2k->(ln)k->k2
+    topi = [x[0] for x in sorted(a.tolist(), key=lambda x: x[1])]
+    if not isinstance(rows, Iterable): topi = topi[0]
+    return topi
+
 def to_df(*args): return pd.DataFrame(list(zip(*args)))
 
 def norm(tensor, p=2): return tensor.norm(p=p, dim=-1).mean().round().item()
