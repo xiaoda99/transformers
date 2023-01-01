@@ -4,7 +4,9 @@ from collections import OrderedDict, defaultdict
 from collections.abc import Iterable
 import numpy as np
 import math
+import dataclasses
 from dataclasses import dataclass, field, fields
+from copy import deepcopy
 from functools import reduce, partial
 from itertools import chain, product, combinations, cycle
 import types
@@ -172,6 +174,36 @@ def unify(model):
                     proj.weight, proj.bias = nn.Parameter(rearrange(w, 'n d e -> (n d) e')), nn.Parameter(b)
                     setattr(self, proj_name, proj)
 
+def name_with_device(name, device): return name + '_' + str(device).replace(':', '')  # '_cuda0' or '_cpu'
+
+def clone_module_to(module, name, device, dtype=torch.float16, gpu_module=None):
+    if hasattr(module, name_with_device(name, device)): return module
+    setattr(module, name_with_device(name, device), deepcopy(getattr(module, name)).to(device, dtype=dtype)
+        if gpu_module is None else getattr(gpu_module, name))
+    setattr(module, name_with_device(name, 'cpu'), getattr(module, name))
+    return module
+
+def clone_model_to(model, device, dtype=torch.float16, cloned_modules=['ln_1', 'attn'], gpu_model=None):
+    for i, block in enumerate(model.transformer.h):
+        for name in cloned_modules:
+            clone_module_to(block, name, device, dtype=dtype, gpu_module=gpu_model.transformer.h[i] if gpu_model is not None else None)
+    name = 'ln_f'
+    clone_module_to(model.transformer, name, device, dtype=dtype, gpu_module=gpu_model.transformer if gpu_model is not None else None)
+    name = 'lm_head'
+    # keep lm_head in fp32 to improve accuracy of logits computation, same as attn_logits
+    clone_module_to(model, name, device, dtype=torch.float32)
+    # setattr(model, name_with_device(name, device) + '_fp16', deepcopy(getattr(model, name)).to(device, dtype=torch.float16))
+    return model
+
+def switch_model_to(model, device, cloned_modules=['ln_1', 'attn']):
+    for i, block in enumerate(model.transformer.h):
+        for name in cloned_modules:
+            setattr(block, name, getattr(block, name_with_device(name, device)))
+    name = 'ln_f'
+    setattr(model.transformer, name, getattr(model.transformer, name_with_device(name, device)))
+    name = 'lm_head'
+    setattr(model, name, getattr(model, name_with_device(name, device)))
+
 # def get_data_as(param, tensor):
 #     if param.data.device == tensor.device: return param.data
 #     new_name = 'data_' + str(tensor.device).replace(':', '_')  # 'cuda:0' -> 'cuda_0'
@@ -305,7 +337,7 @@ def apply_rotary_pos_emb(query_rot, key_rot, seq_len=2048, offset=0, is_gpt_neox
     return query_rot, key_rot
 
 def _attn(self, query, key, value, attention_mask=None):
-    if isinstance(self, GPTNeoSelfAttention) or isinstance(self, GPTJAttention):
+    if my_isinstance(self, (GPTNeoSelfAttention, GPTJAttention)):
         # Keep the attention weights computation in fp32 to avoid overflow issues
         query, key = query.to(torch.float32), key.to(torch.float32)
     attn_weights = torch.matmul(query, key.transpose(-1, -2)) # bnid,bnjd->bnij
@@ -313,13 +345,18 @@ def _attn(self, query, key, value, attention_mask=None):
     # turns out gptneo fold_scaling_into_initializer, and uses float32_logits. 
     # see https://crfm.stanford.edu/2021/08/26/mistral.html (Diagnosing Numerical Instability, Eureka!)
     # and https://github.com/tensorflow/mesh/blob/master/mesh_tensorflow/transformer/attention.py#L517&66
-    if not isinstance(self, GPTNeoSelfAttention):
+    if not my_isinstance(self, GPTNeoSelfAttention):
         # attn_weights = attn_weights / (value.size(-1) ** 0.5) # vale may be None
         attn_weights = attn_weights / (query.size(-1) ** 0.5)
 
     query_length, key_length = query.size(-2), key.size(-2)
     causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length].bool()
-    attn_weights = torch.where(causal_mask, attn_weights, self.masked_bias.to(attn_weights.dtype))
+    # self.masked_bias can not be used because it will turn to -inf when casting model to fp16
+    # attn_weights = torch.where(causal_mask, attn_weights, self.masked_bias.to(attn_weights.dtype))
+    # adapted from GPTJAttention._attn which uses torch.finfo(attn_weights.dtype).min
+    mask_value = -1e9 if attn_weights.dtype == torch.float32 else -1e4  # else shoud not happen. 
+    mask_value = torch.tensor(mask_value, dtype=attn_weights.dtype).to(attn_weights.device)
+    attn_weights = torch.where(causal_mask, attn_weights, mask_value)
     if attention_mask is not None: attn_weights = attn_weights + attention_mask
     if value is None: return None, attn_weights
 
@@ -505,9 +542,11 @@ def attn_forward(block, hq, hk, hv, by_head=None,
         else: f = partial(get_head_io, num_heads=self.num_heads)
         # for smaller models (e.g. gpt-j) on gpu, @ then to-cpu may be faster than to-cpu then @
         if 'head_output' in by_head: #any('head_output' in s for s in by_head):
-            head_output = attn_output.to('cpu').float() @ w_o.to('cpu').float() if do_bmm else (f, attn_output.to('cpu').float(), w_o)  # bnid,nde->bnie
+            # head_output = attn_output.to('cpu').float() @ w_o.to('cpu').float() if do_bmm else (f, attn_output.to('cpu').float(), w_o)  # bnid,nde->bnie
+            head_output = attn_output @ w_o
         if 'head_input' in by_head: #any('head_input' in s for s in by_head):
-            head_input = value.to('cpu').float() @ w_o.to('cpu').float() if do_bmm else (f, value.to('cpu').float(), w_o.float())  # bnid,nde->bnie
+            # head_input = value.to('cpu').float() @ w_o.to('cpu').float() if do_bmm else (f, value.to('cpu').float(), w_o.float())  # bnid,nde->bnie
+            head_input = value @ w_o
 
     attn_output = _merge_heads(attn_output, self.num_heads, self.head_dim) # bnid->bi(nd)
     attn_output = self.out_proj(attn_output)
@@ -529,8 +568,8 @@ def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=
         hq, hv = h, None # return attn_logits instead of attn_weights by passing None hv 
         if attribute_k: hq, hk = hk, hq
 
+    self = block.attn
     if trim:
-        self = block.attn
         try:
             trim_heads(self, [head])
             if attn_weights is not None: attn_weights = attn_weights[:, [head]] # bnij->b1ij
@@ -547,8 +586,13 @@ def head_forward(model, hidden_states, layer, head, labels=None, loss_reduction=
     elif attn_labels is not None:
         # may do some attn_logits masking here
         logits = attn_logits[:, head]  # bnij->bij
-        if not attribute_k: logits = (logits + (attn_mask * -1e9 if attn_mask is not None else 0)).log_softmax(-1)
-        loss = -torch.einsum('bij->b', logits * attn_labels) # per_example_sum. per_example_mean is hard to define when using unormalized attn attr  # bug fix
+        if attn_mask is not None:
+            mask_value = -1e9 if logits.dtype == torch.float32 else -1e4  # else shoud not happen. 
+            # mask_value = torch.tensor(mask_value, dtype=logits.dtype).to(logits.device)
+            logits = logits + attn_mask * mask_value  # torch.finfo(logits.dtype).min
+        logprobs = logits.log_softmax(-1) if not attribute_k else logits
+        causal_mask = self.bias[:, :, :logits.size(-2), :logits.size(-1)].squeeze(0)  # 11ij->1ij, may be unneccesary?
+        loss = -torch.einsum('bij->b', logprobs * causal_mask * attn_labels).to(hq.dtype) # per_example_sum. per_example_mean is hard to define when using unormalized attn attr  # bug fix
     return Outputs(hidden_states=(head_output,) if head_output is not None else (), logits=logits, loss=loss)
 
 def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, 
@@ -627,7 +671,9 @@ def lm_head_forward(model, hidden_states, labels=None, loss_reduction=None, comp
         n_valid = torch.einsum('bi->b', valid_flags)[0].item()
         hidden_states = rearrange(hidden_states[valid_flags], '(b i) e -> b i e', b=hidden_states.size(0), i=n_valid)
         labels = rearrange(labels[valid_flags], '(b i) -> b i', b=labels.size(0), i=n_valid)
-    logits = model.lm_head(scaled_ln(model.transformer.ln_f, hidden_states, scaled=scaled))
+    ln_output = scaled_ln(model.transformer.ln_f, hidden_states, scaled=scaled)
+    ln_output = ln_output.to(torch.float32) # Keep the logits and loss computation in fp32 to improve accuracy, same as attn_logits
+    logits = model.lm_head(ln_output)
     loss = compute_loss(logits, labels, reduction=loss_reduction) if labels is not None else None
     if compact:
         logits0 = logits.new(logits.size(0), valid_flags.size(1), logits.size(2)).zero_()
@@ -1115,6 +1161,14 @@ def get_head_matching_scores(data_tuple, attn_pattern, k_shot=3, layer=None):
 #     expand_fn = partial(head_expand, heads=heads, L=head_inputs.size(1), H=head_inputs.size(2))
 #     return postprocess_output(head_inputs, select_fn, expand_fn)
 
+def outputs_to(o, device):
+    if o.attentions[0].device == device: return o
+    dtype = torch.float16 if device != torch.device('cpu') else torch.float32
+    o2 = Outputs()
+    for name in ['hidden_states', 'head_inputs', 'mlp_outputs', 'attentions']: # bnie, bie, bnij
+        setattr(o2, name, tuple([t.to(device, dtype=dtype) for t in getattr(o, name)]))
+    return o2
+
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', # attr_heads=None,
         embed_mask=None, mlp_mask=None, head_mask=None, neuron_mask=None, attn_weights=None, 
         reduce_fn=sum, truncate_layers=False, scaled=True, reshape=False, output_layer=None):
@@ -1176,9 +1230,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean', 
 
     logits, loss = None, None
     if labels is not None:
-        ln_output = scaled_ln(model.transformer.ln_f, output, scaled=scaled)
-        logits = model.lm_head(ln_output)
-        loss = compute_loss(logits, labels, reduction=loss_reduction)
+        logits, loss = lm_head_forward(model, output, labels=labels, loss_reduction=loss_reduction, scaled=scaled)
     return Outputs(hidden_states=(output,), logits=logits, loss=loss)
 
 def scaled_input(input, num_points, baseline=None, requires_grad=True):
@@ -1231,12 +1283,19 @@ def _attribute(forward_fn, model, x, post_forward_fn=[], num_points=10, batch_si
     attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in x}
     return attr, torch.cat(ys), logits
 
-def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, batch_size=8, forward_only=False):
-    if batch_size is None: batch_size = num_points + 1
+def check_abnormal_tensor(tensor, tensor_name):
+    nan_pct, inf_pct = tensor.isnan().float().mean(), tensor.isinf().float().mean()
+    if nan_pct > 0 or inf_pct > 0:
+        print('In check_abnormal_tensor:', tensor_name, end=' ')
+        if nan_pct > 0: print(f'nan_pct = {nan_pct}', end=' ')
+        if inf_pct > 0: print(f'inf_pct = {inf_pct}', end=' ')
+
+def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, forward_only=False):
+    batch_size = num_points + 1  # bsz can not be smaller due to scaled_ln
     if isinstance(post_forward_fn, (list, tuple)):
         post_forward_fn = compose_forward_fns(post_forward_fn, scaled=True)
     grad_keys = list(x.keys())  # [key for key in x if key != 'head_mask' or 'attn_weights' not in x]
-    scaled_x, grad = {}, {}
+    scaled_x, grad = OrderedDict(), OrderedDict()
     with torch.enable_grad() if not forward_only else torch.no_grad():
         for key in x:
             scaled_x[key] = scaled_input(x[key], num_points)
@@ -1247,12 +1306,14 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, batch_size
             if True: #with Timer('sum_forward'):
                 o = forward_fn(model, **scaled_x_)
             hs, y, logits = post_forward_fn(model, o); ys.append(y); hidden_states.append(hs)
+            check_abnormal_tensor(o.hidden_states[-1], 'hidden_states_in'); check_abnormal_tensor(hs, 'hidden_states_out')
+            check_abnormal_tensor(y, 'y'); check_abnormal_tensor(logits, 'logits')
             if forward_only: continue
             if True: #with Timer('grad'):
                 grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x.values()))
-                # [v for k, v in scaled_x.items() if k in grad_keys])
             for j, key in enumerate(grad_keys):
                 grad[key] += grad_[j].sum(dim=0, keepdim=True)
+                check_abnormal_tensor(grad[key], key + '.grad')
     hidden_states, ys = [torch.cat(ts) if ts[0] is not None else None for ts in [hidden_states, ys]]
     if forward_only: return None, hidden_states, ys, logits
     attr = {key: (grad[key] / num_points * x[key]).squeeze(0) for key in grad_keys}
@@ -1283,6 +1344,19 @@ def attribute2(forward_fn, model, x, post_forward_fn):
     mlp_attr = y[1 + L * H:]#.view(L, 1)  # l1
     return Attributions(embed=embed_attr, head=head_attr, mlp=mlp_attr)
 
+def attributions_to(attr, device='cpu', dtype=torch.float32):
+    # for field in fields(attr):
+    #     name = field.name
+    for name in dataclasses.asdict(attr).keys():
+        t = getattr(attr, name)
+        if t is not None and isinstance(t, torch.Tensor):
+            setattr(attr, name, t.to(device, dtype=dtype))
+    return attr
+
+def data_tuples_to(data_tuples, device):
+    return [(text, input_ids, labels.to(device), ranges, *_, outputs_to(o, device))
+        for text, input_ids, labels, ranges, *_, o in data_tuples]
+
 def attribute_step(data_tuple, model, node, attribute_k=False):
     L = len(model.transformer.h)
     text, input_ids, labels, ranges, *_, o = data_tuple
@@ -1294,7 +1368,8 @@ def attribute_step(data_tuple, model, node, attribute_k=False):
     fwd_fn = partial(sum_forward, outputs=o, labels=_labels, output_layer=output_layer)
     keys = ['attn_weights', 'mlp_mask', 'embed_mask']
     x = OrderedDict((key, get_x(key, o, to_layer=to_layer)) for key in keys)
-    attr, hs, ys, logits = attribute(fwd_fn, model, x, fns, num_points=3 if attribute_k else 7)
+    attr, hs, ys, logits = attribute(fwd_fn, model, x, fns, num_points=3 if attribute_k else 7-4)
+    attr = attributions_to(attr)
     # fwd_fn = partial(sum_forward, outputs=o, labels=_labels, reduce_fn=torch.cat, scaled=False)
     # attr2 = attr #attribute2(fwd_fn, model, x, fns)
     o.attn_attr[node.name] = attr.attn # associate non-averageable attn attr to current node. tricky
@@ -1311,6 +1386,9 @@ def get_x(key, outputs, to_layer=None):
     elif key == 'embed_mask': x = torch.ones(1, 1)#, qlen)
     elif key == 'attn_weights': x = rearrange(list(outputs.attentions), 'l 1 n i j -> 1 l n i j')
     if to_layer is not None and x.ndim >= 2 and x.size(1) == L: x[:, to_layer:] = 0
+    if key != 'attn_weights':
+        a = outputs.attentions[0]
+        x = x.to(a.device, dtype=outputs.attentions[0].dtype)
     return x
 
 def plot_attrs(attrs, figsize=(4, 4), topk=None):
@@ -1346,7 +1424,7 @@ def data2str(data, head_only=False):
         if top_score is not None: s += f' {int(round(top_score * 100))}%'
         if not head_only and attn_pattern is not None: s += f' {abbreviate_attn_pattern(attn_pattern)}'
     else:
-        s += ','.join([f'{l}-{wrap(h)}' for l, h in zip(layer, head)]) if top_score is None or len(layer) > 5 else \
+        s += ','.join([f'{l}-{wrap(h)}' for l, h in zip(layer, head)]) if top_score is None or len(layer) > 6 else \
             ','.join([f'{l}-{wrap(h)} {int(round(s * 100))}%' for l, h, s in zip(layer, head, top_score)])
     if head_only: return s
     head_str = s
@@ -1420,8 +1498,9 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_scores
 
         head_attr = get_head_mlp_attr(node.data)
         layers, heads, scores = topk_md(head_attr, topk * 4)
-        scores = np.array(scores) / scores[0]
-        topi = min(topk, (scores >= threshold_scores[0]).sum().item())
+        scores = scores / scores[0]
+        topi = min(topk, (scores >= threshold_scores[0]).sum())
+        topi = max(topk // 2, topi)
         label_type = 'argmax_attn_labels' if node.data.label_type == 'labels' else None
         child = add_node(node, topi=list(range(topi)), top_score=scores[:topi], dummy=True, verbose=False)
         print('In attribute_tree: add', child.name)

@@ -229,3 +229,6 @@ def fn2str(fn, excluded_keys=[]):
         if isinstance(v, types.FunctionType): return v.__name__
         return v
     return fn.func.__name__ + '(' + ', '.join(f'{k}={convert_value(k, v)}' for k, v in fn.keywords.items()) + ')'
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
