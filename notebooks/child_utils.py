@@ -333,7 +333,7 @@ tea: There is tea.
             # print(f'{noun} -> {text}. Skip abnormal wrap')
             text = noun
         return text
-    return extract_fn(query_openai(prompt_fn(noun)))
+    return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-002'))
 
 def wrap_noun_to_french(noun):
     prompt_fn = lambda s: \
