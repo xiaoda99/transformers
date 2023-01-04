@@ -135,6 +135,8 @@ def types_of_things(): return {
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
 }
 
+def things(): return {thing: [thing] for thing in join_lists(types_of_things().values())}
+
 # A list of words with their types:
 # big small -> size
 # blue red -> color
@@ -317,7 +319,7 @@ def city2resident():
         city2resident.demonyms.update({'the United States': 'American', 'the United Kingdom': 'British', 'England': 'English'})
     return {capital: city2resident.demonyms[country.replace('the ', '')] for country, capital in _country2capital}
 
-def wrap_noun(noun):
+def a_noun(noun):
     prompt_fn = lambda s: \
 f'''apple: There is an apple.
 chip: There are chips.
@@ -330,10 +332,39 @@ tea: There is tea.
         text = text.replace(' is ', '').replace(' are ', '')
         if text.endswith('.'): text = text[:-1]
         if not text.split()[-1].startswith(noun[:2]): # e.g. 'red' -> 'a red apple'
-            # print(f'{noun} -> {text}. Skip abnormal wrap')
-            text = noun
+            text = noun  # print(f'{noun} -> {text}. Skip abnormal wrap')
         return text
     return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-002'))
+
+wrap_noun = a_noun
+
+def nouns(noun):
+    prompt_fn = lambda s: \
+f'''apple: He likes apples.
+tea: He likes tea.
+red: He likes red.
+trousers: He likes trousers.
+dog: He likes dogs.
+{s}: He likes'''
+# f'''Change words into plural forms if possible.
+# apple: apples
+# chip: chips
+# coffee: coffee
+# biscuit: biscuits
+# red: red
+# trousers: trousers
+# dog: dogs
+# tea: tea
+# {s}:'''
+    def extract_fn(text):
+        text = text.strip()
+        if text.endswith('.'): text = text[:-1]
+        # if text.startswith('a ') or text.startswith('an '):
+        #     print(f'In nouns: {noun} -> {text}')
+        #     text = re.sub(r"\ba ", "", text); text = re.sub(r"\ban ", "", text)
+        if not text.startswith(noun[:1]): print(f'In nouns: {noun} -> {text}')
+        return text
+    return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003'))  # better than text-davinci-002
 
 def wrap_noun_to_french(noun):
     prompt_fn = lambda s: \
@@ -371,6 +402,13 @@ February: He arrived in February.
         return text
     # print(query_openai(prompt_fn(noun)))
     return extract_fn(query_openai(prompt_fn(noun)))
+
+def wrap(fn, k_wrapper=None, v_wrapper=None):
+    def wrapped_fn():
+        return {k_wrapper(k) if k_wrapper else k: [v_wrapper(v) if v_wrapper else v for v in values]
+            for k, values in fn().items()}
+    wrapped_fn.__name__ = '.'.join(f.__name__ for f in [k_wrapper, fn, v_wrapper] if f)
+    return wrapped_fn
 
 def conj(positive=True):
     ss = ["", "So", "Therefore,", "Yes,"]
@@ -808,7 +846,8 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         item2str, query2str = (partial(_item2str, reverse=rev_item2str), _str)
         if cxt_len == 1:
             item2str, query2str = (lambda i, _: f'{i[1]}', lambda q, _: '')
-            examples = [(cxt, None, None, (None, ans0, ans), *cls) for cxt, query, options, (tgt, ans0, ans), *cls in examples]
+            examples = [(cxt, None, None, (None, ans0, ans), *cls)
+                for cxt, query, options, (tgt, ans0, ans), *cls in examples]
         cxt2str, bos_token, ans2str = partial(_cxt2str, item2str=item2str), abstract_bos_token, _str
     else:
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)]

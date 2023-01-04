@@ -5,6 +5,7 @@ from cachier import cachier
 openai.api_key = open('/nas/xd/projects/openai_api_keys.txt').readlines()[4].split()[0]
 
 # @lru_cache(maxsize=1024)
+# @cachier(cache_dir='/nas/xd/.cachier')  # portalocker lockException: [Errno 9] Bad file descriptor, maybe due to nfs
 @cachier()  # persistent cache
 def query_openai(prompt, engine):
     max_tokens = 20
