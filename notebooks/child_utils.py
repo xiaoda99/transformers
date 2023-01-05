@@ -20,7 +20,7 @@ import torch
 import torch.nn.functional as F 
 
 from const import *
-from common_utils import join_lists, my_isinstance, lget, fn2str
+from common_utils import join_lists, list_diff, my_isinstance, lget, fn2str
 from openai_utils import query_openai
 
 sys.path.insert(0, '/nas/xd/projects/PyFunctional')
@@ -463,16 +463,16 @@ class Relation(object):
 
     def f(self, x): return self._dict.get(x, [])
     def inv_f(self, x): return self._inv_dict.get(x, [])
-    def dom(self, xs=None): return set(self._dict.keys())
-    def codom(self, ys=None): return set(join_lists(self._dict.values()))
+    def dom(self, xs=None): return list(self._dict.keys())
+    def codom(self, ys=None): return join_lists(self._dict.values())
     def b(self, x0, x1): return x1 in self._dict.get(x0, [])
 
 class NegativeRelation(Relation):
     def __init__(self, rel):
         self.rel = self.neg_rel = rel
         self.name = 'neg_' + rel.name if not rel.name.startswith('neg_') else rel.name[4:]
-    def f(self, x): return list(self.rel.codom() - set(self.rel.f(x)))
-    def inv_f(self, x): return list(self.rel.dom() - set(self.rel.inv_f(x)))
+    def f(self, x): return list_diff(self.rel.codom(), self.rel.f(x))
+    def inv_f(self, x): return list_diff(self.rel.dom(), self.rel.inv_f(x))
     def dom(self, xs=None): return self.rel.dom()
     def codom(self, ys=None): return self.rel.codom()
     def b(self, x0, x1): return not self.rel.b(x0, x1)
@@ -584,7 +584,7 @@ class TreeSet(Set):
         self.build_negative_relations()
 
 def enumerate_sample(cxt_len, rel):
-    return list(range(cxt_len)), sample(list(rel.dom()), cxt_len)
+    return list(range(cxt_len)), sample(rel.dom(), cxt_len)
 
 def grouped_sample(cxt_len, rel, n_groups=2, reverse=False, min_group_size=None, max_group_size=None,
                                                             min_group_count=None, max_group_count=None):
@@ -601,7 +601,7 @@ def grouped_sample(cxt_len, rel, n_groups=2, reverse=False, min_group_size=None,
         group_sizes = sorted(group_sizes, reverse=reverse)
         # print('In grouped_sample:', group_sizes)  # debug
         i += 1; assert i <= 10, str(group_sizes)
-    groups = sample(list(rel.dom()), n_groups)
+    groups = sample(rel.dom(), n_groups)
     cxt = join_lists([list(zip([size] * size, sample(rel.f(group), size) if rel.name != 'equal' else [group] * size))
                     for group, size in zip(groups, group_sizes)])
     return tuple(map(list, zip(*cxt)))
@@ -611,9 +611,9 @@ def swap(l, dst, src=0):
     return l
 
 def distractive_sample(cxt_len, rel, ans_i=0):
-    query = choice(list(rel.dom()))
+    query = choice(rel.dom())
     ans = choice(rel.f(query))
-    distractors = list(rel.codom() - set(rel.f(query)) - ({query} if rel.name == 'sibling' else set()))
+    distractors = list_diff(rel.codom(), rel.f(query) + ([query] if rel.name == 'sibling' else []))
     k = cxt_len - 1
     assert len(distractors) >= k or rel.name.startswith('neg_') and len(distractors) == 1, \
         f'{rel.name}, query = {query}, f(query) = {rel.f(query)}, distractors = {distractors}'
@@ -703,6 +703,7 @@ def make_examples(task, nrows=4, vocab_for_each_row=True, **kwargs):
             vocabs.append(vocab)
             examples.append([cxt, query, candidates, ans_chain, *a])
         if len(examples) == nrows: break
+    # print('In make_examples, i =', i)
     return vocabs, examples
 
 def _item2str(item, vocab=None, reverse=False):
@@ -1048,6 +1049,7 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
         i += 1; assert i < 20, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:3]) + '\n' + str(ind_counts) + '\n' + str(ans_counts)
+    if i > 1: print('In generate: i =', i)
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())
         label_probs = F.one_hot(torch.LongTensor(answer_indices))

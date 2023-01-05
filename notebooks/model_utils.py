@@ -38,7 +38,7 @@ from pptree import Node, print_tree
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, topi_md, \
     equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str
 
-from child_utils import make_data_tuple, get_answer_index
+from child_utils import make_data_tuple, get_answer_index, generate
 from weight_analysis import get_head_weights
 
 @dataclass
@@ -1080,6 +1080,22 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
 
     return [text, input_ids, labels, ranges] + args + [o,], \
         (loss, top1_corrects[k_shot:], answer_indices, answer_probs, candidate_probs)
+
+def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size, verbose=True, **gen_args):
+    all_examples, texts, all_bos_tokens = zip(*[generate(task, verbose=False, plot=False, nrows=nrows, **gen_args)
+                                            for i in range(batch_size)])
+    result = Result(task, gen_args, all_examples, texts)
+    for text in texts: print('\n'.join(text.split('\n')[:3]))
+
+    data_tuples, eval_results = zip(*[predict(model, tokenizer, text, examples,
+        k_shot=k_shot, bos_token=bos_tokens, verbose=verbose)
+        for text, examples, bos_tokens in zip(texts, all_examples, all_bos_tokens)
+        if True or any(s in text[24:] for s in ['dangerous'])])
+    result.data_tuples = data_tuples
+    loss, acc, *_ = zip(*eval_results)
+    result.mean_loss, result.mean_acc = np.array(loss).mean(), np.array(join_lists(acc)).mean()
+    if verbose: print(result.mean_loss, result.mean_acc)
+    return result
 
 def abbreviate_attn_pattern(attn_pattern): return attn_pattern.replace('bos', 'B').replace('query', 'Q').replace('ans', 'A')
 def restore_attn_pattern(attn_pattern): return attn_pattern.replace('B', 'bos').replace('Q', 'query').replace('A', 'ans')

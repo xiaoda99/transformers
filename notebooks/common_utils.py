@@ -25,6 +25,10 @@ import torch.nn.functional as F
 
 def join_lists(x): return list(chain.from_iterable(x))
 
+def list_diff(l1, l2):  # will preserve order of elements in l1 compared to list(set(l1) - set(l2))
+    l2 = set(l2)
+    return [x for x in l1 if x not in l2]
+
 def reverse(l): return list(reversed(l))
 
 #保留小数
