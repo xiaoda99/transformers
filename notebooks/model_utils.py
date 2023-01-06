@@ -1012,7 +1012,7 @@ def get_prob_dist(d, topk=5, digits=3):
     return {k: round(math.exp(v), digits) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]}
 
 def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers, 
-        logits=None, labels=None, candidates=None, mask_logits_fn=None,
+        logits=None, labels=None, candidates=None, answer_indices=None, mask_logits_fn=None,
         k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True):
     use_openai_api = hasattr(logits, 'token_logprobs')  # isinstance(model, types.FunctionType)
     if use_openai_api: ans_nlls = []
@@ -1047,10 +1047,21 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
     else:
         loss = compute_loss(logits, labels, reduction=loss_reduction)
         loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100].tolist()  # 'none'
+        
+    if verbose and candidates is not None and answer_indices is not None:
+        print(loss, np.array(top1_corrects[k_shot:]).mean())
+        f, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 2.4), sharex=True)
+        x = [i + 0.5 for i in range(len(example_strs))] # to align with sns.heatmap
+        _ = ax0.bar(x, top1_corrects, width=0.9, alpha=0.5)
+        _ = ax0.plot(x, answer_probs, color='r')
+        if answer_indices is not None:
+            label_probs = F.one_hot(torch.LongTensor(answer_indices))
+            _ = sns.heatmap(torch.cat([label_probs, torch.Tensor(candidate_probs)], dim=1).T, cbar=False, ax=ax1)
+        plt.show()
     return loss, top1_corrects, answer_probs, candidate_probs
 
 def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_token=None, #'Ċ',
-            custom_forward=True, verbose=True):
+            custom_forward=True, trim_outputs=False, verbose=True):
     input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
         text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
     candidates, answer_indices = None, None
@@ -1065,38 +1076,33 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
         if isinstance(logits, torch.Tensor): logits = logits.to('cpu').float()# softmax on cpu needs float32
     loss, top1_corrects, answer_probs, candidate_probs = show_predictions(
         tokenizer, *args, logits=logits, labels=labels, loss_reduction='mean',
-        candidates=candidates, k_shot=k_shot, topk=3, verbose=verbose)
-        
-    if verbose == 1:
-        print(loss, np.array(top1_corrects[k_shot:]).mean())
-        f, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 2.4), sharex=True)
-        x = [i + 0.5 for i in range(len(examples))] # to align with sns.heatmap
-        _ = ax0.bar(x, top1_corrects, width=0.9, alpha=0.5);
-        _ = ax0.plot(x, answer_probs, color='r');
-        if answer_indices is not None:
-            label_probs = F.one_hot(torch.LongTensor(answer_indices))
-            _ = sns.heatmap(torch.cat([label_probs, torch.Tensor(candidate_probs)], dim=1).T, cbar=False, ax=ax1);
-        plt.show()
+        candidates=candidates, answer_indices=answer_indices, k_shot=k_shot, topk=3, verbose=verbose)
+    if trim_outputs: o = Outputs(logits=o.logits)
+    return [text, input_ids, labels, ranges] + args + [o], \
+        (loss, top1_corrects[k_shot:], candidates, answer_indices, answer_probs, candidate_probs)
 
-    return [text, input_ids, labels, ranges] + args + [o,], \
-        (loss, top1_corrects[k_shot:], answer_indices, answer_probs, candidate_probs)
-
-def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size, verbose=True, **gen_args):
+def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size, trim_outputs=False, verbose=True, **gen_args):
     all_examples, texts, all_bos_tokens = zip(*[generate(task, verbose=False, plot=False, nrows=nrows, **gen_args)
                                             for i in range(batch_size)])
     result = Result(task, gen_args, all_examples, texts)
-    for text in texts: print('\n'.join(text.split('\n')[:3]))
+    for text in texts[:1]: print('\n'.join(text.split('\n')[:3]))
     if batch_size == 1: return result
 
-    data_tuples, eval_results = zip(*[predict(model, tokenizer, text, examples,
-        k_shot=k_shot, bos_token=bos_tokens, verbose=verbose)
+    result.data_tuples, result.eval_results = zip(*[predict(model, tokenizer, text, examples,
+        k_shot=k_shot, bos_token=bos_tokens, trim_outputs=trim_outputs, verbose=verbose)
         for text, examples, bos_tokens in zip(texts, all_examples, all_bos_tokens)
         if True or any(s in text[24:] for s in ['dangerous'])])
-    result.data_tuples = data_tuples
-    loss, acc, *_ = zip(*eval_results)
+    loss, acc, *_ = zip(*result.eval_results)
     result.mean_loss, result.mean_acc = np.array(loss).mean(), np.array(join_lists(acc)).mean()
-    if verbose: print(result.mean_loss, result.mean_acc)
+    print(result.mean_loss, result.mean_acc)
     return result
+
+def show_predictions_by_result(tokenizer, result, k_shot):
+    for (text, input_ids, labels, ranges, *args, o), (_, _, candidates, answer_indices, *_) in zip(result.data_tuples, result.eval_results):
+        logits = o.logits
+        show_predictions(
+            tokenizer, *args, logits=logits, labels=labels, loss_reduction='mean',
+            candidates=candidates, answer_indices=answer_indices, k_shot=k_shot, topk=3, verbose=True)
 
 def abbreviate_attn_pattern(attn_pattern): return attn_pattern.replace('bos', 'B').replace('query', 'Q').replace('ans', 'A')
 def restore_attn_pattern(attn_pattern): return attn_pattern.replace('B', 'bos').replace('Q', 'query').replace('A', 'ans')
