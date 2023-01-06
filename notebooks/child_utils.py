@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import csv
+import types
 from collections import defaultdict, OrderedDict, Counter, Iterable
 from functools import partial, wraps
 import string
@@ -642,8 +643,8 @@ def distractive_sample(cxt_len, rel, ans_i=0):
     distractors = sample(distractors, k) if len(distractors) >= k else distractors * k
     distractors0 = [rel.inv_f(x)[0] for x in distractors]
     candidates = [[query] + distractors0, [ans] + distractors]
-    if rel.x_f: candidates[0] = [rel.x_f(c) for c in candidates[0]] \
-        if not rel.skip_inv_f else [rel.x_f(c) for c in candidates[1]]
+    if rel.skip_inv_f and rel.x_f is None: rel.x_f = lambda x: x
+    if rel.x_f: candidates[0] = [rel.x_f(c) for c in candidates[int(rel.skip_inv_f)]]
     if rel.y_f: candidates[1] = [rel.y_f(c) for c in candidates[1]]
     return tuple([swap(l, ans_i) for l in candidates])
 
@@ -939,6 +940,18 @@ def replace_rel(task, hop, replace_type=1):
     task = new_vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a
     return task
 
+def decorate_rel(task, hop, kwargs):
+    vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
+
+    def new_vocab_fn():
+        vocabs = vocab_fn()
+        rel = vocabs[hop].relations[0]
+        for k, v in kwargs.items(): setattr(rel, k, v)
+        return vocabs
+
+    task = new_vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a
+    return task
+
 def swap_qa(task):
     vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
     # task = (vocab_fn, swap_qa(gen_fn), *a)
@@ -1044,7 +1057,7 @@ def g2c(task):
     vocab_fn, gen_fn, *a = task; task = (vocab_fn, _g2c(gen_fn), *a)
     return task
 
-def transform_task(task, replace_rel0=0, replace_rel1=0, do_swap_qa=False, do_negate=False,
+def transform_task(task, replace_rel0=0, replace_rel1=0, rel0_kwargs=None, rel1_kwargs=None, do_swap_qa=False, do_negate=False,
                 do_rm_local_hop=False, do_rm_query=False, do_g2c=False):
     try:
         if replace_rel0 != 0:  # original
@@ -1054,6 +1067,8 @@ def transform_task(task, replace_rel0=0, replace_rel1=0, do_swap_qa=False, do_ne
             if not do_swap_qa and do_rm_local_hop: raise InvalidTransException('unreplaceable rel1')
             if replace_rel1 == 2 and not do_swap_qa and not do_g2c: raise InvalidTransException('unreplaceable rel1=2')
             task = replace_rel(task, 1, replace_rel1)
+        if rel0_kwargs is not None: task = decorate_rel(task, 0, rel0_kwargs)
+        if rel1_kwargs is not None: task = decorate_rel(task, 1, rel1_kwargs)
         if do_swap_qa: task = swap_qa(task)
         if do_negate: task = negate(task)
         if do_rm_local_hop: task = remove_local_hop(task, remove_query=do_rm_query)
@@ -1068,7 +1083,7 @@ def transform_task(task, replace_rel0=0, replace_rel1=0, do_swap_qa=False, do_ne
 def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True, verbose=True):
     ans_counts = [('a', nrows)]; ind_counts = [(0, 9), (1, 1)]; i = 0
     while len(ind_counts) > 1 and (len(ind_counts) < cxt_len or ind_counts[-1][1] == 1 or ind_counts[0][1] > ind_counts[-1][1] * 3) or \
-            ans_counts[0][1] > nrows / 4:
+            len(ans_counts) == 1 or len(ans_counts) > 2 and ans_counts[0][1] > nrows / 4 or len(ans_counts) == 2 and ans_counts[0][1] >= ans_counts[1][1] * 2:
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
         # print('In generate: example =', examples[0])
         ans_counts = Counter([ans for cxt, query, cands, (*_, ans), *cls in examples]).most_common()
@@ -1094,19 +1109,26 @@ def args2str(args):
     # strs = [f'{k}={v}' if type(v) not in [bool, int] else (k if v else '') for k, v in args.items()]
     strs = []
     for k, v in args.items():
-        if type(v) == bool: s = k if v else ''
+        if type(v) == dict: s = f'{k}=({args2str(v)})'
+        elif v is None: s = ''
+        elif type(v) == bool: s = k if v else ''
         elif type(v) == int: s = f'{k}={v}' if v != 0 else ''
+        elif type(v) == types.FunctionType: s = f'{k}={v.__name__}'
         else: s = f'{k}={v}'
         strs.append(s)
     return ', '.join(s for s in strs if s != '')
 
 def validate_args(task, args, trans_args):
     vocab_fn, gen_fn, *_ = task
-    rel_names = [vocab.relations[0].name for vocab in vocab_fn()]
+    vocabs = vocab_fn()
+    rels = [vocab.relations[0] for vocab in vocabs]
     if trans_args.get('do_swap_qa') and isinstance(gen_fn, partial) and 'query' in gen_fn.keywords: return False
     if trans_args.get('do_rm_local_hop') and args.get('rev_item2str'): return False
-    if rel_names[1] == 'equal' and args['cxt_len'] == 1: return False
-    if rel_names[1] != 'equal': return False
+    if rels[1].name == 'equal' and args['cxt_len'] == 1: return False
+    # if rels[1].name != 'equal': return False
+    if not rels[1].skip_inv_f: return False
+    if args['rev_item2str'] and any(vocab.data.__name__ in ['types_of_things'] and getattr(rel.y_f, '__name__', None) == 'a_'
+        for vocab, rel in zip(vocabs, rels)): return False
     return True
 
 def inc(token):
