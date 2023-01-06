@@ -1086,6 +1086,7 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
                                             for i in range(batch_size)])
     result = Result(task, gen_args, all_examples, texts)
     for text in texts: print('\n'.join(text.split('\n')[:3]))
+    if batch_size == 1: return result
 
     data_tuples, eval_results = zip(*[predict(model, tokenizer, text, examples,
         k_shot=k_shot, bos_token=bos_tokens, verbose=verbose)

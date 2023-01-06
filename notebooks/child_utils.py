@@ -104,8 +104,8 @@ Types of clothes: shirt, pants, dress, coat, shoes
 Types of fruits: apple, grape, pear, banana, orange
 Types of animals: dog, cat, horse, rabbit, pig'''
 def types_of_things(): return {
-    'animal': ['chicken', 'duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig', 
-            'monkey', 'rabbit', 'elephant', 'wolf', 'deer', 'fox', 'gorilla', 'squirrel', 'mouse'], # 'bear', 'zebra', 'giraffe', 'kangaroo', 21-5, 15-8
+    'animal': ['duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig', 
+            'monkey', 'rabbit', 'elephant', 'wolf', 'deer', 'fox', 'gorilla', 'squirrel', 'mouse'], # 'chicken', 'bear', 'zebra', 'giraffe', 'kangaroo', 21-5, 15-8
     'fruit': ['apple', 'banana', 'pear', 'grapes', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberry',
             'blueberries', 'strawberries', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'], # may be food too?
     'drink': ['tea', 'coffee', 'beer', 'wine', 'whiskey', 'vodka', 'soda', 'juice', 'cocktail'],  # some as alcohol, 21-5, 15-8
@@ -319,7 +319,7 @@ def city2resident():
         city2resident.demonyms.update({'the United States': 'American', 'the United Kingdom': 'British', 'England': 'English'})
     return {capital: city2resident.demonyms[country.replace('the ', '')] for country, capital in _country2capital}
 
-def a_noun(noun):
+def a_(noun):  # prepend indefinite article a/an if possible
     prompt_fn = lambda s: \
 f'''apple: There is an apple.
 chip: There are chips.
@@ -336,9 +336,14 @@ tea: There is tea.
         return text
     return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-002'))
 
-wrap_noun = a_noun
+wrap_noun = a_
 
-def nouns(noun):
+def strip_a(text):
+    if text.startswith('a ') or text.startswith('an '):
+        text = re.sub(r"^a ", "", text); text = re.sub(r"^an ", "", text)
+    return text
+
+def _s(noun):  # to plural form if possible
     prompt_fn = lambda s: \
 f'''apple: He likes apples.
 tea: He likes tea.
@@ -361,9 +366,12 @@ dog: He likes dogs.
         if text.endswith('.'): text = text[:-1]
         # if text.startswith('a ') or text.startswith('an '):
         #     print(f'In nouns: {noun} -> {text}')
-        #     text = re.sub(r"\ba ", "", text); text = re.sub(r"\ban ", "", text)
+        #     text = re.sub(r"^a ", "", text); text = re.sub(r"^an ", "", text)
         if not text.startswith(noun[:1]): print(f'In nouns: {noun} -> {text}')
         return text
+    noun = strip_a(noun)
+    d = {'drink': 'drinks'}
+    if noun in d: return d[noun]
     return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003'))  # better than text-davinci-002
 
 def wrap_noun_to_french(noun):
@@ -460,12 +468,25 @@ class Relation(object):
         self._inv_dict = None
         self.inv_rel = None
         self.neg_rel = None
+        self.x_f = None
+        self.y_f = None
+        self.skip_inv_f = False
 
     def f(self, x): return self._dict.get(x, [])
     def inv_f(self, x): return self._inv_dict.get(x, [])
     def dom(self, xs=None): return list(self._dict.keys())
     def codom(self, ys=None): return join_lists(self._dict.values())
     def b(self, x0, x1): return x1 in self._dict.get(x0, [])
+
+    def __str__(self):
+        s = self.name 
+        def attr2str(name):
+            value = getattr(self, name)
+            return f'{name}={value.__name__}' if value != True else name
+        attr_str = ','.join(attr2str(name) for name in ['x_f', 'y_f', 'skip_inv_f']
+                                        if getattr(self, name) not in [None, False])
+        if attr_str != '': s += f'({attr_str})'
+        return s
 
 class NegativeRelation(Relation):
     def __init__(self, rel):
@@ -477,7 +498,6 @@ class NegativeRelation(Relation):
     def codom(self, ys=None): return self.rel.codom()
     def b(self, x0, x1): return not self.rel.b(x0, x1)
 
-
 class Set(object):
     def __init__(self, data, rel_names):
         self.data = data
@@ -485,10 +505,12 @@ class Set(object):
         for rel_name in self.rel_names:
             setattr(self, rel_name, Relation(name=rel_name, _dict=defaultdict(list)))
 
-    def use(self, rel_names):
+    def use(self, rel_names, x_f=None, y_f=None, skip_inv_f=False):
         if isinstance(rel_names, str): rel_names = [rel_names]
         self.used_rel_names = rel_names
         self.relations = [getattr(self, rel_name) for rel_name in self.used_rel_names]
+        for rel in self.relations[:1]:  # TODO: check compatibility with NegativeRelation
+            rel.x_f, rel.y_f, rel.skip_inv_f = x_f, y_f, skip_inv_f
         return self
 
     def negate_used(self):
@@ -508,7 +530,7 @@ class Set(object):
         self.rel_names += neg_rel_names
 
     def __str__(self):
-        return f"{self.data.__name__}.{self.__class__.__name__}.{'|'.join(self.used_rel_names)}"
+        return f"{self.data.__name__}.{self.__class__.__name__}.{'|'.join(str(rel) for rel in self.relations)}"
 
 class EqSet(Set):
     def __init__(self, data):
@@ -619,7 +641,11 @@ def distractive_sample(cxt_len, rel, ans_i=0):
         f'{rel.name}, query = {query}, f(query) = {rel.f(query)}, distractors = {distractors}'
     distractors = sample(distractors, k) if len(distractors) >= k else distractors * k
     distractors0 = [rel.inv_f(x)[0] for x in distractors]
-    return tuple([swap(l, ans_i) for l in [[query] + distractors0, [ans] + distractors]])
+    candidates = [[query] + distractors0, [ans] + distractors]
+    if rel.x_f: candidates[0] = [rel.x_f(c) for c in candidates[0]] \
+        if not rel.skip_inv_f else [rel.x_f(c) for c in candidates[1]]
+    if rel.y_f: candidates[1] = [rel.y_f(c) for c in candidates[1]]
+    return tuple([swap(l, ans_i) for l in candidates])
 
 def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):
     rels = [s.relations for s in vocabs]
@@ -628,13 +654,13 @@ def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):
     has_local_hop = vocabs[0].data != vocabs[1].data
     position_relevant = cxt_sample_fn is not None and cxt_sample_fn.__name__ == 'enumerate_sample'
     
-    hop = 0; rel = rel0 = rels[hop][0]
-    bool_fn0, (candidates[hop - 1], candidates[hop]) = (rel.b, distractive_sample(cxt_len, rel)) \
-        if not fixed_query else (lambda x, y: x == y, cxt_sample_fn(cxt_len, rel))
+    hop = 0; rel = rels[hop][0]
+    candidates[hop - 1], candidates[hop] =  distractive_sample(cxt_len, rel) \
+        if not fixed_query else cxt_sample_fn(cxt_len, rel)
     # if not fixed_query: query = candidates[hop - 1][0]
     # elif not position_relevant: assert query == candidates[hop - 1][0], f'{query} != {candidates[hop - 1][0]}'
 
-    hop = 1; rel = rel1 = rels[hop][0]
+    hop = 1; rel = rels[hop][0]
     candidates[hop], candidates[hop + 1] = distractive_sample(cxt_len, rel)[::-1] \
         if has_local_hop else (candidates[hop - 1].copy(), [rel.inv_f(x)[0] for x in candidates[hop - 1]])
 
