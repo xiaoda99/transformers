@@ -1126,7 +1126,7 @@ def validate_args(task, args, trans_args):
     if trans_args.get('do_rm_local_hop') and args.get('rev_item2str'): return False
     if rels[1].name == 'equal' and args['cxt_len'] == 1: return False
     # if rels[1].name != 'equal': return False
-    if not rels[1].skip_inv_f: return False
+    # if not rels[1].skip_inv_f: return False
     if args['rev_item2str'] and any(vocab.data.__name__ in ['types_of_things'] and getattr(rel.y_f, '__name__', None) == 'a_'
         for vocab, rel in zip(vocabs, rels)): return False
     return True

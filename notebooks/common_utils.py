@@ -53,7 +53,7 @@ def topk_md(tensor, k, largest=True, transpose=False):
     return (rows, cols, values.numpy()) if not transpose else list(zip(rows, cols, values.numpy()))
 
 def topi_md(tensor, rows, cols):  # somewhat reverse of topk_md
-    if not isinstance(rows): return (tensor > tensor[rows, cols]).sum().item()
+    if not isinstance(rows, Iterable): return (tensor > tensor[rows, cols]).sum().item()
     all_sorted = torch.LongTensor(np.array(topk_md(tensor, tensor.numel())[:2]))
     rows_cols = torch.LongTensor(np.array([rows, cols]))
     if not isinstance(rows, Iterable): rows_cols = rows_cols.unsqueeze(1)
