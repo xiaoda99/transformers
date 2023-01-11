@@ -1090,7 +1090,7 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
         i += 1; assert i < 20, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:3]) + '\n' + str(ind_counts) + '\n' + str(ans_counts)
-    if i > 1: print('In generate: i =', i)
+    # if i > 1: print('In generate: i =', i)
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())
         label_probs = F.one_hot(torch.LongTensor(answer_indices))
