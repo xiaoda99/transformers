@@ -169,5 +169,6 @@ tags
 .ruff_cache
 # XD
 notebooks/data
+notebooks/results
 notebooks/gpt-j-6B
 notebooks/nrk/attention

@@ -345,6 +345,10 @@ def strip_a(text):
         text = re.sub(r"^a ", "", text); text = re.sub(r"^an ", "", text)
     return text
 
+def the_(noun, uppercase=True):
+    the = 'The' if uppercase else 'the'
+    return the + ' ' + strip_a(noun)
+
 def _s(noun):  # to plural form if possible
     prompt_fn = lambda s: \
 f'''apple: He likes apples.
@@ -481,13 +485,13 @@ class Relation(object):
     def b(self, x0, x1): return x1 in self._dict.get(x0, [])
 
     def __str__(self):
-        s = self.name 
+        s = self.name if not self.skip_inv_f else 'equal'
         def attr2str(name):
             value = getattr(self, name)
             return f'{name}={value.__name__}' if value != True else name
-        attr_str = ','.join(attr2str(name) for name in ['x_f', 'y_f', 'skip_inv_f']
+        attr_str = ','.join(attr2str(name) for name in ['x_f', 'y_f']
                                         if getattr(self, name) not in [None, False])
-        if attr_str != '': s += f'({attr_str})'
+        if attr_str != '': s += f'[{attr_str}]'
         return s
 
 class NegativeRelation(Relation):
@@ -752,6 +756,7 @@ class Ranges:
     ans0: tuple = None
     query: tuple = None
     tgt: tuple = None
+    sep: tuple = None
     candidates: tuple = None
     example: tuple = None
 
@@ -759,6 +764,7 @@ class Ranges:
 def locate(tokens, substring, return_last=False):
     if substring is None: return None
     substring = substring.lower()
+    substring = strip_a(substring)
     tokens = [t.lower() for t in tokens]
     whole_string = "".join(t for t in tokens)
     assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
@@ -787,7 +793,7 @@ def locate(tokens, substring, return_last=False):
 
 def example2ranges(example, tokens, bos_token):
     cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
-    return Ranges(
+    ranges = Ranges(
         bos = locate(tokens, bos_token, return_last=True),
         ans = locate(tokens, ans, return_last=True),
         ans0 = locate(tokens, ans0),
@@ -796,6 +802,8 @@ def example2ranges(example, tokens, bos_token):
         candidates = tuple(map(np.array, zip(*[locate(tokens, cand) for cand in candidates[1]]))) if candidates else None,
         example = (0, len(tokens))
     )
+    sep_i = tokens.index('.', ranges.tgt[1]); ranges.sep = (sep_i, sep_i + 1)
+    return ranges
 
 def move_ranges(r, offset):
     for field in fields(r):
@@ -1104,7 +1112,7 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True
 
 def task2str(task):
     vocab_fn, gen_fn, *_ = task
-    return f"{fn2str(gen_fn)}({', '.join(str(v) for v in vocab_fn())})"
+    return f"{fn2str(gen_fn)}[{','.join(str(v) for v in vocab_fn())}]"
 
 def args2str(args):
     # strs = [f'{k}={v}' if type(v) not in [bool, int] else (k if v else '') for k, v in args.items()]
@@ -1117,7 +1125,7 @@ def args2str(args):
         elif type(v) == types.FunctionType: s = f'{k}={v.__name__}'
         else: s = f'{k}={v}'
         strs.append(s)
-    return ', '.join(s for s in strs if s != '')
+    return ','.join(s for s in strs if s != '')
 
 def validate_args(task, args, trans_args):
     vocab_fn, gen_fn, *_ = task
@@ -1128,8 +1136,6 @@ def validate_args(task, args, trans_args):
     if rels[1].name == 'equal' and args['cxt_len'] == 1: return False
     # if rels[1].name != 'equal': return False
     # if not rels[1].skip_inv_f: return False
-    if args['rev_item2str'] and any(vocab.data.__name__ in ['types_of_things'] and getattr(rel.y_f, '__name__', None) == 'a_'
-        for vocab, rel in zip(vocabs, rels)): return False
     return True
 
 def inc(token):
