@@ -177,19 +177,21 @@ def unify(model):
             from bitsandbytes.nn import Linear8bitLt
             if my_isinstance(self.query_key_value, Linear8bitLt):
                 self.qkv_proj = self.query_key_value
-            elif not hasattr(self, 'q_proj'):
-                weight_chunks = self.query_key_value.weight.view(
+            else:#if not hasattr(self, 'q_proj'):
+                weight_chunks = self.query_key_value.weight.view(  # (n3d)e->n(3d)e->3*[nde]
                     self.num_heads, 3 * self.head_dim, self.embed_dim).chunk(3, dim=1)
-                bias_chunks = self.query_key_value.bias.chunk(3)
+                bias_chunks = self.query_key_value.bias.view( # n3d->n(3d)->3*[nd]
+                    self.num_heads, 3 * self.head_dim).chunk(3, dim=1)
                 for proj_name, w, b in zip(['q_proj', 'k_proj', 'v_proj'], weight_chunks, bias_chunks):
                     proj = nn.Linear(self.embed_dim, self.embed_dim)
-                    proj.weight, proj.bias = nn.Parameter(rearrange(w, 'n d e -> (n d) e')), nn.Parameter(b)
+                    proj.weight = nn.Parameter(rearrange(w, 'n d e -> (n d) e'))
+                    proj.bias = nn.Parameter(rearrange(b, 'n d -> (n d)'))
                     setattr(self, proj_name, proj)
 
 def name_with_device(name, device): return name + '_' + str(device).replace(':', '')  # '_cuda0' or '_cpu'
 
 def clone_module_to(module, name, device, dtype=torch.float16, gpu_module=None):
-    if hasattr(module, name_with_device(name, device)): return module
+    if hasattr(module, name_with_device(name, device)): delattr(module, name_with_device(name, device)); return module
     getattr(module, name).requires_grad_(False)  # don't know if useful or not for saving mem
     setattr(module, name_with_device(name, device), deepcopy(getattr(module, name)).to(device, dtype=dtype)
         if gpu_module is None else getattr(gpu_module, name))
@@ -519,7 +521,7 @@ def attn_forward(block, hq, hk, hv, by_head=None,
                 attention_mask=None, head_mask=None, attn_weights=None):
     self = block.attn  # block.attn.attention already renamed
     query, key, value = None, None, None
-    if hasattr(self, 'qkv_proj'):  # gpt-neox
+    if hasattr(self, 'qkv_proj'):  # gpt-neox int8
         qkv = self.qkv_proj(hq)  # hq == hk == hv
         new_qkv_shape = qkv.size()[:-1] + (self.num_attention_heads, 3 * self.head_dim)
         query, key, value = [rearrange(a, 'b i n d -> b n i d') # [bind] * 3 -> [bnid] * 3
@@ -528,10 +530,10 @@ def attn_forward(block, hq, hk, hv, by_head=None,
     else:
         if hq is not None and hk is not None and attn_weights is None:
             key = self.k_proj(hk)
-            key = _split_heads(key, self.num_heads, self.head_dim)#, rotary=rotary)  # bind
+            key = _split_heads(key, self.num_heads, self.head_dim)  # bnid
             if hq.ndim == 3:  # bie
                 query = self.q_proj(hq)
-                query = _split_heads(query, self.num_heads, self.head_dim)#, rotary=rotary) # bind
+                query = _split_heads(query, self.num_heads, self.head_dim) # bidi
             else:
                 assert hq.ndim == 4  # bnid, computed in cat_attn_forward
                 # if rotary: hq = rearrange(hq, 'b n i d -> b i n d')
@@ -1084,8 +1086,8 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
 
 def trim_outputs(outputs):
     return Outputs(
-        hidden_states=outputs.hidden_states,  # for sum_forward's forward_only mode
-        attentions=outputs.attentions,
+        # hidden_states=outputs.hidden_states,  # for sum_forward's forward_only mode
+        # attentions=outputs.attentions,
         # attn_attr=outputs.attn_attr,
         logits=outputs.logits
     )
@@ -1094,18 +1096,16 @@ def is_trimmed_outputs(outputs): return outputs.mlp_outputs == ()
 
 def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_token=None, #'Ċ',
             custom_forward=True, trim=False, verbose=True):
-    if True:#with Timer('In predict: make_data_tuple'):
-        input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
-            text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
+    input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
+        text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
     candidates, answer_indices = None, None
     cxt, query, cands, *_ = examples[0]
     if cands is not None:
         candidates = [[tokenizer.encode(' ' + token)[0] for token in cands[-1]] for cxt, query, cands, *_ in examples]
         answer_indices = [get_answer_index(e) for e in examples]
     with torch.no_grad():
-        if True:#with Timer('In predict: forward0'):
-            o = forward0(model, input_ids.to(model.device), labels=labels.to(model.device), by_head=['head_input'], ranges=ranges) \
-                if isinstance(model, nn.Module) and custom_forward else model(input_ids.to(getattr(model, 'device', 'cpu')))
+        o = forward0(model, input_ids.to(model.device), labels=labels.to(model.device), by_head=['head_input'], ranges=ranges) \
+            if isinstance(model, nn.Module) and custom_forward else model(input_ids.to(getattr(model, 'device', 'cpu')))
         logits = o.logits
         if isinstance(logits, torch.Tensor): logits = logits.to('cpu').float()# softmax on cpu needs float32
     loss, top1_corrects, answer_probs, candidate_probs = show_predictions(
@@ -1123,13 +1123,13 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
     else:
         all_examples, texts, all_bos_tokens = result.all_examples, result.texts, result.all_bos_tokens
     for text in texts[:1]: print('\n'.join(text.split('\n')[:3]))
-    if batch_size == 1: return result
+    # if batch_size == 1: return result
 
     if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):
         with Timer('In generate_and_predict_batch: predict'):
             data_tuples, result.eval_results = zip(*[predict(model, tokenizer, text, examples,
                 k_shot=k_shot, bos_token=bos_tokens, trim=trim, verbose=verbose)
-                for text, examples, bos_tokens in zip(texts, all_examples, all_bos_tokens)
+                for examples, text, bos_tokens in zip(all_examples, texts, all_bos_tokens)
                 if True or any(s in text[24:] for s in ['dangerous'])])
         result.data_tuples = data_tuples
         loss, acc, *_ = zip(*result.eval_results)
@@ -1138,17 +1138,26 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
     return result
 
 def show_predictions_by_result(tokenizer, result, k_shot):
-    for (text, input_ids, labels, ranges, *args, o), (_, _, candidates, answer_indices, *_) in zip(result.data_tuples, result.eval_results):
+    for (_, _, labels, ranges, *args, o), (_, _, candidates, answer_indices, *_) in \
+                                        zip(result.data_tuples, result.eval_results):
         logits = o.logits
         show_predictions(
             tokenizer, *args, logits=logits, labels=labels, loss_reduction='mean',
-            candidates=candidates, answer_indices=answer_indices, k_shot=k_shot, topk=3, verbose=True)
+            candidates=candidates, answer_indices=answer_indices, k_shot=k_shot, topk=3)
+
+def data_tuples_g(mt, result, k_shot, slice_obj):
+    model, tokenizer = mt
+    if isinstance(slice_obj, int): slice_obj = slice(slice_obj)
+    for examples, text, bos_tokens in zip(result.all_examples[slice_obj],
+                        result.texts[slice_obj], result.all_bos_tokens[slice_obj]):
+        yield predict(model, tokenizer, text, examples, k_shot=k_shot, 
+            bos_token=bos_tokens, verbose=False)[0]
 
 def abbreviate_attn_pattern(attn_pattern):
-    return attn_pattern.replace('bos', 'B').replace('query', 'Q').replace('ans', 'A').replace('sep', 'S')
+    return attn_pattern.replace('bos', 'B').replace('query', 'Q').replace('tgt', 'T').replace('ans', 'A').replace('sep', 'S')
 
 def restore_attn_pattern(attn_pattern):
-    return attn_pattern.replace('B', 'bos').replace('Q', 'query').replace('A', 'ans').replace('S', 'sep')
+    return attn_pattern.replace('B', 'bos').replace('Q', 'query').replace('T', 'tgt').replace('A', 'ans').replace('S', 'sep')
 
 def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=None, attribute_k=False, normalize=True):
     attn_pattern = restore_attn_pattern(attn_pattern)
@@ -1524,7 +1533,7 @@ def abbreviate_label_type(label_type):
 from operator import lt, ge
 
 def data2str(data, verbose=True):
-    H = 16  # TODO
+    H = 16*4  # TODO
     d = data
     step, topi, layer, head, label_type, attn_pattern, ap_score, attr_ap_score, attribute_k, top_score = \
         d.step, d.topi, d.layer, d.head, d.label_type, d.attn_pattern, d.ap_score, d.attr_ap_score, d.attribute_k, d.top_score
@@ -1651,7 +1660,7 @@ def expand_node(parent, topk=10, threshold_scores=[1/3, 1/2], k_shot=None, attri
 
     if pd.step < 1:
         for d in top_data:
-            if d.head == H or d.top_score < threshold_scores[1]: continue
+            # if d.head == H or d.top_score < threshold_scores[1]: continue
             for label_type in get_label_types(parent, d.attn_pattern):
                 _d = deepcopy(d)
                 _d.label_type = label_type
@@ -1741,7 +1750,7 @@ def attribute_tree_on(data_tuples, model, node, max_step, device='cpu', **kwargs
     if node is None: node = add_node(None, label_type='labels')
     if device == 'cpu':
         with Timer('attribute_tree'):
-            attribute_tree(data_tuples_device, model, node, max_step, **kwargs)
+            attribute_tree(data_tuples, model, node, max_step, **kwargs)
         return node
     try:
         switch_model_to(model, device)
@@ -2037,7 +2046,7 @@ def get_scale_fn(factor=0):
     def scale(hidden): return hidden * factor
     return scale
 
-def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x_pos=None, topk=None,
+def _plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x_pos=None, topk=None,
             use_imshow=False, annot=False, figsize=(10, 10), fontsize=10, transpose=False, ax=None):
     ytokens = ytokens or tokens
     if y_pos is None and topk is not None:
@@ -2052,7 +2061,7 @@ def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x
     if ax is None:
         if not square:
             figsize2 = (attn.size(1), attn.size(0))
-            a = min(s1 / s2 for s1, s2 in zip(figsize, figsize2))
+            a = max(s1 / s2 for s1, s2 in zip(figsize, figsize2))  # min
             figsize = [s * a for s in figsize2]
     if transpose:
         attn = attn.T
@@ -2077,6 +2086,18 @@ def plot_attn(attn, tokens, ytokens=None, ystart=None, ystop=None, y_pos=None, x
     if x_pos is not None: ax.vlines(x=x_pos, ymin=0, ymax=attn.size(0)-0.5*use_imshow, **kwargs)
     # plt.show()
 
+def plot_attn(data_tuple, tokenizer, l, h, attn_pattern=None, k_shot=0):
+    text, input_ids, labels, ranges, *args, o = data_tuple
+    a = o.attentions[l][0, h]; aw_size = a.size()
+    tokens = [t.replace('Ġ', '').replace('Ċ', '-'*12) 
+        for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
+    bos_indices = args[1]
+    ystart, ystop = bos_indices[k_shot], aw_size[0]
+    attn_labels = attn_pattern2labels(ranges, attn_pattern, aw_size)
+    y_pos, x_pos = attn_labels.nonzero().T
+    _plot_attn(a, tokens, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
+        fontsize=9, transpose=True, figsize=(15, 15)); plt.show()  # bij->ij
+
 def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None, k_shot=0, attribute_k=False, plot_attr=True):
     text, input_ids, labels, ranges, *args, o = data_tuple
     tokens = [t.replace('Ġ', '').replace('Ċ', '-'*12) for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
@@ -2099,12 +2120,12 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
             ystart = bos_indices[k_shot]
             attn_labels = attn_pattern2labels(ranges, node2path(node)[-1].data.attn_pattern or 'bos->ans0]', aw_size)
             y_pos, x_pos = attn_labels.nonzero().T
-            plot_attn(logits[-1].softmax(dim=-1), tokens, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
-                fontsize=9, transpose=True, figsize=(20, 20)); plt.show()  # bij->ij
+            _plot_attn(logits[-1].softmax(dim=-1), tokens, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
+                fontsize=9, transpose=True, figsize=(20-5, 20-5)); plt.show()  # bij->ij
         if isinstance(h, Iterable) or h == H: return
 
     aw = o.attentions[l][0, h]
-    if plot_attr: aa = o.attn_attr[node2key(node)][l, h]
+    if plot_attr: aa = o.attn_attr[node2key(node)][l, h] if (l, h) in o.attn_attr[node2key(node)] else aw
     attns, ystart = ([aw, aa], bos_indices[k_shot]) if plot_attr else ([aw], 0)
     if attn_patterns and not attribute_k and attn_patterns[0].lower().startswith('a'): # 'ans]->ans0]' or 'ans]->ans0+' for relating heads
         ystart, ystop = 0, ystop - ystart
@@ -2124,7 +2145,7 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         y_pos, x_pos = attn_labels.nonzero().T
     if True: #with Timer():
         for ax, a in zip(axs, attns):
-            plot_attn(a, tokens, ax=ax, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
+            _plot_attn(a, tokens, ax=ax, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
                 fontsize=10, transpose=True, use_imshow=False)
         plt.show()
 
@@ -2142,7 +2163,6 @@ def plot_attn_attrs(data_tuples, model, tokenizer, node, topi=[0], head_attr_fn=
     if head_attr_fn is None: head_attr_fn = get_head_mlp_attr  # or get_matched_head_attr
     heads = np.array(topk_md(head_attr_fn(node.data), 10)[:2])[:, topi]
     heads = zip(*heads) if not mix else [heads]
-    attn_patterns=attn_patterns or attn_patterns_by_step.get(node.data.step)
     for l, h in heads:
         s = f'{l}-{h}' if not mix else ' + '.join([f'{_l}-{_h}' for _l, _h in zip(l, h)])
         print(' -> '.join([s] + [n.name for n in node2path(node)]))

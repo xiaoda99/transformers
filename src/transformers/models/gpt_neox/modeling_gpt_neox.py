@@ -943,13 +943,13 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
                 presents = presents + (outputs[1],)
             if output_attentions:
                 all_attentions = all_attentions + (outputs[2 if use_cache else 1].to('cpu'),)  # XD
-        if output_attentions: self.all_attentions = all_attentions; all_attentions = None  # XD
+        # if output_attentions: self.all_attentions = all_attentions; all_attentions = None  # XD
 
         hidden_states = self.final_layer_norm(hidden_states)
         # Add last hidden state
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states.to('cpu'),)  # XD
-            self.all_hidden_states = all_hidden_states; all_hidden_states = None  # XD
+            # self.all_hidden_states = all_hidden_states; all_hidden_states = None  # XD
 
         if not return_dict:
             return tuple(v for v in [hidden_states, presents, all_hidden_states, all_attentions] if v is not None)
