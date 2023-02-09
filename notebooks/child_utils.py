@@ -40,6 +40,12 @@ digit2ordinal = OrderedDict(zip(digits, ordinals))
 # lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
 full_vocab = uppercase + digits
 
+def types_of_characters(): return {
+    'uppercase': uppercase,
+    # 'lowercase': lowercase,
+    # 'digit': digits,
+}
+
 # polygons = ['triangle', 'quadrangle', 'pentagon', 'hexagon', 'heptagon', 'octagon', 'nonagon', 'decagon',]# 'undecagon', 'dodecagon']
 times_of_day = ['dawn', 'morning', 'noon', 'afternoon', 'evening', 'night',]# 'midnight']
 clock_of_day = [f"{i} o'clock" for i in range (1, 13)]
@@ -612,7 +618,7 @@ class TreeSet(Set):
         self.build_negative_relations()
 
 def enumerate_sample(cxt_len, rel):
-    return list(range(cxt_len)), sample(rel.dom(), cxt_len)
+    return list(range(cxt_len)), sample(rel.codom(), cxt_len)
 
 def grouped_sample(cxt_len, rel, n_groups=2, reverse=False, min_group_size=None, max_group_size=None,
                                                             min_group_count=None, max_group_count=None):
@@ -658,7 +664,7 @@ def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):
     candidates = OrderedDict()
     fixed_query = query is not None
     has_local_hop = vocabs[0].data != vocabs[1].data
-    position_relevant = cxt_sample_fn is not None and cxt_sample_fn.__name__ == 'enumerate_sample'
+    position_relevant = getattr(cxt_sample_fn, '__name__', None) == 'enumerate_sample'
     
     hop = 0; rel = rels[hop][0]
     candidates[hop - 1], candidates[hop] =  distractive_sample(cxt_len, rel) \
@@ -667,11 +673,13 @@ def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):
     # elif not position_relevant: assert query == candidates[hop - 1][0], f'{query} != {candidates[hop - 1][0]}'
 
     hop = 1; rel = rels[hop][0]
-    candidates[hop], candidates[hop + 1] = distractive_sample(cxt_len, rel)[::-1] \
-        if has_local_hop else (candidates[hop - 1].copy(), [rel.inv_f(x)[0] for x in candidates[hop - 1]])
+    candidates[hop], candidates[hop + 1] = distractive_sample(cxt_len, rel)[::-1] if has_local_hop \
+        else (candidates[hop - 1].copy(), [rel.inv_f(x)[0] for x in candidates[hop - 1]])
 
     tuples = list(zip(*candidates.values()))
-    query, *ans_chain = tuples[0]; ans_chain = tuple(ans_chain)
+    i = 0 if query is None else list(candidates.values())[0].index(query)
+    if query is not None: assert tuples[i][0] == query, f'{tuples[i]}[0] != {query}'
+    query, *ans_chain = tuples[i]; ans_chain = tuple(ans_chain)
     if not position_relevant: shuffle(tuples)
     cxt = [t[int(not fixed_query):3] for t in tuples]
     candidates = tuple(list(c) for c in zip(*tuples))
@@ -802,7 +810,9 @@ def example2ranges(example, tokens, bos_token):
         candidates = tuple(map(np.array, zip(*[locate(tokens, cand) for cand in candidates[1]]))) if candidates else None,
         example = (0, len(tokens))
     )
-    sep_i = tokens.index('.', ranges.tgt[1]); ranges.sep = (sep_i, sep_i + 1)
+    if '.' in tokens:
+        sep_i = tokens.index('.', ranges.tgt[1])
+        ranges.sep = (sep_i, sep_i + 1)
     return ranges
 
 def move_ranges(r, offset):
@@ -875,17 +885,19 @@ def query2wh(vocab, query2str):
     if query2str(wh, vocab).startswith(wh): wh = wh.capitalize()
     return wh
 
-def capitalize(s): return s[0].upper() + s[1:]  # different from str.capitalize() !
+def capitalize(s): return s[0].upper() + s[1:] if s else ''  # different from str.capitalize() !
 
 def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, options_position=None):
-    cxt_len = len(examples[0][0])
+    cxt, *_ = examples[0]
+    cxt_len = len(cxt)
     if abstract:
-        item2str, query2str = (partial(_item2str, reverse=rev_item2str), _str)
+        cxt2str, item2str, query2str = _cxt2str, partial(_item2str, reverse=rev_item2str), _str
         if cxt_len == 1:
-            item2str, query2str = (lambda i, _: f'{i[1]}', lambda q, _: '')
+            item2str, query2str = lambda i, _: f'{i[1]}', lambda q, _: ''
             examples = [(cxt, None, None, (None, ans0, ans), *cls)
                 for cxt, query, options, (tgt, ans0, ans), *cls in examples]
-        cxt2str, bos_token, ans2str = partial(_cxt2str, item2str=item2str), abstract_bos_token, _str
+        if isinstance(cxt[0], str): cxt2str = partial(_cxt2str, sep=' ') # item_len == 1
+        cxt2str, bos_token, ans2str = partial(cxt2str, item2str=item2str), abstract_bos_token, _str
     else:
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '?' if i == 4 else _str) for i in range(2, 6)]
     def example2str(vocab, example):
@@ -1018,25 +1030,35 @@ def remove_local_hop(task, remove_query=False):
     data_names = [v.data.__name__ for v in vocab_fn()]
     rel_names = [v.relations[0].name for v in vocab_fn()]
     is_negative = rel_names[0].startswith('neg_')
-    if rel_names[0] in ['equal', 'inv_equal']: raise InvalidTransException("invalid rel for rm_local_hop: " + str(rel_names))
-    if remove_query and not is_negative: raise InvalidTransException("invalid rel for rm_local_hop and rm_query" + str(rel_names))
+    fixed_query = isinstance(gen_fn, partial) and 'query' in gen_fn.keywords
+    if not fixed_query:
+        if rel_names[0] in ['equal', 'inv_equal']:
+            raise InvalidTransException("invalid rel for rm_local_hop: " + str(rel_names))
+        if remove_query and not is_negative:
+            raise InvalidTransException("invalid rel for rm_local_hop and rm_query" + str(rel_names))
     
     def new_vocab_fn(): vocabs = vocab_fn(); return [vocabs[0], deepcopy(vocabs[0]).use('equal')]
-    def new_gen_fn(*args, **kwargs):
-        cxt, query, candidates, (tgt, *a, ans0, ans) = gen_fn(*args,**kwargs)
-        query, candidates = None, ([None] * len(candidates[1]),) + candidates[1:]
-        return cxt, query, candidates, (tgt, *a, ans0, ans)
-    new_gen_fn.__name__ = f"{'rm_query'}({gen_fn.__name__})"
+    if remove_query:
+        def new_gen_fn(*args, **kwargs):
+            cxt, query, candidates, (tgt, *a, ans0, ans) = gen_fn(*args,**kwargs)
+            query, candidates = None, ([None] * len(candidates[1]),) + candidates[1:]
+            return cxt, query, candidates, (tgt, *a, ans0, ans)
+        new_gen_fn.__name__ = f"'rm_query'[{fn2str(gen_fn)}]"
 
-    new_cxt2str = partial(_cxt2str, prefix='There are ', sep=', ', item2str=lambda i, _: wrap_noun(i) if not i[0].isupper() else i)
+    new_cxt2str = partial(_cxt2str, prefix='There are ', sep=', ',
+        item2str=lambda i, _: wrap_noun(i) if not i[0].isupper() else i)
     capitalized = data_names[0] in ['persons', 'genders_of_persons', 'country2capital', 'countries_of_cities']
     end, new_bos_token = ("?", " The") if not capitalized else ("", "?")
-    wh = 'who' if data_names[0] in ['persons', 'genders_of_persons'] else 'which'
-    prep = 'like ' if rel_names[0] in ['sibling', 'neg_sibling'] else ''
-    if not is_negative: new_query2str = (lambda q, v: f"{wh} is {prep}{q}{end}")
-    elif not remove_query: new_query2str = (lambda q, v: f"{wh} is not {prep}{q}{end}")
-    else: new_query2str = (lambda q, v: f"{wh} is different{end}")
-    task = new_vocab_fn, new_gen_fn if remove_query else gen_fn, new_cxt2str, new_query2str, new_bos_token, *a
+    if not fixed_query:
+        wh = 'who' if data_names[0] in ['persons', 'genders_of_persons'] else 'which'
+        prep = 'like ' if rel_names[0] in ['sibling', 'neg_sibling'] else ''
+        if not is_negative: new_query2str = (lambda q, v: f"{wh} is {prep}{q}{end}")
+        elif not remove_query: new_query2str = (lambda q, v: f"{wh} is not {prep}{q}{end}")
+        else: new_query2str = (lambda q, v: f"{wh} is different{end}")
+    else:
+        new_query2str = lambda q, v: ""
+    task = new_vocab_fn, (new_gen_fn if remove_query else gen_fn), \
+        new_cxt2str, new_query2str, new_bos_token, *a
     return task
 
 def _g2c(g_fn, cls_labels=['True', 'False']):
