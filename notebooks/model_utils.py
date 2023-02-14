@@ -1154,7 +1154,6 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
     data_tuple = [text, input_ids, labels, ranges] + args + [o]
     eval_result = (loss, top1_corrects[k_shot:], answer_probs, candidate_probs)
     return data_tuple, eval_result
-        
 
 def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size, trim=False, verbose=True, result=None, **gen_args):
     if result is None:
@@ -1328,7 +1327,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     kept_dim, combine_fn = ('l', partial(torch.cat, dim=1)) \
         if isinstance(output_layer, Iterable) else ('', sum)
     kwargs = dict(labels=labels, loss_reduction=loss_reduction, scaled=scaled)  # for lm_head_forward
-    kwargs['logits_mask'] = getattr(o, 'logits_mask', None)
+    # kwargs['logits_mask'] = getattr(o, 'logits_mask', None)
     logits, loss = None, None
     
     device = device or model.lm_head.weight.device
@@ -1587,9 +1586,7 @@ def attribute_step(data_tuple, model, node, attribute_k=False,
                 sum_output=sum_output, attr_heads=attr_heads, device=device)
     if not staged: keys = ['attn_weights', 'mlp_mask', 'embed_mask']
     else: keys = ['mlp_mask', 'embed_mask', 'head_mask'] if attr_heads is None else ['attn_weights']
-    # if attr_heads is not None: print('In attribute_step: before get_x mu=', mem_usage(device))
     x = OrderedDict((key, get_x(key, o, attr_heads=attr_heads, to_layer=to_layer, device=device)) for key in keys)
-    # if attr_heads is not None: print('In attribute_step: after get_x mu=', mem_usage(device))
     attr, sum_output = attribute(fwd_fn, model, x, fns, num_points=3 if True or attribute_k else 7)[:2]
     if attr_heads is not None:
         attr.attn = scatter_by_heads(attr.attn, attr_heads, size=(L, H)) # kij->lnij
@@ -1657,9 +1654,11 @@ def get_head_matching_scores(data_tuple, attn_patterns, layer=None, node_key=Non
         if node_key is None:
             if device is not None: attn_labels = to(attn_labels, device)
             # mean log-likelyhood, lhij->lh
-            matching_scores[attn_pattern] = ((attentions + 1e-4).log() * attn_labels).sum((-2, -1)) / attn_labels.sum()
-            if device is not None:
-                matching_scores[attn_pattern] = matching_scores[attn_pattern].to('cpu', dtype=torch.float32)
+            # matching_scores[attn_pattern] = ((attentions + 1e-4).log() * attn_labels).sum((-2, -1)) / attn_labels.sum()
+            b = attn_labels.sum(1) > 0  # ij->i
+            scores = (attentions[:, :, b] * attn_labels[b]).sum(-1).mean(-1)  # lnkj,kj->lnkj->lnk->ln
+            if device is not None: scores = scores.to('cpu', dtype=torch.float32)
+            matching_scores[attn_pattern] = scores   
         else:
             attentions = o.attn_attr[node_key]
             def get_score(a): return (a * attn_labels).sum((-2, -1)) / ((a * (a > 0)).sum((-2, -1)) + 1e-9)  # lnij->ln
@@ -1873,7 +1872,8 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_scores
         with Timer(f'In attribute_tree: attribute_step stage2 {node.name}'):
             model.wos = torch.stack([rearrange(blocks[l].attn.out_proj.weight.data,
                 'e (n d) -> n d e', n=H)[h] for l, h in d.top_heads])  # k*[de]->kde, used by sum_forward
-            mr(attribute_step)(data_tuples, model, node, attr_heads=d.top_heads) # resulting attr.attn saved to o.attn_attr
+            # resulting attr.attn saved to o.attn_attr
+            mr(attribute_step)(data_tuples, model, node, attr_heads=d.top_heads)
             del model.wos
         # keep only topk attn_attr to save memory
         for *_, o in data_tuples:
@@ -1884,8 +1884,8 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_scores
     kwargs = dict(k_shot=k_shot, attribute_k=attribute_k)
     ap_scores = get_root(node).data.ap_scores
     _attn_patterns = [ap for ap in attn_patterns if ap not in ap_scores]
-    ap_scores.update({ap: s.exp() for ap, s in mr(get_head_matching_scores)(
-        data_tuples, _attn_patterns, device=device, **kwargs).items()})
+    ap_scores.update(mr(get_head_matching_scores)(
+        data_tuples, _attn_patterns, device=device, **kwargs))
     d.attr_ap_scores = OrderedDict([(ap, mr(get_head_matching_scores)(
         data_tuples, ap, node_key=node_key, **kwargs)) for ap in attn_patterns])
 
@@ -2263,7 +2263,6 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
             _plot_attn(logits[-1].softmax(dim=-1), tokens, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
                 fontsize=9, transpose=True, figsize=(20-5, 20-5)); plt.show()  # bij->ij
         if isinstance(h, Iterable) or h == H: return
-    return
 
     aw = o.attentions[l][0, h]
     if plot_attr: aa = o.attn_attr[node2key(node)][l, h] if (l, h) in o.attn_attr[node2key(node)] else aw
@@ -2277,20 +2276,23 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
     if len(attns) == 1: axs = [axs]
     y_pos, x_pos = None, None
     if attn_patterns is not None:
-        all_attn_labels = [attn_pattern2labels(ranges, ap, aw_size, k_shot=k_shot, attribute_k=attribute_k) for ap in attn_patterns]
+        all_attn_labels = [attn_pattern2labels(ranges, ap, aw_size,
+            k_shot=k_shot, attribute_k=attribute_k, normalize=False) for ap in attn_patterns]
         if len(all_attn_labels) == 1:
             attn_labels = all_attn_labels[0]
         else:  # steps that have multiple attn patterns, e.g. ['ans->ans0]', 'ans->ans0+'] of relating heads
             all_attn_labels = [(al, (al * aa).sum()) for al in all_attn_labels]
             attn_labels = max(all_attn_labels, key=lambda x: x[1])[0] # find the pattern that best matches aa
         y_pos, x_pos = attn_labels.nonzero().T
+        b = attn_labels.sum(1) > 0  # ij->i
+        print('attn_scores =', (aw[b] * attn_labels[b]).sum(-1), (aw[b] * attn_labels[b]).sum(-1).mean(-1))  # kj,kj->kj->k->
     if True: #with Timer():
         for ax, a in zip(axs, attns):
             _plot_attn(a, tokens, ax=ax, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
                 fontsize=10, transpose=True, use_imshow=False)
         plt.show()
 
-attn_patterns_by_step = {-1: ['bos->ans0]'],
+attn_patterns_by_step = {-1: ['bos->ans0'],
     0: ['bos->ans]', 'bos->query]', 'bos->ans0+',
         'bos->sep',  # 11-4
         'bos->sep+',  # 13-11
