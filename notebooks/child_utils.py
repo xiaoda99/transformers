@@ -807,7 +807,8 @@ def example2ranges(example, tokens, bos_token):
         ans0 = locate(tokens, ans0),
         query = locate(tokens, query, return_last=True),
         tgt = locate(tokens, tgt),
-        candidates = tuple(map(np.array, zip(*[locate(tokens, cand) for cand in candidates[1]]))) if candidates else None,
+        candidates = tuple(map(np.array, zip(*[locate(tokens, cand) for cand in candidates[-2]]))) \
+            if candidates else None, # candidates for ans0
         example = (0, len(tokens))
     )
     if '.' in tokens:
