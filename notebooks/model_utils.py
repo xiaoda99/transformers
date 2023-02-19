@@ -688,7 +688,6 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
                 attn_labels = attn_attr[layer, head]
             kwargs = {'attn_labels': attn_labels, 'hidden_states0': hidden_states0
                     if hidden_states0 is not None else outputs.hidden_states[layer]}
-            
             if '/' in label_type:
                 mask_ap = (attn_pattern.split('->')[0] if attn_pattern else 'bos') + \
                     '->' + label_type.split('/')[1]
@@ -1241,12 +1240,15 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=F
         elif k in ['ans0s', 'candidates']:
             for s in get_slice(r, k): attn_labels[get_slice(r, q), s] = 1
         elif '<s>' in k:
-            attn_labels[get_slice(r, q), 0] = 1  # <s>
-            if k == '~<s>': attn_labels = 1 - attn_labels
+            attn_labels[get_slice(r, q), 0] = 1
         else:
             attn_labels[get_slice(r, q), get_slice(r, k)] = 1
+    if k == '~<s>':
+        # attn_labels = 1 - attn_labels  # 0,1,1,...
+        attn_labels = -attn_labels  # -1,0,0,...
+        # attn_labels = 1 - 2 * attn_labels  # -1,1,1,...
     attn_labels = attn_labels.tril()
-    if any(s in k for s in ['ans0s', 'candidates', '<s>', 'example']):normalize = False  # used as attn_mask
+    if any(s in k for s in ['ans0s', 'candidates', '<s>', 'example']): normalize = False  # used as attn_mask
     if normalize: attn_labels = attn_labels / (attn_labels.sum(1, keepdim=True) + 1e-9)
     return attn_labels, [get_slice(r, q) for r in ranges_q]
 
@@ -1537,12 +1539,13 @@ def attribute2(forward_fn, model, x, post_forward_fn):
     mlp_attr = y[1 + L * H:]#.view(L, 1)  # l1
     return Attributions(embed=embed_attr, head=head_attr, mlp=mlp_attr)
 
-def attributions_to(attr, device='cpu', dtype=torch.float32):
+def attributions_to(attr, device='cpu'):
     # for field in fields(attr):
     #     name = field.name
     for name in dataclasses.asdict(attr).keys():
         t = getattr(attr, name)
         if t is not None and isinstance(t, torch.Tensor):
+            dtype = torch.float32 if name != 'attn' else torch.float16  # to save mem
             setattr(attr, name, t.to(device, dtype=dtype))
     return attr
 
@@ -1769,7 +1772,7 @@ def point_wise(attn_pattern, label_type=None):
     return src == dst
 
 def get_label_types(parent, attn_pattern):
-    if attn_pattern == 'bos->query' and parent.data.attn_pattern == 'bos->ans0': return [None, 'attn_labels']
+    # if attn_pattern == 'bos->query' and parent.data.attn_pattern == 'bos->ans0': return [None, 'attn_labels']
     if any(not point_wise(n.data.attn_pattern, n.data.label_type) for n in node2path(parent)): return [None]
     if not point_wise(attn_pattern): return ['attn_labels']
     if parent.parent is None:  return ['labels']
@@ -1807,12 +1810,13 @@ def expand_node(parent, head_attr_fn=None, topk=10, threshold_score=0.4,
     top_data = sorted(top_data, key=lambda d: d._attr_ap_score, reverse=True)
     parent.children = [c for c in parent.children if not c.data.dummy]
 
-    if pd.step < 1:
+    if pd.step < 1 or pd.step == 1 and pd.attn_pattern == 'bos->query' and pd.label_type == 'attn_labels':
         for d in top_data:
             if d.top_score < threshold_score: continue
             for label_type in get_label_types(parent, d.attn_pattern):
                 if label_type and 'attn_labels' in label_type and d.attn_pattern.startswith('bos->ans0'):
-                    label_type += '/ans0s'
+                    # label_type += '/ans0s'
+                    label_type += f':bos->~<s>,{k_shot}'
                 _d = deepcopy(d)
                 _d.label_type = label_type
                 _d.attribute_k=attribute_k and label_type and 'attn_labels' in label_type
@@ -1822,7 +1826,8 @@ def expand_node(parent, head_attr_fn=None, topk=10, threshold_score=0.4,
             top_attn_pattern = [ap for ap in ap2score if not point_wise(ap)][0] # e.g. 'bos->ans0]' for step -1
             layers, heads, scores = topk_md(pd.ap_scores[top_attn_pattern], topk // 2)
             label_type = f'attn_labels:{top_attn_pattern},{k_shot}'  # 'attn_labels:bos->ans0],3'
-            label_type += '/ans0s'
+            # label_type += '/ans0s'
+            label_type = f'attn_labels:bos->~<s>,{k_shot}'
             # add_node(node, head_attr_fn=head_attr_fn, topi=list(range(len(scores))), top_score=scores, dummy=True)
 
             for layer, head, score in zip(layers, heads, scores):
@@ -1849,9 +1854,14 @@ def expand_node(parent, head_attr_fn=None, topk=10, threshold_score=0.4,
                 **{k: [getattr(d, k) for d in data_group] for k in ['layer', 'head', 'topi', 'top_score']})
         parent.children = parent.children[n_chilren:] + parent.children[:n_chilren]  # move dummy nodes to top
 
+# def filter_fn(p, c):
+#     return p.step == -1 and c.ap_score > 0.7 and c.top_score > 0 and c.head < c.H or \
+#         p.step == 0 and c.attn_pattern in ['bos->query', 'bos->bos'] and c.head < c.H or \
+#         p.step == 1 and p.attn_pattern == 'bos->query' and p.label_type == 'attn_labels' and c.attn_pattern == 'bos->ans'
+
 def filter_fn(p, c):
-    return p.step == -1 and c.ap_score > 0.7 and c.head < c.H or \
-        p.step == 0 and p.top_score > 0 and c.attn_pattern in ['bos->query', 'bos->bos'] and c.head < c.H
+    return p.step == -1 and c.ap_score > 0.7 and c.top_score > 0 and c.head < c.H or \
+        p.step == 0 and p.attn_pattern == 'bos->ans0' and c.attn_pattern in ['bos->ans', 'bos->bos'] and c.head < c.H
 
 def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=0.4,
                 k_shot=None, attribute_k=False, device=None, verbose=True):

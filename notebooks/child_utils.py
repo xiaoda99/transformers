@@ -766,7 +766,6 @@ class Ranges:
     tgt: tuple = None
     sep: tuple = None
     ans0s: list = None
-    candidates: list = None
     example: tuple = None
 
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
@@ -809,8 +808,6 @@ def example2ranges(example, tokens, bos_token):
         query = locate(tokens, query, return_last=True),
         tgt = locate(tokens, tgt),
         ans0s = tuple(map(np.array, zip(*[locate(tokens, a0) for a0 in candidates[-2]]))) \
-            if candidates else None,
-        candidates = tuple(map(np.array, zip(*[locate(tokens, cand) for cand in candidates[-1]]))) \
             if candidates else None,
         example = (0, len(tokens))
     )
