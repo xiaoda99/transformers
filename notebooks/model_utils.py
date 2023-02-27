@@ -7,7 +7,7 @@ from collections.abc import Iterable
 import numpy as np
 import math
 import dataclasses
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from copy import deepcopy
 from functools import reduce, partial
 from itertools import chain, product, combinations, cycle, groupby
@@ -301,39 +301,16 @@ def _merge_heads(tensor, num_heads, attn_head_size):
     new_shape = tensor.size()[:-2] + (num_heads * attn_head_size,)
     return tensor.view(new_shape)
 
-class RotaryEmbedding(torch.nn.Module):  # from gpt-neox
-    def __init__(self, dim, max_position_embeddings, base=10000, device=None):
-        super().__init__()
-        self.inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float().to(device) / dim))
-        # self.register_buffer("inv_freq", inv_freq)
-
-        # Build here to make `torch.jit.trace` work.
-        self.max_seq_len_cached = max_position_embeddings
-        t = torch.arange(self.max_seq_len_cached, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
-        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
-        # Different from paper, but it uses a different permutation in order to obtain the same calculation
-        emb = torch.cat((freqs, freqs), dim=-1)
-        self.cos_cached = emb.cos()[None, None, :, :]
-        self.sin_cached = emb.sin()[None, None, :, :]
-
-    def forward(self, x, seq_len=None):
-        # x: [bs, num_attention_heads, seq_len, head_size]
-        return self.cos_cached[:seq_len, ...].to(x.device), self.sin_cached[:seq_len, ...].to(x.device)
-
-def fixed_pos_embedding(x, seq_len=None, gpt_neox_style=False):
+def fixed_pos_embedding(x, seq_len=None):
+    if seq_len is None: seq_len = x.shape[2]
     self = fixed_pos_embedding; device = x.device
     self.sin, self.cos = {}, {}
     if device not in self.sin: #not hasattr(self, 'sin'):
-        seq_len = 2048
-        if gpt_neox_style:
-            rotary_emb = RotaryEmbedding(x.shape[-1], 2048, base=10000)
-            self.cos[device], self.sin[device] = rotary_emb(x, seq_len=seq_len)
-        else:
-            dim = x.shape[-1]
-            inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2) / dim))
-            sinusoid_inp = torch.einsum("i , j -> i j", torch.arange(seq_len), inv_freq).to(device).float()
-            self.sin[device], self.cos[device] = torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)
-    return self.sin[device], self.cos[device]
+        dim = x.shape[-1]
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2) / dim))
+        sinusoid_inp = torch.einsum("i , j -> i j", torch.arange(2048), inv_freq).to(device).float()
+        self.sin[device], self.cos[device] = torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)
+    return self.sin[device][:seq_len], self.cos[device][:seq_len]
 
 def rotate_every_two(x):  # gpt-j
     x1 = x[:, :, :, ::2]
@@ -359,44 +336,69 @@ def apply_rotary_pos_emb_half(x, sincos, offset=0): # x: bnir
     sin, cos = map(fn, sincos)
     return (x * cos) + (rotate_half(x) * sin)  # bnir,11ir->bnir
 
-def apply_rotary_pos_emb(query_rot, key_rot, seq_len=2048, offset=0, is_gpt_neox=False):
-    sincos = fixed_pos_embedding(key_rot, seq_len=seq_len, gpt_neox_style=False)
-    apply_rotary_pos_emb_fn = apply_rotary_pos_emb_half if is_gpt_neox else apply_rotary_pos_emb_every_two
-    key_rot = apply_rotary_pos_emb_fn(key_rot, sincos, offset=offset)
-    query_rot = apply_rotary_pos_emb_fn(query_rot, sincos, offset=offset)
+def apply_rotary_pos_emb(query_rot, key_rot, offset=0, rotary_emb=None):
+    sincos_fn, apply_fn = (fixed_pos_embedding, apply_rotary_pos_emb_every_two) \
+        if rotary_emb is None else (rotary_emb, apply_rotary_pos_emb_half)  # gpt-neox
+    sincos = sincos_fn(key_rot, seq_len=key_rot.size(2))  # (bnjd')[2]->j
+    if rotary_emb is not None: sincos = sincos[::-1]  # cossin->sincos
+    key_rot = apply_fn(key_rot, sincos, offset=offset)
+    query_rot = apply_fn(query_rot, sincos, offset=offset)
     return query_rot, key_rot
+
+def bmm_attn_scores(self, query, key):  # adapted from modeling_gpt_neox.py
+    batch_size, num_attention_heads, query_length, attn_head_size = query.size()
+    _, _, key_length, _ = query.size()
+    query = query.view(batch_size * num_attention_heads, query_length, attn_head_size)
+    key = key.view(batch_size * num_attention_heads, key_length, attn_head_size)
+    attn_scores = torch.zeros(
+        batch_size * num_attention_heads,
+        query_length,
+        key_length,
+        dtype=query.dtype,
+        device=key.device,
+    )
+    attn_scores = torch.baddbmm(
+        attn_scores,
+        query,
+        key.transpose(1, 2),
+        beta=1.0,
+        alpha=(torch.tensor(1.0, dtype=self.norm_factor.dtype, device=self.norm_factor.device) / self.norm_factor),
+    )
+    attn_scores = attn_scores.view(batch_size, num_attention_heads, query_length, key_length)
+    return attn_scores
 
 def _attn(self, query, key, value, attention_mask=None):
     if my_isinstance(self, (GPTNeoSelfAttention, GPTJAttention)):
         # Keep the attention weights computation in fp32 to avoid overflow issues
         query, key = query.to(torch.float32), key.to(torch.float32)
-    attn_weights = torch.matmul(query, key.transpose(-1, -2)) # bnid,bnjd->bnij
+    attn_scores = bmm_attn_scores(self, query, key) if my_isinstance(self, GPTNeoXAttention) \
+        else torch.matmul(query, key.transpose(-1, -2)) # bnid,bnjd->bnij
 
     # turns out gptneo fold_scaling_into_initializer, and uses float32_logits. 
     # see https://crfm.stanford.edu/2021/08/26/mistral.html (Diagnosing Numerical Instability, Eureka!)
     # and https://github.com/tensorflow/mesh/blob/master/mesh_tensorflow/transformer/attention.py#L517&66
-    if not my_isinstance(self, GPTNeoSelfAttention):
-        # attn_weights = attn_weights / (value.size(-1) ** 0.5) # vale may be None
-        attn_weights = attn_weights / (query.size(-1) ** 0.5)
+    if not my_isinstance(self, (GPTNeoSelfAttention, GPTNeoXAttention)):
+        attn_scores = attn_scores / (query.size(-1) ** 0.5)
 
     query_length, key_length = query.size(-2), key.size(-2)
     causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length].bool()
     # self.masked_bias can not be used because it will turn to -inf when casting model to fp16
-    # attn_weights = torch.where(causal_mask, attn_weights, self.masked_bias.to(attn_weights.dtype))
-    # adapted from GPTJAttention._attn which uses torch.finfo(attn_weights.dtype).min
-    mask_value = -1e9 if attn_weights.dtype == torch.float32 else -1e4  # else shoud not happen. 
-    mask_value = torch.tensor(mask_value, dtype=attn_weights.dtype).to(attn_weights.device)
-    attn_weights = torch.where(causal_mask.to(attn_weights.device), attn_weights, mask_value)
-    if attention_mask is not None: attn_weights = attn_weights + attention_mask
-    if value is None: return None, attn_weights
+    # attn_scores = torch.where(causal_mask, attn_scores, self.masked_bias.to(attn_scores.dtype))
+    # adapted from GPTJAttention._attn which uses torch.finfo(attn_scores.dtype).min
+    mask_value = -1e9 if attn_scores.dtype == torch.float32 else torch.finfo(attn_scores.dtype).min
+    mask_value = torch.tensor(mask_value, dtype=attn_scores.dtype).to(attn_scores.device)
+    attn_scores = torch.where(causal_mask.to(attn_scores.device), attn_scores, mask_value)
+    if attention_mask is not None: attn_scores = attn_scores + attention_mask
+    if value is None: return None, attn_scores
 
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+    attn_weights = nn.functional.softmax(attn_scores, dim=-1)
 
     # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
     attn_weights = attn_weights.type(value.dtype)
     attn_weights = self.attn_dropout(attn_weights)
 
     attn_output = torch.matmul(attn_weights, value) # bnij,bnjd->bnid
+    # self.query2, self.key2, self.value2, self.attn_weights2, self.attn_output2 = query.to('cpu').float(), key.to('cpu').float(), value.to('cpu').float(), attn_weights.to('cpu').float(), attn_output.to('cpu').float()  # XD debug
     return attn_output, attn_weights
 
 def backup_heads(self):
@@ -563,7 +565,8 @@ def attn_forward(block, hq, hk, hv, by_head=None,
         q_rot = query[:, :, :, : self.rotary_dim]
         q_pass = query[:, :, :, self.rotary_dim :]
 
-        q_rot, k_rot = apply_rotary_pos_emb(q_rot, k_rot, is_gpt_neox=my_isinstance(self, GPTNeoXAttention))
+        rotary_emb=self.rotary_emb if my_isinstance(self, GPTNeoXAttention) else None
+        q_rot, k_rot = apply_rotary_pos_emb(q_rot, k_rot, rotary_emb=rotary_emb)
 
         key = torch.cat([k_rot, k_pass], dim=-1)
         query = torch.cat([q_rot, q_pass], dim=-1)
@@ -578,7 +581,7 @@ def attn_forward(block, hq, hk, hv, by_head=None,
     attn_output = self.resid_dropout(attn_output)
 
     head_input, head_output = None, None
-    if by_head:
+    if by_head and ('head_input' in by_head or 'head_output' in by_head):
         w_o = self.out_proj.weight.data
         do_bmm = True # not (any('0' in s for s in by_head) or w_o.dtype == torch.int8)
         if w_o.dtype == torch.int8: w_o = self.out_proj.weight.data0  # float16 weight on cpu
@@ -645,7 +648,7 @@ def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, res
     if layer is not None:
         model = block
         block = model.transformer.h[layer]
-    if str(hidden_states.device) != 'cpu':
+    if block.ln_2.weight.device != hidden_states.device:  # ln_2s and mlps are lazily moved to GPU in attribution
         for name in ['ln_2', 'mlp']:
             clone_module_to(block, name, hidden_states.device, remove_on_redo=False, switch=True)
     try:
@@ -655,7 +658,7 @@ def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, res
         logits, loss = lm_head_forward(model, hidden_states, logits_mask=logits_mask, labels=labels, loss_reduction=loss_reduction, scaled=scaled) \
             if labels is not None else (None, None)
     finally:
-        if str(hidden_states.device) != 'cpu':
+        if block.ln_2.weight.device != hidden_states.device:
             for name in ['ln_2', 'mlp']: switch_module_to(block, name, 'cpu')
     return Outputs(hidden_states=(hidden_states,), logits=logits, loss=loss)
 
@@ -1153,9 +1156,16 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
     args = args + [candidates, answer_indices]
     with torch.no_grad():
         o = forward0(model, input_ids.to(model.device), by_head=['value', 'attn_out'], ranges=ranges) \
-            if isinstance(model, nn.Module) and custom_forward else model(input_ids.to(getattr(model, 'device', 'cpu')))
+            if isinstance(model, nn.Module) and custom_forward else model(input_ids.to(getattr(model, 'device', 'cpu')), output_attentions=True, output_hidden_states=True)
+        # for name in ['logits', 'loss']: # move outputs of native forward to cpu
+        for field in fields(o):
+            name = field.name
+            if name == 'loss': # workaround for the weird bug of CausalLMOutputWithPast tampering values
+                setattr(o, name, None); continue
+            v = getattr(o, name)
+            if isinstance(v, torch.Tensor) and v.device != torch.device('cpu'):
+                setattr(o, name, v.to('cpu').float())
         logits = o.logits
-        if isinstance(logits, torch.Tensor): logits = logits.to('cpu').float()# softmax on cpu needs float32
     loss, top1_corrects, answer_probs, candidate_probs, logits_mask = show_predictions(
         tokenizer, *args, logits=logits, labels=labels, loss_reduction='mean',
         k_shot=k_shot, topk=3, verbose=verbose)
@@ -1354,7 +1364,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     embed_output = to(o.hidden_states[0], device)
     if embed_mask is not None:
         embed_output = einsum('bie,bi->bie', embed_output, embed_mask) # i=1 for embed_mask
-
+        
     if reduce_fn == torch.cat and head_mask is None and attn_weights is not None:
         head_mask = einops.reduce(attn_weights, '1 l n i j -> 1 l n i', 'sum')
         attn_weights = None
@@ -1835,8 +1845,8 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
             if d.top_score < threshold_score: continue
             for label_type in get_label_types(parent, d.attn_pattern):
                 if label_type and 'attn_labels' in label_type and d.attn_pattern.startswith('bos->ans0'):
-                    # label_type += '/ans0s'
-                    label_type += f':bos->~<s>,{k_shot}'
+                    label_type += '/ans0s'
+                    # label_type += f':bos->~<s>,{k_shot}'
                 _d = deepcopy(d)
                 _d.label_type = label_type
                 _d.attribute_k=attribute_k and label_type and 'attn_labels' in label_type
@@ -1846,9 +1856,8 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
             top_attn_pattern = [ap for ap in ap2score if not point_wise(ap)][0] # e.g. 'bos->ans0]' for step -1
             layers, heads, scores = topk_md(pd.ap_scores[top_attn_pattern], topk // 2)
             label_type = f'attn_labels:{top_attn_pattern},{k_shot}'  # 'attn_labels:bos->ans0],3'
-            # label_type += '/ans0s'
-            label_type = f'attn_labels:bos->~<s>,{k_shot}'
-            # add_node(node, head_attr_fn=head_attr_fn, topi=list(range(len(scores))), top_score=scores, dummy=True)
+            label_type += '/ans0s'
+            # label_type = f'attn_labels:bos->~<s>,{k_shot}'
 
             for layer, head, score in zip(layers, heads, scores):
                 attr_ap_score = None

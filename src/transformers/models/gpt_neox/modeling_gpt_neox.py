@@ -299,6 +299,7 @@ class GPTNeoXAttention(nn.Module):
         attn_weights = self.attention_dropout(attn_weights)
 
         attn_output = torch.matmul(attn_weights, value)
+        # self.query, self.key, self.value, self.attn_weights, self.attn_output = query.to('cpu').float(), key.to('cpu').float(), value.to('cpu').float(), attn_weights.to('cpu').float(), attn_output.to('cpu').float()  # XD debug
         return attn_output, attn_weights
 
 
@@ -938,18 +939,19 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
                     output_attentions=output_attentions,
                 )
             hidden_states = outputs[0]
-            # print(f'layer {i} mem usage:', torch.cuda.memory_allocated(), torch.cuda.memory_reserved())  # XD
             if use_cache is True:
                 presents = presents + (outputs[1],)
             if output_attentions:
-                all_attentions = all_attentions + (outputs[2 if use_cache else 1].to('cpu'),)  # XD
-        # if output_attentions: self.all_attentions = all_attentions; all_attentions = None  # XD
+                all_attentions = all_attentions + (outputs[2 if use_cache else 1],)
 
         hidden_states = self.final_layer_norm(hidden_states)
         # Add last hidden state
         if output_hidden_states:
-            all_hidden_states = all_hidden_states + (hidden_states.to('cpu'),)  # XD
-            # self.all_hidden_states = all_hidden_states; all_hidden_states = None  # XD
+            all_hidden_states = all_hidden_states + (hidden_states.to('cpu').float(),)  # XD
+
+        # XD: workaround for the weird bug of CausalLMOutputWithPast tampering values
+        if output_attentions: self.attentions = all_attentions; all_attentions = None
+        if output_hidden_states: self.hidden_states = all_hidden_states; all_hidden_states = None
 
         if not return_dict:
             return tuple(v for v in [hidden_states, presents, all_hidden_states, all_attentions] if v is not None)

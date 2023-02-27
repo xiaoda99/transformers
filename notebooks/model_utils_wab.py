@@ -674,7 +674,6 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
     if not isinstance(hidden_states, (list, tuple)): hidden_states = [hidden_states] * len(layer)
     else: assert len(layer) == len(head) == len(hidden_states), \
         f'{len(layer)}, {len(head)}, {len(hidden_states)}'
-
     def get_kwargs(layer, head, hs):
         if label_type and 'attn_labels' in label_type:
             assert head < H
@@ -709,7 +708,7 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
     fwd_outputs = [head_forward(model, hs, l, h, attribute_k=attribute_k, **get_kwargs(l, h, hs), **kwargs) 
         if h < H else mlp_forward(model, hs, layer=l, **get_kwargs(l, h, hs), **kwargs)
         for l, h, hs in zip(layer, head, hidden_states)]
-    if len(fwd_outputs) == 1: return fwd_outputs[0]
+    if len(fwd_outputs) == 1:return fwd_outputs[0]
 
     def try_sum(l):
         none_flags = [i is None for i in l]
@@ -1333,6 +1332,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         if o.values is not None:
             output = einsum('bkij,kjd->bkid', attn_weights,
                 to(gather_by_heads(o.values, attr_heads), device))
+            # k is number of top_k head 4*10*135*135 10*135*256
             # wos = torch.stack([rearrange((blocks[l].attn.out_proj.weight.data),
             #     'e (n d) -> n d e', n=H)[h] for l, h in attr_heads])  # k*[de]->kde
             output = einsum(f'blid,lde->b{kept_dim}ie', output, model.wos)
@@ -1352,8 +1352,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
 
     embed_output = to(o.hidden_states[0], device)
     if embed_mask is not None:
-        embed_output = einsum('bie,bi->bie', embed_output, embed_mask) # i=1 for embed_mask
-
+        embed_output = einsum('bie,bi->bie', embed_output, embed_mask) # i=1 for embed_mask 1*len*embedding scal_ba*1 4*135*4096
     if reduce_fn == torch.cat and head_mask is None and attn_weights is not None:
         head_mask = einops.reduce(attn_weights, '1 l n i j -> 1 l n i', 'sum')
         attn_weights = None
@@ -1362,9 +1361,10 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
             attn_outputs = None
             for i in range(l_, _l):
                 attn_output = einsum('bnid,bn->bind',
-                    to(o.attn_outs[i], device), head_mask[:, i])
+                    to(o.attn_outs[i], device), head_mask[:, i])#1*16*135*256  4*16 = 4*135*16*256 
+                
                 attn_output = rearrange(attn_output, f'b i n d -> b {kept_dim} i (n d)',
-                                    **({kept_dim: 1} if kept_dim else {}))  # l=1
+                                    **({kept_dim: 1} if kept_dim else {}))  # l=1  n*d变4096 拼起来
                 attn_output = blocks[i].attn.out_proj(attn_output)  # b{1}ie,ee->b{1}ie
                 attn_outputs = attn_output if attn_outputs is None else \
                     combine_fn([attn_outputs, attn_output])
@@ -1425,7 +1425,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         output = reduce_fn([embed_output, attn_outputs, mlp_outputs]) # bie for sum, (1+(ln)+l)ie for cat
 
     if labels is not None: logits, loss = lm_head_forward(model, output, **kwargs)
-    if on_gpu: print(f'mem_usage when enter / exit sum_forward: {mu} / {mem_usage(device)}. len = {output.size(1)}')
+    if on_gpu: print(f'mem_usage when enter / exit sum_forward: {mu} / {mem_usage(device)}. len = {output.size(1)}')  
     return Outputs(hidden_states=(output,), logits=logits, loss=loss)
 
 def scaled_input(input, num_points, baseline=None, requires_grad=True):
@@ -1495,7 +1495,7 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, forward_on
     scaled_x, grad = OrderedDict(), OrderedDict()
     with torch.enable_grad() if not forward_only else torch.no_grad():
         for key in x:
-            scaled_x[key] = scaled_input(x[key], num_points)
+            scaled_x[key] = scaled_input(x[key], num_points)#0-1切分
             grad[key] = 0.
         ys, hidden_states = [], []  # negative loss and hidden_states
         for i in range(0, num_points + 1, batch_size):
@@ -1503,12 +1503,13 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, forward_on
             o = forward_fn(model, forward_only=forward_only, **scaled_x_)
             hidden_states0 = o.hidden_states[-1].detach()  # maybe reused as sum_output for sum_forward
             hs, y, logits = post_forward_fn(model, o); ys.append(y); hidden_states.append(hs)
+
             for tensor, name in [(o.hidden_states[-1], 'hidden_states_in'), (hs, 'hidden_states_out'), 
                                 (y, 'y'), (logits, 'logits')]:
                 if name != 'hidden_states_out' or tensor is not None:
                     check_abnormal_tensor(tensor, name)
             if forward_only: continue
-            grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x.values()))
+            grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x.values()))#?
             for j, key in enumerate(grad_keys):
                 grad[key] = grad[key] + grad_[j].sum(dim=0, keepdim=True)
                 check_abnormal_tensor(grad[key], key + '.grad')
@@ -1555,7 +1556,6 @@ def attribute_step(data_tuple, model, node, attribute_k=False,
     device = device or model.lm_head.weight.device
     text, input_ids, labels, ranges, *_, o = data_tuple
     labels = labels.to(device)
-
     fns = path2fns(node, partial(node2fn, outputs=o, ranges=ranges, labels=labels))
     if len(fns) > 0: labels = None
     elif node.data.label_type == 'argmax_labels':  # for root
@@ -1878,6 +1878,7 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
             model.wos = torch.stack([rearrange(blocks[l].attn.out_proj.weight.data,
                 'e (n d) -> n d e', n=H)[h] for l, h in d.top_heads])  # k*[de]->kde, used by sum_forward
             # resulting attr.attn saved to o.attn_attr
+            print('d.top_heads',d.top_heads)
             mr(attribute_step)(data_tuples, model, node, attr_heads=d.top_heads)
             del model.wos
         # keep only topk attn_attr to save memory
@@ -2057,6 +2058,7 @@ def node2fn(node, outputs=None, ranges=None, labels=None):
         hidden_states0 = hidden_states0[-1:]  # bsz dim 2->1
 
     d = node.data
+    print('d_layer',d.layer)
     return partial(mixed_forward, layer=d.layer, head=d.head, labels=labels, label_type=d.label_type,
         attn_pattern=d.attn_pattern, outputs=outputs, attn_attr=outputs.attn_attr[node2key(node.parent)],
         hidden_states0=hidden_states0, ranges=ranges, attribute_k=d.attribute_k, scaled=True)
