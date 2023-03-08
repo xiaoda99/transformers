@@ -172,3 +172,6 @@ notebooks/data
 notebooks/results
 notebooks/gpt-j-6B
 notebooks/nrk/attention
+notebooks/nrk
+notebooks/lxy
+notebooks/nohup.out

@@ -77,7 +77,7 @@ class AttrData:
     topi: int = None
     layer: int = None
     head: int = None
-    H: int = None
+    H: int = 64  # 64 for gpt-neox, 16 for gpt-j
     label_type: str = None
     attn_pattern: str = None
     attribute_k: bool = False
@@ -346,24 +346,20 @@ def apply_rotary_pos_emb(query_rot, key_rot, offset=0, rotary_emb=None):
     return query_rot, key_rot
 
 def bmm_attn_scores(self, query, key):  # adapted from modeling_gpt_neox.py
-    batch_size, num_attention_heads, query_length, attn_head_size = query.size()
-    _, _, key_length, _ = query.size()
+    query_batch_size, num_attention_heads, query_length, attn_head_size = query.size()
+    key_batch_size, _, key_length, _ = key.size()
+    batch_size = query_batch_size
+    if query_batch_size != key_batch_size:
+        assert query_batch_size == 1 or key_batch_size == 1  # the larger one is scaled for attribution
+        batch_size = max(query_batch_size, key_batch_size)
+        if key_batch_size == 1: key = key.expand(batch_size, -1, -1, -1)
+        if query_batch_size == 1: query = query.expand(batch_size, -1, -1, -1)
     query = query.view(batch_size * num_attention_heads, query_length, attn_head_size)
     key = key.view(batch_size * num_attention_heads, key_length, attn_head_size)
-    attn_scores = torch.zeros(
-        batch_size * num_attention_heads,
-        query_length,
-        key_length,
-        dtype=query.dtype,
-        device=key.device,
-    )
-    attn_scores = torch.baddbmm(
-        attn_scores,
-        query,
-        key.transpose(1, 2),
-        beta=1.0,
-        alpha=(torch.tensor(1.0, dtype=self.norm_factor.dtype, device=self.norm_factor.device) / self.norm_factor),
-    )
+    attn_scores = torch.zeros(batch_size * num_attention_heads, query_length, key_length,
+        dtype=query.dtype, device=key.device)
+    attn_scores = torch.baddbmm(attn_scores, query, key.transpose(1, 2), beta=1.0,
+        alpha=(torch.tensor(1.0, dtype=self.norm_factor.dtype, device=self.norm_factor.device) / self.norm_factor))
     attn_scores = attn_scores.view(batch_size, num_attention_heads, query_length, key_length)
     return attn_scores
 
@@ -1691,7 +1687,7 @@ def abbreviate_label_type(label_type):
 
 from operator import lt, ge
 
-def data2str(data, verbose=True):
+def data2str(data, threshold_score=0.3, verbose=True):
     d = data
     step, topi, layer, head, H, label_type, attn_pattern, ap_score, attr_ap_score, attribute_k, top_score, sensitivity = \
         d.step, d.topi, d.layer, d.head, d.H, d.label_type, d.attn_pattern, d.ap_score, d.attr_ap_score, d.attribute_k, d.top_score, d.sensitivity
@@ -1708,7 +1704,7 @@ def data2str(data, verbose=True):
                 if sensitivity is not None and attn_pattern != 'bos->ans]': s += f'/{sensitivity:.1f}'
     else:  # dummy node
         def suffix(score): return f' {int(round(score*100))}' if verbose and \
-            top_score is not None and (lt if step < 2 else ge)(score, 0.4) else ''
+            top_score is not None and (lt if step < 2 else ge)(score, threshold_score) else ''
         s = ','.join([f'{l}-{wrap(h)}{suffix(score)}' for l, h, score in zip(layer, head,
             top_score if top_score is not None else [None] * len(layer))])
         if verbose and attn_pattern is not None:
@@ -1744,14 +1740,14 @@ def update_attr_data(data, head_attr):
     return d
 
 def _add_node(parent, data, verbose=True):
-    data.H = parent.data.attr.head.size(-1)  # ln
     node = {data2str(c.data, verbose=False): c for c in parent.children}.get(
             data2str(data, verbose=False))
     if node is None or data.dummy:
         node = Node(data2str(data), parent); node.data = data  # prepend=data.dummy
         if verbose: print('In _add_node: add', node.name)#; plot_tree(node)
     else:
-        node.name = data2str(node.data)  # update name in case data2str has been updated
+        # update name in case data.attn_pattern or data2str has been updated
+        node.name = data2str(data if node.data.attn_pattern != data.attn_pattern else node.data)
     return node
 
 def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_type=None, attn_pattern=None, 
@@ -1805,7 +1801,7 @@ def get_label_types(parent, attn_pattern):
     if parent.parent is None:  return ['labels']
     return [None]
 
-def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score=0.4,
+def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score=0.3,
                 k_shot=None, attribute_k=False, add_dummy_node=False, verbose=True):
     pd = parent.data; L, H = pd.attr.head.size()
     head_attr_fn = head_attr_fn or get_head_mlp_attr
@@ -1840,7 +1836,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
     parent.children = [c for c in parent.children if not c.data.dummy]
 
     # pd.attn_pattern == 'bos->query' and pd.label_type == 'attn_labels':
-    if pd.step < 1 or pd.step == 1 and pd.attn_pattern == 'bos->ans]':
+    if pd.step < 1 or pd.step == 1 and pd.attn_pattern in ['bos->tgt', 'bos->query']:
         for d in top_data:
             if d.top_score < threshold_score: continue
             for label_type in get_label_types(parent, d.attn_pattern):
@@ -1851,10 +1847,19 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
                 _d.label_type = label_type
                 _d.attribute_k=attribute_k and label_type and 'attn_labels' in label_type
                 _add_node(parent, _d, verbose=verbose)
+
+            if d.head < H:
+                if d.attr_ap_score > 0.4:
+                    for data_tuple in data_tuples:
+                        attn_attr = data_tuple[-1].attn_attr[node2key(parent)]
+                        if (layer, head) in attn_attr: del attn_attr[layer, head]
+                    print('In expand_node: remove attn_attr', data2str(d))
+                else:
+                    print('In expand_node: keep attn_attr', data2str(d))
                 
         if pd.step == -1:
             top_attn_pattern = [ap for ap in ap2score if not point_wise(ap)][0] # e.g. 'bos->ans0]' for step -1
-            layers, heads, scores = topk_md(pd.ap_scores[top_attn_pattern], topk // 2)
+            layers, heads, scores = topk_md(pd.ap_scores[top_attn_pattern], 5) #topk // 2)
             label_type = f'attn_labels:{top_attn_pattern},{k_shot}'  # 'attn_labels:bos->ans0],3'
             label_type += '/ans0s'
             # label_type = f'attn_labels:bos->~<s>,{k_shot}'
@@ -1883,16 +1888,16 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
                 **{k: [getattr(d, k) for d in data_group] for k in ['layer', 'head', 'topi', 'top_score']})
         parent.children = parent.children[n_chilren:] + parent.children[:n_chilren]  # move dummy nodes to top
 
-# def filter_fn(p, c):
-#     return p.step == -1 and c.ap_score > 0.7 and c.top_score > 0 and c.head < c.H or \
-#         p.step == 0 and c.attn_pattern in ['bos->query', 'bos->bos'] and c.head < c.H or \
-#         p.step == 1 and p.attn_pattern == 'bos->query' and p.label_type == 'attn_labels' and c.attn_pattern == 'bos->ans'
-
 def filter_fn(p, c):
-    return p.step == -1 and c.ap_score > 0.7 and c.top_score > 0 and c.head < c.H or \
-        p.step == 0 and p.attn_pattern.startswith('bos->ans0') and c.attn_pattern in ['bos->ans]', 'bos->bos'] and c.head < c.H
+    return p.step == -1 and c.attn_pattern.startswith('bos->ans0') and c.ap_score > 0.7-0.32 and c.top_score > 0 and c.head < c.H or \
+        p.step == 0 and p.attn_pattern.startswith('bos->ans0') and c.attn_pattern in ['bos->query', 'bos->tgt'] and c.head < c.H or \
+        p.step == 1 and p.attn_pattern == 'bos->query' and c.attn_pattern == 'query->tgt'
 
-def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=0.4,
+# def filter_fn(p, c):
+#     return p.step == -1 and c.ap_score > 0.7-0.32 and c.top_score > 0 and c.head < c.H or \
+#         p.step == 0 and p.attn_pattern.startswith('bos->ans0') and c.attn_pattern in ['bos->ans]', 'bos->bos'] and c.head < c.H
+
+def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=0.3,
                 k_shot=None, attribute_k=False, device=None, verbose=True):
     blocks = model.transformer.h
     L, H = len(blocks), blocks[0].attn.num_heads
@@ -1900,10 +1905,12 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
     d = node.data; node_key = node2key(node)
     if d.step > max_step: return
     *_, o =  data_tuples[0]
+    _topk = round(topk * d.layer / L)
     if d.attr is None or node_key not in o.attn_attr:
-        with Timer(f'In attribute_tree: attribute_step {node.name}'):
+        with Timer(f'In attribute_tree: attribute_step {node.name}, topk={_topk}'):
             d.attr = mr(attribute_step)(data_tuples, model, node)
-        d.top_heads = list(zip(*topk_md(d.attr.head, topk)[:2]))
+        d.top_heads = list(zip(*topk_md(get_head_mlp_attr(d), _topk)[:2]))
+        d.top_heads = [(l, h) for l, h in d.top_heads if h < H]
 
         with Timer(f'In attribute_tree: attribute_step stage2 {node.name}'):
             model.wos = torch.stack([rearrange(blocks[l].attn.out_proj.weight.data,
@@ -1911,8 +1918,7 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
             # resulting attr.attn saved to o.attn_attr
             mr(attribute_step)(data_tuples, model, node, attr_heads=d.top_heads)
             del model.wos
-        # keep only topk attn_attr to save memory
-        for *_, o in data_tuples:
+        for *_, o in data_tuples:  # keep only topk attn_attr to save memory
             o.attn_attr[node_key] = OrderedDict((lh, o.attn_attr[node_key][lh]) for lh in d.top_heads)
 
     text, input_ids, labels, ranges, *args, o = data_tuples[0]
@@ -1920,14 +1926,14 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
     kwargs = dict(k_shot=k_shot, attribute_k=attribute_k)
     ap_scores = get_root(node).data.ap_scores
     _attn_patterns = [ap for ap in attn_patterns if ap not in ap_scores]
-    with Timer('get ap_scores'):
+    if True: #with Timer('get ap_scores'):
         ap_scores.update(mr(get_head_matching_scores)(
             data_tuples, _attn_patterns, device=device, **kwargs))
-    with Timer('get attr_ap_scores'):
+    if True: #with Timer('get attr_ap_scores'):
         d.attr_ap_scores = OrderedDict([(ap, mr(get_head_matching_scores)(
             data_tuples, ap, node_key=node_key, **kwargs)) for ap in attn_patterns])
 
-    expand_node(data_tuples, node, topk=topk, threshold_score=threshold_score,
+    expand_node(data_tuples, node, topk=_topk, threshold_score=threshold_score,
         k_shot=k_shot, attribute_k=attribute_k, add_dummy_node=True, verbose=verbose)
 
     for child in node.children:
@@ -2306,16 +2312,12 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         if isinstance(h, Iterable) or h == H: return
 
     aw = o.attentions[l][0, h]
-    if plot_attr: aa = o.attn_attr[node2key(node)][l, h] if (l, h) in o.attn_attr[node2key(node)] else aw
+    if plot_attr: aa = o.attn_attr[node2key(node)][l, h] * aw if (l, h) in o.attn_attr[node2key(node)] else aw
     attns, ystart = ([aw, aa], bos_indices[k_shot]) if plot_attr else ([aw], 0)
     if attn_patterns and not attribute_k and attn_patterns[0].lower().startswith('a'):
         # 'ans]->ans0]' or 'ans]->ans0+' for relating heads
         ystart, ystop = 0, bos_indices[-(k_shot+2)] + 3
 
-    _, axs = plt.subplots(1, len(attns), sharex=False, sharey=False,
-                figsize=(20*len(attns), 20/(ystop-ystart)*aw_size[0]))
-                # figsize=(20*len(attns)*(ystop-ystart)/aw_size[0], 20))
-    if len(attns) == 1: axs = [axs]
     y_pos, x_pos = None, None
     if attn_patterns is not None:
         all_attn_labels = [attn_pattern2labels(ranges, ap, aw_size,
@@ -2328,6 +2330,10 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         y_pos, x_pos = attn_labels.nonzero().T
         print('ap_scores =', get_ap_scores(aw, attn_labels, ranges_q))
     if True: #with Timer():
+        _, axs = plt.subplots(1, len(attns), sharex=False, sharey=False,
+                    figsize=(20*len(attns), 20/(ystop-ystart)*aw_size[0]))
+                    # figsize=(20*len(attns)*(ystop-ystart)/aw_size[0], 20))
+        if len(attns) == 1: axs = [axs]
         for ax, a in zip(axs, attns):
             _plot_attn(a, tokens, ax=ax, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
                 fontsize=10, transpose=True, use_imshow=False)
@@ -2335,12 +2341,12 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
 
 attn_patterns_by_step = {
     -1: ['bos->ans0'],
-    0: ['bos->ans]', 'bos->query]', 'bos->ans0+',
+    0: ['bos->ans]', 'bos->query', 'bos->ans0+', 'bos->tgt',
         'bos->sep',  # 11-4
         'bos->sep+',  # 13-11
         'bos->query-', # 10-11?
         ],
-    1: ['ans]->ans0]', 'ans]->ans0+', 'query]->tgt]','query]->tgt+', 'query]->ans0]'],
+    1: ['ans]->ans0]', 'ans]->ans0+', 'query->tgt','query->tgt+', 'query->ans0', 'tgt->ans0'],
     2: ['ans0->tgt', 'ans0->tgt+'], 3: ['tgt+->tgt']
 }
 all_attn_patterns = join_lists(attn_patterns_by_step.values())# + ['bos->bos']
@@ -2422,90 +2428,6 @@ def gen_detach_heads_tuples(module, exit_module, kept_layer, kept_head):
             tuples.append((get_attn_module(block), 'attn_weights_transform',
                           get_detach_heads_fn(kept_head=kept_head if i == kept_layer else None)))
     return tuples
-
-# def forward(module, names, values=None, exit_module=None, extra_tuples=None,
-#             detach_type=None, detach_pos=None, kept_layer=None, kept_head=None):
-#     if type(names) != list: names, values = [names], [values]
-#     if type(names) == list and type(values) != list: values = [values for _ in range(len(names))]
-#     for name, value in zip(names, values): setattr(module, name, value)
-#     if exit_module is not None: setattr(exit_module, 'exit', True)
-#     if extra_tuples is not None:
-#         for m, name, val in extra_tuples: setattr(m, name, val)
-#     if detach_type is not None:
-#         detach_pairs = gen_detach_pairs(module, exit_module, detach_type=detach_type)
-#         for m, name in detach_pairs: setattr(m, name, get_detach_fn(detach_pos))
-#     if kept_head is not None:
-#         detach_tuples = gen_detach_heads_tuples(module, exit_module, kept_layer=kept_layer, kept_head=kept_head)
-#         for m, name, fn in detach_tuples: setattr(m, name, fn)
-#     try: outputs = model(**inputs, output_attentions=True, output_hidden_states=exit_module is not None)
-#     finally:
-#         if values[0] is None: embs = [getattr(module, name) for name in names]
-#         for name in names: try_delattr(module, name)
-#         if exit_module is not None: try_delattr(exit_module, 'exit')
-#         if detach_type is not None:
-#             for m, name in detach_pairs: try_delattr(m, name)
-#         if kept_head is not None:
-#             for m, name, _ in detach_tuples: try_delattr(m, name)
-#         if extra_tuples is not None:
-#             for m, name, _ in extra_tuples: try_delattr(m, name)
-#     if values[0] is None and len(names) == 1: embs = embs[0]
-#     return embs if values[0] is None else outputs
-
-
-# def test(hidden, query, key=None, logits=None, always_show=False):
-#     if logits is None:
-#         if key is None:
-#             key = self.k_proj(hidden)
-#             key = self._split_heads(key, self.num_heads, self.head_dim)[0, head2]
-#         logits = (query * key).sum(dim=-1)
-#     else:
-#         always_show = True
-#     cand_pos = torch.LongTensor(cand_positions).view(-1, n_candidates)
-#     is_extremal = [logits[p] == logits[cand_pos[i]].max() for i, p in enumerate(tgt_positions)]
-#     if always_show or sum(is_extremal[1:]) / len(tgt_positions[1:]) > 0.9:
-#         logits[0] = logits[1]
-#         plot(logits)
-#         _ = plt.xticks(range(len(logits)), tokens)
-#         for p, b in zip(tgt_positions, is_extremal): plt.axvline(x=p, color='gray' if b else 'r')
-#         plt.show()
-#         probs = logits[cand_positions].view(-1, n_candidates).softmax(-1)[cand_is_tgt]
-#         print(numpy(probs), '\n', probs.mean())
-#         return True
-#     return False 
-
-
-def plot_tgt_attn_losses(labels, losses, losses1):
-    x = np.arange(len(labels))  # the label locations
-    width = 0.35  # the width of the bars
-    fig, ax = plt.subplots(figsize=(20, 4))
-    losses, losses1 = [int(l*100) for l in losses], [int(l*100) for l in losses1]
-    rects1 = ax.bar(x - width/2, losses, width, label='loss')
-    rects2 = ax.bar(x + width/2, losses1, width, label='loss1')
-    _ = ax.set_xticks(x)
-    _ = ax.set_xticklabels(labels)
-    _ = ax.legend()
-    _ = ax.bar_label(rects1, padding=3)
-    _ = ax.bar_label(rects2, padding=3)
-
-
-def create_mask(from_positions, to_positions, accum=False):
-    mask = torch.zeros(1, seq_len, seq_len)
-    for i in range(0, nrows):
-        if not accum:
-            mask[:, from_positions[i], to_positions[i]] = 1
-        else:
-            mask[:, from_positions[i], to_positions[:i]] = 1 / i if i > 0 else 0
-    return mask
-
-# combined_weights = {}
-
-# def get_combined_w(layer, head, qk=False):
-#     if (layer, head, qk) in combined_weights: return combined_weights[(layer, head, qk)]
-#     wq, wk, wv, wo = get_head_weights(layer, head)
-#     w = torch.matmul(wq, wk) if qk else torch.matmul(wv, wo)
-#     combined_weights[(layer, head, qk)] = w
-#     return w
-
 
 # ans_positions = bos_indices + 1
 # src = bos_indices[-1].item()

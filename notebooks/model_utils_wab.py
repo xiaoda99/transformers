@@ -1142,6 +1142,7 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
             custom_forward=True, trim=False, verbose=True):
     input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
         text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
+
     candidates, answer_indices = None, None
     cxt, query, cands, *_ = examples[0]
     if cands is not None:
@@ -1162,7 +1163,45 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
     data_tuple = [text, input_ids, labels, ranges] + args + [o]
     eval_result = (loss, top1_corrects[k_shot:], answer_probs, candidate_probs)
     return data_tuple, eval_result
-
+def predict_wab(model,tokenizer,dataset,custom_forward=True, trim=False, num_sp = 10, result=None):
+    #labels
+    if result == None:
+        result = Result(texts=dataset.sentences)
+    input_txt = []
+    input_en = []
+    label_en = []
+    count = 0 
+    cur_in = []
+    cur_lab = []
+    for inp in dataset.sentences:
+        count +=1
+        en = tokenizer.encode(inp+'\n', return_tensors='pt')
+        cur_in.append(en)
+        l_en = torch.ones_like(en) * (-100)
+        l_en[0][-3] = en[0][-2]
+        cur_lab.append(l_en)
+        if count == num_sp:
+            count = 0
+            input_en.append(torch.cat(cur_in,1))
+            print(torch.cat(cur_in,1).size())
+            label_en.append(torch.cat(cur_lab,1))
+            cur_in = []
+            cur_lab = []
+    for i in range(5):
+        input_txt.append(dataset.sentences[i*10:(i+1)*10])   
+    def pre_and_for(model,tokenizer,text,input_ids,labels):     
+        with torch.no_grad():
+            ranges = None
+            o = forward0(model, input_ids.to(model.device), by_head=['value', 'attn_out'], ranges=ranges) \
+                if isinstance(model, nn.Module) and custom_forward else model(input_ids.to(getattr(model, 'device', 'cpu')))
+        data_tuple = [text, input_ids, labels, ranges] + [o]
+        return data_tuple
+    if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):
+        with Timer('In generate_and_predict_batch: predict'):
+                data_tuples = [pre_and_for(model, tokenizer, text,input_ids,labels)
+                for text,input_ids,labels in zip(input_txt,input_en,label_en)] 
+        result.data_tuples = data_tuples
+    return result,input_en
 def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size, trim=False, verbose=True, result=None, **gen_args):
     if result is None:
         all_examples, texts, all_bos_tokens = zip(*[generate(task, verbose=False, plot=False, nrows=nrows, **gen_args)
@@ -1184,6 +1223,7 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
         result.mean_loss, result.mean_acc = np.array(loss).mean(), np.array(join_lists(acc)).mean()
         print(result.mean_loss, result.mean_acc)
     return result
+
 
 def show_predictions_by_data_tuples(model, tokenizer, data_tuples, k_shot, to_layer=None, verbose=True):
     losses, acc = [], []
@@ -1770,7 +1810,7 @@ def point_wise(attn_pattern, label_type=None):
     return src == dst
 
 def get_label_types(parent, attn_pattern):
-    # if attn_pattern == 'bos->query' and parent.data.attn_pattern == 'bos->ans0': return [None, 'attn_labels']
+    if attn_pattern == 'bos->query' and parent.data.attn_pattern == 'bos->ans0': return [None, 'attn_labels']
     if any(not point_wise(n.data.attn_pattern, n.data.label_type) for n in node2path(parent)): return [None]
     if not point_wise(attn_pattern): return ['attn_labels']
     if parent.parent is None:  return ['labels']
@@ -1886,7 +1926,7 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
             o.attn_attr[node_key] = OrderedDict((lh, o.attn_attr[node_key][lh]) for lh in d.top_heads)
 
     text, input_ids, labels, ranges, *args, o = data_tuples[0]
-    attn_patterns = get_possible_attn_patterns(node, ranges)
+    attn_patterns = get_possible_attn_patterns(node, ranges)#range()zanshiqudiao
     kwargs = dict(k_shot=k_shot, attribute_k=attribute_k)
     ap_scores = get_root(node).data.ap_scores
     _attn_patterns = [ap for ap in attn_patterns if ap not in ap_scores]

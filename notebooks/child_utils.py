@@ -768,6 +768,7 @@ class Ranges:
     ans0s: list = None
     example: tuple = None
 
+
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
 def locate(tokens, substring, return_last=False):
     if substring is None: return None
