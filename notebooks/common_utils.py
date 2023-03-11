@@ -236,3 +236,16 @@ def fn2str(fn, excluded_keys=[]):
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def move_model_files(model_name = 'gpt-neox-20b',
+        dir0 = '/nas/xd/.cache/torch/transformers',
+        dir1 = '/mnt/nvme1/xd/.cache/torch/transformers'):
+    import glob
+    import os, shutil
+    from pathlib import Path
+
+    for link in glob.glob(f'{dir0}/{model_name}*'):
+        tgt = Path(link).resolve()
+        with Timer(f'copying {link}'): shutil.copy(tgt, dir1)
+        os.symlink(tgt, os.path.join(dir1, os.path.split(link)[-1]))
+    

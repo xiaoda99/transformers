@@ -1,73 +1,223 @@
-[I 07:39:26.290 NotebookApp] The port 8888 is already in use, trying another port.
-[I 07:39:26.290 NotebookApp] The port 8889 is already in use, trying another port.
-[W 07:39:26.292 NotebookApp] Error loading server extension jupyter_nbextensions_configurator
-    Traceback (most recent call last):
-      File "/home/xd/.local/lib/python3.8/site-packages/notebook/notebookapp.py", line 2033, in init_server_extensions
-        mod = importlib.import_module(modulename)
-      File "/home/kf/miniconda3/envs/pytorch1.7.1/lib/python3.8/importlib/__init__.py", line 127, in import_module
-        return _bootstrap._gcd_import(name[level:], package, level)
-      File "<frozen importlib._bootstrap>", line 1014, in _gcd_import
-      File "<frozen importlib._bootstrap>", line 991, in _find_and_load
-      File "<frozen importlib._bootstrap>", line 973, in _find_and_load_unlocked
-    ModuleNotFoundError: No module named 'jupyter_nbextensions_configurator'
-[I 07:39:26.294 NotebookApp] Serving notebooks from local directory: /nas/xd/projects/transformers/notebooks
-[I 07:39:26.294 NotebookApp] Jupyter Notebook 6.3.0 is running at:
-[I 07:39:26.294 NotebookApp] http://localhost:8890/?token=c3ae446acc25e674fa3dfc865cc8369bd6247620dec82072
-[I 07:39:26.294 NotebookApp]  or http://127.0.0.1:8890/?token=c3ae446acc25e674fa3dfc865cc8369bd6247620dec82072
-[I 07:39:26.294 NotebookApp] Use Control-C to stop this server and shut down all kernels (twice to skip confirmation).
-[W 07:39:26.298 NotebookApp] No web browser found: could not locate runnable browser.
-[C 07:39:26.298 NotebookApp] 
+[I 10:41:10.969 NotebookApp] [jupyter_nbextensions_configurator] enabled 0.6.1
+[I 2023-03-09 10:41:19.940 LabApp] JupyterLab extension loaded from /nas/shawn_guo/miniconda3/envs/torch1.7/lib/python3.7/site-packages/jupyterlab
+[I 2023-03-09 10:41:19.941 LabApp] JupyterLab application directory is /nas/shawn_guo/miniconda3/envs/torch1.7/share/jupyter/lab
+[I 10:41:19.997 NotebookApp] The port 8888 is already in use, trying another port.
+[I 10:41:20.018 NotebookApp] The port 8889 is already in use, trying another port.
+[I 10:41:20.066 NotebookApp] The port 8890 is already in use, trying another port.
+[I 10:41:20.112 NotebookApp] The port 8891 is already in use, trying another port.
+[I 10:41:20.154 NotebookApp] The port 8892 is already in use, trying another port.
+[I 10:41:20.202 NotebookApp] Serving notebooks from local directory: /nas/xd/projects/transformers
+[I 10:41:20.253 NotebookApp] Jupyter Notebook 6.4.12 is running at:
+[I 10:41:20.278 NotebookApp] http://localhost:8809/?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396
+[I 10:41:20.331 NotebookApp]  or http://127.0.0.1:8809/?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396
+[I 10:41:20.374 NotebookApp] Use Control-C to stop this server and shut down all kernels (twice to skip confirmation).
+[C 10:41:20.483 NotebookApp] 
     
     To access the notebook, open this file in a browser:
-        file:///home/xd/.local/share/jupyter/runtime/nbserver-58399-open.html
+        file:///home/xd/.local/share/jupyter/runtime/nbserver-14049-open.html
     Or copy and paste one of these URLs:
-        http://localhost:8890/?token=c3ae446acc25e674fa3dfc865cc8369bd6247620dec82072
-     or http://127.0.0.1:8890/?token=c3ae446acc25e674fa3dfc865cc8369bd6247620dec82072
-[I 07:43:25.298 NotebookApp] Creating new notebook in /
-[I 07:43:25.441 NotebookApp] Kernel started: dc3c94ed-d035-487b-ae06-17806b5e7e20, name: xyliwaf
-[W 07:43:25.464 NotebookApp] delete /default-c2718fa7-9363-410f-a845-4b6a516bccc2.ipynb
-[W 07:43:25.503 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/default-c2718fa7-9363-410f-a845-4b6a516bccc2.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
-[I 07:43:25.969 NotebookApp] Kernel shutdown: dc3c94ed-d035-487b-ae06-17806b5e7e20
-[I 07:43:40.354 NotebookApp] Creating new notebook in /
-[I 07:43:40.415 NotebookApp] Kernel started: b4a8ea45-3dee-49ff-af85-f64f3b0d9900, name: xyliwaf
-[W 07:43:40.436 NotebookApp] delete /default-6868511b-8e48-4d4e-851a-ec44020c0447.ipynb
-[W 07:43:40.438 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/default-6868511b-8e48-4d4e-851a-ec44020c0447.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
-[I 07:43:41.004 NotebookApp] Kernel shutdown: b4a8ea45-3dee-49ff-af85-f64f3b0d9900
-[I 07:48:33.076 NotebookApp] Creating new notebook in /
-[I 07:48:33.142 NotebookApp] Kernel started: 4c46c637-99e3-478a-8890-f91d59fc2cae, name: python3
-[W 07:48:33.162 NotebookApp] delete /child_analysis-Copy1-1a3eaed6-7879-4b6b-94a4-c472090f5a7b.ipynb
-[W 07:48:33.163 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/child_analysis-Copy1-1a3eaed6-7879-4b6b-94a4-c472090f5a7b.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
-[I 07:48:33.894 NotebookApp] Creating new notebook in /
-[I 07:48:33.958 NotebookApp] Kernel started: ebcf6815-d4ea-41a6-9064-23c75ee82863, name: python3
-[W 07:48:33.979 NotebookApp] delete /child_analysis-Copy1-9561bf12-8132-48e9-aca5-e23e26922e1a.ipynb
-[W 07:48:33.981 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/child_analysis-Copy1-9561bf12-8132-48e9-aca5-e23e26922e1a.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
-[I 07:54:52.485 NotebookApp] Kernel interrupted: 4c46c637-99e3-478a-8890-f91d59fc2cae
-[I 05:25:54.705 NotebookApp] Starting buffering for 4c46c637-99e3-478a-8890-f91d59fc2cae:b3da1cff-e320-4294-ac9d-8a26ba65ef47
-[I 05:25:54.735 NotebookApp] Kernel shutdown: ebcf6815-d4ea-41a6-9064-23c75ee82863
-[W 11:15:42.126 NotebookApp] zmq message arrived on closed channel
-[W 11:15:42.127 NotebookApp] Got events for closed stream None
-[I 09:55:52.686 NotebookApp] Creating new notebook in /
-[I 09:55:52.764 NotebookApp] Kernel started: 2acbc30d-1a26-491d-80f8-74a9fc5e14e3, name: xyliwaf
-[W 09:55:52.785 NotebookApp] delete /default-f681f1e5-c0c9-4dce-94ff-b8b0cd3d4104.ipynb
-[W 09:55:52.839 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/default-f681f1e5-c0c9-4dce-94ff-b8b0cd3d4104.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
-[I 09:55:53.248 NotebookApp] Kernel shutdown: 2acbc30d-1a26-491d-80f8-74a9fc5e14e3
-[I 10:47:39.912 NotebookApp] Creating new notebook in /
-[I 10:47:40.059 NotebookApp] Kernel started: 19547ebc-0f73-4e10-a86b-137f4dbb4c18, name: python3
-[W 10:47:40.079 NotebookApp] delete /child_analysis-Copy1-1bb528fc-5d00-4bce-a60a-fae9440885d1.ipynb
-[W 10:47:40.142 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/child_analysis-Copy1-1bb528fc-5d00-4bce-a60a-fae9440885d1.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
-[I 10:47:40.809 NotebookApp] Creating new notebook in /
-[I 10:47:40.868 NotebookApp] Kernel started: b8caa870-db29-4c6c-bf3f-98ce0ef35206, name: python3
-[W 10:47:40.879 NotebookApp] delete /child_analysis-Copy1-3b417d0b-14fa-4f63-99bf-2a6c7b133e2c.ipynb
-[W 10:47:40.881 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/child_analysis-Copy1-3b417d0b-14fa-4f63-99bf-2a6c7b133e2c.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
-[I 10:06:03.823 NotebookApp] Starting buffering for 19547ebc-0f73-4e10-a86b-137f4dbb4c18:fbadd681-b12c-4eaa-af34-0efa7aa6412e
-[I 10:06:03.847 NotebookApp] Kernel shutdown: b8caa870-db29-4c6c-bf3f-98ce0ef35206
-[I 17:13:12.797 NotebookApp] Creating new notebook in /
-[I 17:13:12.907 NotebookApp] Kernel started: f2f0a5ac-dd9f-4a39-8a7c-62da23aa61ef, name: xyliwaf
-[W 17:13:12.929 NotebookApp] delete /default-07802639-e74d-442a-8790-a77129018116.ipynb
-[W 17:13:12.931 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/default-07802639-e74d-442a-8790-a77129018116.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
-[I 17:13:13.460 NotebookApp] Kernel shutdown: f2f0a5ac-dd9f-4a39-8a7c-62da23aa61ef
-[I 18:17:46.484 NotebookApp] Creating new notebook in /
-[I 18:17:46.582 NotebookApp] Kernel started: 03358ba7-e9ca-42d8-a10c-ef1aa926552f, name: xyliwaf
-[W 18:17:46.605 NotebookApp] delete /default-f3053dbb-36d3-4540-b362-f21e49c6c09c.ipynb
-[W 18:17:46.658 NotebookApp] Skipping trash for /nas/xd/projects/transformers/notebooks/default-f3053dbb-36d3-4540-b362-f21e49c6c09c.ipynb, [Errno 13] Permission denied: b'/nas/.Trash-1018'
-[I 18:17:47.056 NotebookApp] Kernel shutdown: 03358ba7-e9ca-42d8-a10c-ef1aa926552f
+        http://localhost:8809/?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396
+     or http://127.0.0.1:8809/?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396
+Refresh (1 sec) http://localhost:8809/tree?token=
+8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396
+
+This page should redirect you to Jupyter Notebook. If it doesn't, click here to
+go to Jupyter.
+
+[I 10:41:29.019 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 2.070000ms
+[I 10:41:36.310 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 207.250000ms
+[W 10:42:25.987 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:42:28.155 NotebookApp] Kernel started: e0635921-cec3-4510-aca9-3ee314126233, name: python3
+[W 10:42:29.001 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 181.080000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 10:42:29.529 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 18.890000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 10:44:30.795 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:44:30.798 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:46:29.204 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:46:29.207 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:52:28.692 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:52:28.700 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:54:44.249 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:54:44.251 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:14:28.052 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:14:28.055 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:34:28.015 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:34:28.018 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 16:01:26.360 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 16:01:26.525 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 5.260000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 16:01:28.675 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 7.980000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 16:26:33.859 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:26:33.862 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:49:28.978 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:49:28.982 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:53:28.457 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:53:28.461 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:53:28.853 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:53:28.856 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:55:28.743 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:55:28.747 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:57:28.584 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:57:28.588 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 16:59:28.580 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:59:28.585 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:05:28.673 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:05:28.676 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:07:28.537 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:07:28.540 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:09:36.665 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:09:36.668 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:11:28.586 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:11:28.590 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:16:45.719 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:16:45.721 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:17:28.546 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:17:28.550 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:19:30.467 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:19:30.470 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:21:36.219 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:21:36.221 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:23:28.628 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:23:28.633 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:25:29.132 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:25:29.136 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:31:28.528 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:31:28.532 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 17:33:28.837 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:33:28.841 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 17:35:28.548 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:35:28.552 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:41:52.640 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:41:52.643 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:42:49.124 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:42:49.127 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:43:29.811 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:43:29.814 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:45:28.555 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:45:28.564 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:47:39.494 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:47:39.498 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:53:03.430 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:53:03.434 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:53:31.627 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:53:31.630 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:55:28.526 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:55:28.529 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:59:30.757 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:59:30.760 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:01:28.699 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:01:28.702 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 18:03:28.548 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:03:28.553 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:05:28.993 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:05:28.996 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:07:29.879 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:07:29.882 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:13:29.613 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:13:29.615 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:15:29.595 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:15:29.599 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:17:30.139 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:17:30.143 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:19:28.555 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:19:28.559 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:21:28.556 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:21:28.561 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 18:23:28.671 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:23:28.673 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 18:25:34.528 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:25:34.531 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:52:55.453 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:b82f2d2ced824b419e88bc2c39a91416
+[I 09:55:03.532 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 1.350000ms
+[W 09:55:18.019 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 09:55:21.114 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 6.280000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 09:55:21.719 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 7.530000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 10:01:23.709 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:01:23.712 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:05:20.028 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:05:20.035 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:11:20.011 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:11:20.014 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:13:23.199 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:13:23.202 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:15:20.020 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:15:20.024 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:17:21.256 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:17:21.259 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:33:28.536 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:33:28.542 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:06:33.781 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:4de9a912df634aa98dd3c1bc34a8f3b5
+[I 13:54:50.158 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 2.750000ms
+[W 13:55:08.805 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 13:55:11.975 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 7.720000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 13:55:12.628 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 5.350000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 13:57:19.343 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:57:19.346 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:25:13.379 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:25:13.383 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:40:27.084 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:db2a469c1e4a45f9b671f07c0a346387
+[I 14:41:02.561 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 0.710000ms
+[W 14:41:27.959 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 14:41:28.058 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 5.010000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 14:41:30.595 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 3.580000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 14:43:30.252 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:43:30.254 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:45:30.220 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:45:30.223 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:49:30.216 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:49:30.219 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:32:58.238 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:5a06ca94ea094655abd2379ce838c995
+[I 15:50:08.377 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 16.230000ms
+[W 15:50:25.794 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 15:50:28.860 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 36.010000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 15:50:28.887 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 3.620000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 15:52:30.243 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:52:30.246 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:53:30.662 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:53:30.665 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:54:04.491 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:54:04.495 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:54:29.007 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:54:29.010 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:56:28.680 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:56:28.683 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:58:29.971 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:58:29.977 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:02:31.689 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:7b00a21f7b2141db869d7f659572110a
+[I 16:02:34.566 NotebookApp] Restoring connection for e0635921-cec3-4510-aca9-3ee314126233:7b00a21f7b2141db869d7f659572110a
+[W 16:04:04.568 NotebookApp] WebSocket ping timeout after 90002 ms.
+[I 16:04:09.573 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:7b00a21f7b2141db869d7f659572110a
+[I 17:11:33.436 NotebookApp] Restoring connection for e0635921-cec3-4510-aca9-3ee314126233:7b00a21f7b2141db869d7f659572110a
+[I 17:26:35.393 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:26:35.396 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:28:44.064 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:28:44.067 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:30:34.219 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:30:34.221 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:32:34.315 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:32:34.318 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:34:44.927 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:34:44.930 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:36:34.434 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:36:34.437 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:38:34.148 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:38:34.151 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:46:29.671 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:46:29.675 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:46:34.126 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:46:34.130 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:46:56.464 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:46:56.467 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:48:34.132 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:48:34.135 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:58:34.263 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:58:34.266 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:00:36.768 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:00:36.772 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:26:34.920 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:26:34.923 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:43:54.043 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:7b00a21f7b2141db869d7f659572110a

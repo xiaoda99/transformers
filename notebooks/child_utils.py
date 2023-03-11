@@ -864,9 +864,14 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
 
 # bos_token='▁is'; eos_token='</s>' for s2s
 # bos_token='Ġ->', eos_token='Ċ' for gpt
-def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
+def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False, use_large_model = False):
     example_strs = text.strip().split('\n')
-    input_ids = tokenizer.encode(text, return_tensors='pt')
+    if use_large_model :  # by lxy
+        input_ids = tokenizer.encode(text, bos = False, eos = False)
+        input_ids = torch.Tensor(input_ids)
+    else:
+        input_ids = tokenizer.encode(text, return_tensors='pt')
+        
     ranges = locate_ranges(examples, example_strs, tokenizer, bos_token)
     bos_indices = [r.bos[0] for r in ranges]
     bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
