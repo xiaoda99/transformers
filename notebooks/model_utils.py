@@ -6,6 +6,7 @@ from collections import OrderedDict, defaultdict
 from collections.abc import Iterable
 import numpy as np
 import math
+import random
 import dataclasses
 from dataclasses import dataclass, field, fields
 from copy import deepcopy
@@ -1194,10 +1195,10 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
 
     if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):
         if True: #with Timer('In generate_and_predict_batch: predict'):
-            result.data_tuples, result.eval_results = zip(*[predict(model, tokenizer, text, examples,
+            result.data_tuples, result.eval_results = map(list, zip(*[predict(model, tokenizer, text, examples,
                 k_shot=k_shot, bos_token=bos_tokens, trim=trim, custom_forward=custom_forward, verbose=verbose)
                 for examples, text, bos_tokens in tqdm(zip(all_examples, texts, all_bos_tokens))
-                if True or any(s in text[24:] for s in ['dangerous'])])
+                if True or any(s in text[24:] for s in ['dangerous'])]))
         loss, acc, answer_probs, *_ = zip(*result.eval_results)
         result.mean_loss, result.mean_acc = np.array(loss).mean(), np.array(join_lists(acc)).mean()
         result.answer_probs = np.array(answer_probs).mean(0)
@@ -1726,13 +1727,15 @@ def data2str(data, threshold_score=0.3, verbose=True):
                 if attr_ap_score is not None: s += f' {int(round(attr_ap_score * 100))}'
                 if ap_score is not None: s += f'/{int(round(ap_score * 100))}'
                 if sensitivity is not None and attn_pattern != 'bos->ans]': s += f'/{sensitivity:.1f}'
-    else:  # dummy node
+    elif d.dummy:  # dummy node
         def suffix(score): return f' {int(round(score*100))}' if verbose and \
             top_score is not None and (lt if step < 2 else ge)(score, threshold_score) else ''
         s = ','.join([f'{l}-{wrap(h)}{suffix(score)}' for l, h, score in zip(layer, head,
             top_score if top_score is not None else [None] * len(layer))])
         if verbose and attn_pattern is not None:
             s += f' {abbreviate_attn_pattern(attn_pattern)} {int(round(attr_ap_score * 100))}'
+    else:  # mixed node
+        s = ','.join([f'{l}-{wrap(h)}' for l, h in zip(layer, head)])
     if verbose and topi is not None:
         s = (f'@:{len(topi)} ' if isinstance(topi, Iterable) and len(topi) > 1 and list(topi) == list(range(topi[-1] + 1))
             else f'@{topi}'.replace(' ', '') + ' ') + s
@@ -1860,8 +1863,9 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
     if pd.step < 1 or pd.step == 1 and pd.attn_pattern in ['bos->tgt', 'bos->query']:
         for d in top_data:
             if d.top_score < threshold_score: continue
-            for label_type in get_label_types(parent, d.attn_pattern):
-                if label_type and 'attn_labels' in label_type and d.attn_pattern.startswith('bos->ans0'):
+            label_types = get_label_types(parent, d.attn_pattern)
+            for label_type in label_types:
+                if label_type == 'attn_labels' and d.attn_pattern.startswith('bos->ans0'):
                     label_type += '/ans0s'
                     # label_type += f':bos->~<s>,{k_shot}'
                 _d = deepcopy(d)
@@ -1869,16 +1873,14 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
                 _d.attribute_k=attribute_k and label_type and 'attn_labels' in label_type
                 _add_node(parent, _d, verbose=verbose)
 
-            if d.head < H:
-                if d.attr_ap_score > 0.3:
-                    for data_tuple in data_tuples:
-                        attn_attr = data_tuple[-1].attn_attr[node2key(parent)]
-                        if (layer, head) in attn_attr: del attn_attr[layer, head]
-                    print('In expand_node: remove attn_attr', data2str(d))
-                else:
-                    print('In expand_node: keep attn_attr', data2str(d))
+            # remove settled and unused attn_attr to save memory
+            if d.head < H and 'attn_labels' not in label_types and d.attr_ap_score > 0.3:
+                for *_, o in data_tuples:
+                    attn_attr = o.attn_attr[node2key(parent)]
+                    if (d.layer, d.head) in attn_attr: del attn_attr[d.layer, d.head]
+                # print('In expand_node: remove attn_attr', data2str(d))
                 
-        if pd.step == -1:
+        if False and pd.step == -1:
             top_attn_pattern = [ap for ap in ap2score if not point_wise(ap)][0] # e.g. 'bos->ans0]' for step -1
             layers, heads, scores = topk_md(pd.ap_scores[top_attn_pattern], 5) #topk // 2)
             label_type = f'attn_labels:{top_attn_pattern},{k_shot}'  # 'attn_labels:bos->ans0],3'
@@ -1910,8 +1912,8 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
         parent.children = parent.children[n_chilren:] + parent.children[:n_chilren]  # move dummy nodes to top
 
 def filter_fn(p, c):
-    return p.step == -1 and c.attn_pattern.startswith('bos->ans0') and c.ap_score > 0.7-0.32 and c.top_score > 0 and (c.layer, c.head) == (22, 40) and c.head < c.H or \
-        p.step == 0 and p.attn_pattern.startswith('bos->ans0') and c.attn_pattern in ['bos->query', 'bos->tgt'] and c.head < c.H or \
+    return p.step == -1 and c.attn_pattern.startswith('bos->ans0') and c.ap_score > 0.4 and c.top_score > 0 and c.head < c.H or \
+        p.step == 0 and p.attn_pattern.startswith('bos->ans0') and p.topi < 20 and c.attn_pattern in ['bos->query', 'bos->tgt'] and c.head < c.H or \
         p.step == 1 and p.attn_pattern == 'bos->query' and c.attn_pattern == 'query->tgt'
 
 # def filter_fn(p, c):
@@ -1919,7 +1921,7 @@ def filter_fn(p, c):
 #         p.step == 0 and p.attn_pattern.startswith('bos->ans0') and c.attn_pattern in ['bos->ans]', 'bos->bos'] and c.head < c.H
 
 def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=0.3,
-                k_shot=None, attribute_k=False, device=None, verbose=True):
+                k_shot=None, attribute_k=False, mix=True, device=None, verbose=True):
     blocks = model.transformer.h
     L, H = len(blocks), blocks[0].attn.num_heads
     device = device or model.lm_head.weight.device
@@ -1943,31 +1945,42 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
             for *_, o in data_tuples:  # keep only topk attn_attr to save memory
                 o.attn_attr[node_key] = OrderedDict((lh, o.attn_attr[node_key][lh]) for lh in d.top_heads)
 
-    text, input_ids, labels, ranges, *args, o = data_tuples[0]
-    d.all_attn_patterns = get_possible_attn_patterns(node, ranges)
-    if len(d.top_heads) > 0:
-        kwargs = dict(k_shot=k_shot, attribute_k=attribute_k)
-        ap_scores = get_root(node).data.ap_scores
-        _attn_patterns = [ap for ap in d.all_attn_patterns if ap not in ap_scores]
-        if True: #with Timer('get ap_scores'):
-            ap_scores.update(mr(get_head_matching_scores)(
-                data_tuples, _attn_patterns, device=device, **kwargs))
-        if True: #with Timer('get attr_ap_scores'):
-            d.attr_ap_scores = OrderedDict([(ap, mr(get_head_matching_scores)(
-                data_tuples, ap, node_key=node_key, **kwargs)) for ap in d.all_attn_patterns])
-    else:
-        d.all_attn_patterns = d.all_attn_patterns[-1:]  # 'x->x'
+        text, input_ids, labels, ranges, *args, o = data_tuples[0]
+        d.all_attn_patterns = get_possible_attn_patterns(node, ranges)
+        if len(d.top_heads) > 0:
+            kwargs = dict(k_shot=k_shot, attribute_k=attribute_k)
+            ap_scores = get_root(node).data.ap_scores
+            _attn_patterns = [ap for ap in d.all_attn_patterns if ap not in ap_scores]
+            if True: #with Timer('get ap_scores'):
+                ap_scores.update(mr(get_head_matching_scores)(
+                    data_tuples, _attn_patterns, device=device, **kwargs))
+            if True: #with Timer('get attr_ap_scores'):
+                d.attr_ap_scores = OrderedDict([(ap, mr(get_head_matching_scores)(
+                    data_tuples, ap, node_key=node_key, **kwargs)) for ap in d.all_attn_patterns])
+        else:  # all mlps
+            d.all_attn_patterns = d.all_attn_patterns[-1:]  # 'x->x'
 
-    expand_node(data_tuples, node, topk=_topk, threshold_score=threshold_score,
-        k_shot=k_shot, attribute_k=attribute_k, add_dummy_node=True, verbose=verbose)
+        expand_node(data_tuples, node, topk=_topk, threshold_score=threshold_score,
+            k_shot=k_shot, attribute_k=attribute_k, add_dummy_node=True, verbose=verbose)
 
-    # the first attribution needs most data_tuples to get stable results
-    if d.step == -1: del data_tuples[: len(data_tuples) * 3 / 4]
+    # for child in node.children:
+    #     if not child.data.dummy and child.data.layer > 0 and filter_fn(d, child.data):
+    #         attribute_tree(data_tuples, model, child, max_step, topk=topk, threshold_score=threshold_score,
+    #             k_shot=k_shot, attribute_k=attribute_k, device=device, verbose=verbose)
 
-    for child in node.children:
-        if not child.data.dummy and child.data.layer > 0 and filter_fn(d, child.data):
-            attribute_tree(data_tuples, model, child, max_step, topk=topk, threshold_score=threshold_score,
-                k_shot=k_shot, attribute_k=attribute_k, device=device, verbose=verbose)
+    children = [child for child in node.children if not child.data.dummy 
+        and child.data.layer > 0 and filter_fn(d, child.data)]
+    if mix:
+        mixed_children = []
+        for ap, node_group in groupby(children, key=lambda n: n.data.attn_pattern):
+            node_group = list(node_group); d0 = node_group[0].data
+            child = add_node(node, label_type=d0.label_type, attribute_k=d0.attribute_k, verbose=verbose,
+                **{k: [getattr(n.data, k) for n in node_group] for k in ['layer', 'head']})
+            mixed_children.append(child)
+        children = mixed_children
+    for child in children:
+        attribute_tree(data_tuples, model, child, max_step, topk=topk, threshold_score=threshold_score,
+            k_shot=k_shot, attribute_k=attribute_k, device=device, verbose=verbose)
 
 def attribute_tree_on(data_tuples, model, node, max_step, device='cpu', **kwargs):
     if node is None: node = add_node(None, label_type='labels')

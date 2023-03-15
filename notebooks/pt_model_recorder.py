@@ -89,6 +89,12 @@ class PtModelRecorder:
 
         return filter(lambda x: pattern in x, self._keys)
 
+    def exists(self, key = ""):
+        
+        return self.redis_client.exists(self.prefix + key)
+
+
+
 class PtGpt2Recorder(PtModelRecorder):
     def get_inputs(self, tokenizer=None):
         "transformer.wte"

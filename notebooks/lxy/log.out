@@ -221,3 +221,636 @@ normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normaliz
 [I 18:26:34.920 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
 [W 18:26:34.923 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
 [I 19:43:54.043 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:7b00a21f7b2141db869d7f659572110a
+[I 09:28:21.124 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 2.180000ms
+[W 09:28:50.627 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 09:28:50.792 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 16.650000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 09:28:52.956 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 6.030000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 09:40:53.616 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:40:53.620 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 09:42:52.946 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:42:52.949 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 09:44:52.949 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:44:52.952 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 09:52:53.047 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:52:53.050 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 09:52:59.308 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:52:59.312 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:02:53.068 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:02:53.072 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:06:53.169 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:06:53.172 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 10:08:52.957 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:08:52.960 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:10:53.018 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:10:53.022 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:21:29.790 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:08dad13554bd4bfd838ad70c9a1ff8f2
+[I 11:10:38.060 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 2.300000ms
+[W 11:10:54.455 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 11:10:54.545 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 5.520000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 11:10:56.898 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 5.980000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 11:12:56.918 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:12:56.923 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:21:59.463 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:21:59.466 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 12:53:09.328 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:29182aa954384614bc96c818b5271157
+[I 12:57:16.951 NotebookApp] Restoring connection for e0635921-cec3-4510-aca9-3ee314126233:29182aa954384614bc96c818b5271157
+[I 13:05:56.267 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:29182aa954384614bc96c818b5271157
+[I 13:05:58.040 NotebookApp] Restoring connection for e0635921-cec3-4510-aca9-3ee314126233:29182aa954384614bc96c818b5271157
+[I 13:17:00.990 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:29182aa954384614bc96c818b5271157
+[I 13:17:03.247 NotebookApp] Restoring connection for e0635921-cec3-4510-aca9-3ee314126233:29182aa954384614bc96c818b5271157
+[I 14:27:01.544 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:27:01.547 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:32:59.382 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:32:59.385 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:34:59.382 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:34:59.385 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:39:13.540 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:39:13.543 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:42:59.414 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:42:59.417 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:45:00.230 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:45:00.233 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:57:49.034 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:57:49.037 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:59:01.970 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:59:01.973 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:10:59.405 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:10:59.409 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:13:03.258 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:13:03.262 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:15:02.006 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:15:02.010 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:17:02.908 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:17:02.911 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:18:18.488 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:18:18.491 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 15:18:59.358 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:18:59.361 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 15:20:59.415 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:20:59.417 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:26:59.762 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:26:59.765 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:34:59.407 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:34:59.410 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:36:59.424 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:36:59.427 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:38:59.324 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:38:59.327 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:40:59.410 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:40:59.414 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:42:59.404 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:42:59.407 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:44:59.374 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:44:59.376 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 15:46:59.346 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:46:59.349 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:54:59.498 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:54:59.501 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:56:59.420 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:56:59.423 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:58:59.364 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:58:59.367 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:02:59.409 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:02:59.413 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:04:59.387 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:04:59.389 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:08:59.343 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:08:59.346 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:10:59.348 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:10:59.352 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:12:59.363 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:12:59.365 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:14:59.406 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:14:59.410 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:16:59.430 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:16:59.434 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:28:46.187 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:29182aa954384614bc96c818b5271157
+[I 17:08:19.361 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:08:19.365 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:08:24.103 NotebookApp] Restoring connection for e0635921-cec3-4510-aca9-3ee314126233:29182aa954384614bc96c818b5271157
+[I 17:08:24.133 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:29182aa954384614bc96c818b5271157
+[W 17:08:24.422 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 17:08:24.513 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 7.490000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 17:08:26.981 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 6.760000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 17:10:26.996 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:10:27.001 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 17:12:26.978 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:12:26.981 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 17:14:26.954 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:14:26.958 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:16:31.782 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:16:31.784 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:18:29.467 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:18:29.470 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:20:26.975 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:20:26.979 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:54:28.335 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:54:28.341 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 17:57:26.873 NotebookApp] WebSocket ping timeout after 119983 ms.
+[I 17:57:31.876 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:f55666d9e05c4a299252c5dcd648d42e
+[I 18:16:21.165 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 0.610000ms
+[W 18:16:32.807 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 18:16:32.939 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 4.410000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 18:16:35.244 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 2.250000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 18:18:35.312 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:18:35.315 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:20:35.264 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:20:35.267 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 18:22:35.174 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:22:35.178 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:23:47.502 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:4325a2b8f822436e9ae66fb0065cebf5
+[I 18:23:49.947 NotebookApp] Restoring connection for e0635921-cec3-4510-aca9-3ee314126233:4325a2b8f822436e9ae66fb0065cebf5
+[W 18:25:19.948 NotebookApp] WebSocket ping timeout after 90001 ms.
+[I 18:25:24.953 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:4325a2b8f822436e9ae66fb0065cebf5
+[I 18:27:20.629 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:27:20.632 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 18:30:40.815 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 18:30:40.852 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 9.950000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 18:30:41.092 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 5.240000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 18:32:58.893 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:32:58.896 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:36:43.602 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:36:43.605 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:37:39.945 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:37:39.949 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:40:43.459 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:40:43.462 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:42:43.585 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:42:43.589 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:44:43.474 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:44:43.477 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:46:44.460 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:46:44.464 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:48:43.556 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:48:43.559 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 18:54:45.492 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:54:45.495 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 18:56:43.602 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 18:56:43.606 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:00:43.772 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:00:43.776 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:02:43.572 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:02:43.576 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:10:43.635 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:10:43.639 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:12:43.970 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:12:43.974 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:14:47.327 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:14:47.330 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:14:55.291 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:b431f3416f224a098d874d4dab3a861b
+[I 19:23:32.136 NotebookApp] Restoring connection for e0635921-cec3-4510-aca9-3ee314126233:b431f3416f224a098d874d4dab3a861b
+[W 19:25:02.138 NotebookApp] WebSocket ping timeout after 90001 ms.
+[I 19:25:07.150 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:b431f3416f224a098d874d4dab3a861b
+[I 19:35:57.156 NotebookApp] Restoring connection for e0635921-cec3-4510-aca9-3ee314126233:b431f3416f224a098d874d4dab3a861b
+[I 19:37:22.371 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:37:22.374 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:39:22.146 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:39:22.150 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:49:22.181 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:49:22.183 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:51:22.214 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:51:22.217 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:53:22.134 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:53:22.138 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 19:55:22.127 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 19:55:22.130 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:01:22.242 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:01:22.246 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:09:22.148 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:09:22.151 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 20:11:22.146 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:11:22.149 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:13:22.458 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:13:22.461 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:15:23.000 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:15:23.003 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:17:23.789 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:17:23.792 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:19:22.164 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:19:22.168 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:21:22.372 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:21:22.377 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:23:22.182 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:23:22.185 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:27:22.199 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:27:22.203 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 20:29:22.511 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:29:22.516 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:35:22.417 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:35:22.422 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:37:22.312 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:37:22.314 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:39:22.184 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:39:22.188 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:41:34.474 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:41:34.477 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:43:23.346 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:43:23.351 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:47:22.183 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:47:22.186 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 20:57:40.700 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 20:57:40.702 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:01:22.449 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:01:22.452 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:13:22.594 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:13:22.597 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:15:22.133 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:15:22.137 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:17:22.332 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:17:22.335 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:19:22.548 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:19:22.550 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:21:22.134 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:21:22.141 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:27:22.168 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:27:22.172 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:29:22.181 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:29:22.185 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:33:22.162 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:33:22.165 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:51:22.273 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:51:22.277 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 21:53:22.301 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 21:53:22.305 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:11:22.434 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:11:22.437 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:13:22.168 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:13:22.170 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:15:22.198 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:15:22.202 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:17:22.123 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:17:22.127 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:19:22.146 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:19:22.150 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:25:22.233 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:25:22.237 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:27:23.511 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:27:23.514 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:29:22.251 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:29:22.257 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:35:22.184 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:35:22.186 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:37:22.591 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:37:22.594 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:39:22.221 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:39:22.225 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:41:22.146 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:41:22.150 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:43:22.214 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:43:22.218 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:45:22.175 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:45:22.179 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:47:22.275 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:47:22.279 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:51:22.163 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:51:22.166 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 22:53:24.781 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 22:53:24.788 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 23:07:09.256 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:b431f3416f224a098d874d4dab3a861b
+[I 10:00:16.374 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 2.470000ms
+[W 10:00:28.726 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 10:00:28.819 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 6.460000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 10:00:31.504 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 3.170000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 10:02:33.580 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:02:33.584 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:04:32.460 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:04:32.464 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:10:31.665 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:10:31.669 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:26:37.586 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:26:37.590 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 10:32:31.394 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:32:31.398 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:34:31.381 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:34:31.384 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:38:31.432 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:38:31.436 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:40:32.441 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:40:32.445 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:42:32.885 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:42:32.888 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:22:35.369 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:22:35.372 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:25:54.588 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:25:54.592 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:28:13.836 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:28:13.840 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:30:32.270 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:30:32.274 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:31:29.988 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:31:29.993 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:32:31.298 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:32:31.302 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:36:33.423 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:36:33.427 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:38:31.330 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:38:31.334 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:42:31.877 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:42:31.881 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:44:33.807 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:44:33.811 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:12:31.315 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:12:31.319 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:14:37.253 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:14:37.257 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:16:49.614 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:16:49.618 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:36:31.314 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:36:31.317 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:40:35.587 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:40:35.589 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:44:41.592 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:44:41.595 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:46:32.590 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:46:32.594 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:50:31.372 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:50:31.375 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:52:32.707 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:52:32.711 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:02:31.256 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:02:31.259 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:06:32.194 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:06:32.198 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:56:31.504 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:56:31.508 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:58:31.426 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:58:31.430 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:06:31.389 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:06:31.391 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:08:04.781 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:08:04.787 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:08:31.324 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:08:31.327 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:34:31.203 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:34:31.206 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:36:31.263 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:36:31.267 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:39:48.461 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:39:48.471 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:40:31.207 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:40:31.212 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:42:31.236 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:42:31.238 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:44:31.174 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:44:31.180 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:48:31.228 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:48:31.232 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:50:31.196 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:50:31.200 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:52:31.214 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:52:31.217 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:54:38.663 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:54:38.666 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:56:31.463 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:56:31.466 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:58:31.198 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:58:31.201 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:06:31.191 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:06:31.195 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:07:17.777 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:a07b90a94659470a8fcdfe2c299ab951
+[W 17:07:18.030 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 17:07:18.072 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 11.930000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 17:07:18.253 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 2.840000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 17:09:20.833 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:09:20.837 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:09:51.321 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 17:11:20.776 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:11:20.779 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:13:20.804 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:13:20.806 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:15:20.774 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:15:20.778 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:15:30.482 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 17:17:20.851 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:17:20.854 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:18:18.096 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 17:19:20.792 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:19:20.796 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:20:33.197 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 17:21:25.861 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:21:25.866 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:22:52.158 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 17:23:20.800 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:23:20.806 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:25:20.918 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:25:20.922 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:26:46.687 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:9c426fcbee05465f882b924590c9bb89
+[I 09:52:32.797 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:52:32.799 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 09:52:32.942 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:52:32.944 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 09:52:33.048 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:52:33.050 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 09:52:33.145 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:52:33.147 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 09:52:33.263 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:52:33.265 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 09:52:33.379 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 09:52:33.381 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:13:01.177 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 1.170000ms
+[W 10:13:22.359 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 10:13:22.441 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 8.360000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 10:13:26.023 NotebookApp] Discarding 12042 buffered messages for e0635921-cec3-4510-aca9-3ee314126233:9c426fcbee05465f882b924590c9bb89
+[W 10:13:26.426 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 6.070000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 10:15:26.114 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:15:26.118 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:16:15.448 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:c0c8cb1f90ec4293bc2a849ce792eece
+[I 10:16:21.481 NotebookApp] Kernel restarted: e0635921-cec3-4510-aca9-3ee314126233
+[I 10:16:21.568 NotebookApp] Restoring connection for e0635921-cec3-4510-aca9-3ee314126233:c0c8cb1f90ec4293bc2a849ce792eece
+[W 10:16:26.085 NotebookApp] Nudge: attempt 10 on kernel e0635921-cec3-4510-aca9-3ee314126233
+[I 10:16:27.095 NotebookApp] Replaying 14 buffered messages
+[I 10:17:26.103 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:17:26.107 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:19:26.318 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:19:26.321 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:23:26.163 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:23:26.166 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+normalizer.cc(51) LOG(INFO) precompiled_charsmap is empty. use identity normalization.
+[I 10:25:26.080 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:25:26.082 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:29:26.109 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:29:26.116 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:31:26.135 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:31:26.139 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:41:26.125 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:41:26.128 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:43:26.117 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:43:26.121 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:44:03.830 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 10:45:26.136 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:45:26.140 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:47:26.104 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:47:26.107 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:49:26.157 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:49:26.160 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:51:26.061 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:51:26.064 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:53:26.097 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:53:26.101 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:55:26.080 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:55:26.083 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:57:26.078 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:57:26.082 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 10:59:26.098 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 10:59:26.101 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:01:26.090 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:01:26.093 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:03:01.319 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:03:01.322 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:03:26.130 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:03:26.133 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:05:26.068 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:05:26.070 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:05:46.390 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 11:07:27.254 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:07:27.257 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:11:29.680 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:11:29.683 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:13:31.502 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:13:31.506 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:15:28.936 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:15:28.938 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:23:26.090 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:23:26.093 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:25:27.548 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:25:27.555 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:27:27.774 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:27:27.777 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:27:44.329 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 11:29:28.574 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:29:28.577 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:35:26.038 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:35:26.041 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:36:15.468 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 11:37:26.067 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:37:26.071 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 11:39:26.047 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 11:39:26.051 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 12:23:26.086 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 12:23:26.089 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 12:25:26.032 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 12:25:26.034 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 12:31:26.060 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 12:31:26.063 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 12:33:34.312 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 12:33:34.316 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 12:37:27.390 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 12:37:27.392 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 12:39:26.028 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 12:39:26.032 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 12:41:25.999 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 12:41:26.001 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:00:09.428 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:00:09.433 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:01:26.079 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:01:26.082 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:03:26.110 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:03:26.113 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:05:26.067 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:05:26.071 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:09:26.217 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:09:26.221 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:13:26.028 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:13:26.031 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:17:26.010 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:17:26.013 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:19:26.078 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:19:26.082 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:21:26.101 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:21:26.103 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 13:23:26.024 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 13:23:26.027 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:27:26.086 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:27:26.089 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:28:02.311 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 14:29:26.012 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:29:26.015 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:30:28.963 NotebookApp] Kernel interrupted: e0635921-cec3-4510-aca9-3ee314126233
+[I 14:31:25.993 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:31:25.995 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:37:26.046 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:37:26.049 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:41:25.974 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:41:25.977 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:57:26.019 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:57:26.022 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 14:57:44.951 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 14:57:44.954 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:03:10.311 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:03:10.314 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:03:20.532 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:03:20.537 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:05:26.078 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:05:26.081 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:05:32.294 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:05:32.297 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:07:25.971 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:07:25.975 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:07:28.598 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:07:28.601 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:09:25.972 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:09:25.975 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:09:30.832 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:09:30.835 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 15:11:26.053 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 15:11:26.056 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 15:55:52.427 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 4.190000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning.ipynb
+[I 15:55:54.482 NotebookApp] Kernel started: e105d6a2-e9d9-4e2c-a706-c1da250c9ab1, name: python3
+[W 15:55:54.915 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 6.040000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning.ipynb
+[I 16:03:54.326 NotebookApp] Saving file at /notebooks/child_tuning.ipynb
+[I 16:07:25.975 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:07:25.979 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:09:26.199 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:09:26.203 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:11:26.124 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:11:26.127 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:13:25.946 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:13:25.951 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:15:25.934 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:15:25.938 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:17:25.904 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:17:25.907 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:23:26.027 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:23:26.030 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:25:25.908 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:25:25.911 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:27:26.007 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:27:26.010 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:29:25.960 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:29:25.964 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:31:25.938 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:31:25.943 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:51:26.019 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:51:26.022 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:53:25.910 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:53:25.913 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:59:25.948 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:59:25.955 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 16:59:26.334 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 16:59:26.337 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:01:08.468 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:01:08.470 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:37:26.056 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:37:26.059 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[I 17:39:00.310 NotebookApp] Starting buffering for e105d6a2-e9d9-4e2c-a706-c1da250c9ab1:0c744c42fde543b982db418ade0ef4c8
+[I 17:39:00.321 NotebookApp] Starting buffering for e0635921-cec3-4510-aca9-3ee314126233:c0c8cb1f90ec4293bc2a849ce792eece
+[I 17:40:37.310 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 0.780000ms
+[I 17:40:37.388 NotebookApp] 302 GET /?token=8ba0f172dfba383faabbefff4eccb169c1d4cdd47aac5396 (127.0.0.1) 0.560000ms
+[W 17:40:47.826 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted
+[W 17:40:47.912 NotebookApp] 404 GET /nbextensions/pydeck/extension.js?v=20230309104105 (127.0.0.1) 4.300000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[W 17:40:50.504 NotebookApp] 404 GET /nbextensions/widgets/notebook/js/extension.js?v=20230309104105 (127.0.0.1) 9.600000ms referer=http://localhost:8809/notebooks/notebooks/child_tuning_lxy.ipynb
+[I 17:44:51.962 NotebookApp] Saving file at /notebooks/child_tuning_lxy.ipynb
+[W 17:44:51.966 NotebookApp] Notebook notebooks/child_tuning_lxy.ipynb is not trusted

@@ -28,7 +28,8 @@ from utils import *
 from child_utils import *
 from common_utils import *
 from model_utils import *
-
+import pandas as pd
+import matplotlib.pyplot as plt
 
 
 
@@ -280,6 +281,76 @@ def show_activations(model, tokenizer, head_list, heads, k):
         attention = create_attention(outputs, heads,  texts[i])
         head_list.append(attention)
         draw(outputs, attention[0], list(attention[1].keys())) #绘图函数
+
+# 统计head激活次数与频率     
+def count_head_frequency(head_list,heads):
+    head_dict ={}
+    for i in heads:
+        head_dict[i] = 0
+    length = len(head_list)
+    print("数据量：",length)
+    for i in head_list:
+        for j in i[1].keys():
+            head_dict[j] += 1
+    head_frequency = sorted(head_dict.items(), key=lambda item:item[1])
+    data = [[i[1], i[1]/length] for i in head_frequency]
+    return data
+
+#展示head激活频率
+def show_rate(head_list,heads):
+    data = count_head_frequency(head_list,heads)
+    rate = pd.DataFrame(data, index = heads, columns = ["出现次数", "出现频率"])
+    return rate
+
+#计算token的关注距离
+def count_distence(head_list, head):
+    text_chose = head_list
+    data = []
+    dis = []
+    for i in text_chose:
+        for j in i[1].items():
+            if(j[0] == head):
+                distence = j[1][0][0]-j[1][0][1]
+                dis.append(distence)
+                src_token = tokenizer.convert_ids_to_tokens(j[1][1][0])
+                tar_token = tokenizer.convert_ids_to_tokens(j[1][1][1])
+                Data = [tar_token,src_token,distence]
+                data.append(Data)
+            else:
+                pass
+    return dis,data
+
+#展示关注距离  head_list为load_list函数读取的所有值  head为你想看的名称 如（3，12）
+# def show_loc(head_list, k, head):
+#     text_chose = choices(head_list,k=k)
+def show_loc(head_list, head):
+    dis,data = count_distence(head_list, head)
+    distence = pd.DataFrame(data, columns = ["被关注token", "关注token", "关注距离"])        
+    return distence
+
+#计算每个距离（list）的激活数
+# 激活次数  [1,5,6,3,2]
+# 激活距离   0 1 2 3 4
+def only_count_distence(dis):
+    Max = max(dis)
+    distence = np.zeros(Max+1)
+    for i in dis:
+        distence[i] += 1
+    return distence
+
+
+#展示每个距离激活次数的柱状图
+def show_times_distence(head_list, heads):
+    for i in heads:
+        dis,data = count_distence(head_list, i)
+        distence = only_count_distence(dis)
+        x_label = [int(i) for i in range(len(distence))]
+        plt.bar(x_label,distence,0.6)
+        plt.title(i)
+        plt.xlabel("active_distence")
+        plt.ylabel("active_time")
+        plt.xticks(ticks=x_label,rotation=90, fontsize=9)
+        plt.show()
 
 def main():
     models = {}

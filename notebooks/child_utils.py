@@ -23,7 +23,8 @@ import torch.nn.functional as F
 from const import *
 from common_utils import join_lists, list_diff, my_isinstance, lget, fn2str
 from openai_utils import query_openai
-
+from SwissArmyTransformer import get_tokenizer
+from LLAMATokenizer import LLAMATokenizer
 sys.path.insert(0, '/nas/xd/projects/PyFunctional')
 from functional import seq
 from functional.pipeline import Sequence
@@ -504,6 +505,7 @@ class NegativeRelation(Relation):
     def __init__(self, rel):
         self.rel = self.neg_rel = rel
         self.name = 'neg_' + rel.name if not rel.name.startswith('neg_') else rel.name[4:]
+
     def f(self, x): return list_diff(self.rel.codom(), self.rel.f(x))
     def inv_f(self, x): return list_diff(self.rel.dom(), self.rel.inv_f(x))
     def dom(self, xs=None): return self.rel.dom()
@@ -824,11 +826,16 @@ def move_ranges(r, offset):
     return r
 
 def locate_ranges(examples, example_strs, tokenizer, bos_token):
-    ranges, all_tokens, newline_token = [], [], tokenizer.tokenize('\n')[0]  # 'Ċ'
+    ranges, all_tokens, newline_token = [], [], tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同
     assert len(examples) == len(example_strs)
     for i, (e, e_str) in enumerate(zip(examples, example_strs)):
         # tokens = tokenizer.tokenize(e_str)  # can not work with locate
-        tokens = [tokenizer.decode([i]) for i in tokenizer.encode(e_str)]
+        if my_isinstance(tokenizer, LLAMATokenizer):# by lxy
+            tokens = [tokenizer.convert_ids_to_tokens(i).replace('▁', ' ') for i in tokenizer.encode(e_str)]
+            tokens[0] = tokens[0][1:] if len(tokens) > 0 else None
+            newline_token = '<0x0A>'
+        else:
+            tokens = [tokenizer.decode([i]) for i in tokenizer.encode(e_str)] #解码不出来空格
         assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
         r = example2ranges(e, tokens, bos_token[i] if isinstance(bos_token, (tuple, list)) else bos_token)
         ranges.append(move_ranges(r, len(all_tokens)))
@@ -864,16 +871,13 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
 
 # bos_token='▁is'; eos_token='</s>' for s2s
 # bos_token='Ġ->', eos_token='Ċ' for gpt
-def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False, use_large_model = False):
+def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
     example_strs = text.strip().split('\n')
-    if use_large_model :  # by lxy
-        input_ids = tokenizer.encode(text, bos = False, eos = False)
-        input_ids = torch.Tensor(input_ids)
-    else:
-        input_ids = tokenizer.encode(text, return_tensors='pt')
-        
+
+    input_ids = tokenizer.encode(text, return_tensors='pt')
+
     ranges = locate_ranges(examples, example_strs, tokenizer, bos_token)
-    bos_indices = [r.bos[0] for r in ranges]
+    bos_indices = [r.bos[-1] - 1 for r in ranges] # by lxy
     bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
     if s2s:  # for t5 models
         bos_i, eos_i = bos_indices[-1], eos_indices[-1]
@@ -1118,7 +1122,7 @@ def transform_task(task, replace_rel0=0, replace_rel1=0, rel0_kwargs=None, rel1_
         return None
     return task
 
-def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True, verbose=True):
+def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True, verbose=True, max_length = 512, tokenizer = None):
     ans_counts = [('a', nrows)]; ind_counts = [(0, 9), (1, 1)]; i = 0
     while len(ind_counts) > 1 and (len(ind_counts) < cxt_len or ind_counts[-1][1] == 1 or ind_counts[0][1] > ind_counts[-1][1] * 3) or \
             len(ans_counts) == 1 or len(ans_counts) > 2 and ans_counts[0][1] > nrows / 4 or len(ans_counts) == 2 and ans_counts[0][1] >= ans_counts[1][1] * 2:
@@ -1135,7 +1139,8 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True
         _ = plt.figure(figsize=(10, 0.7))
         _ = sns.heatmap(label_probs.T, cbar=False); plt.show()
     examples, text, bos_token = make_input_str(task, vocabs, examples, rev_item2str=rev_item2str, abstract=abstract)
-
+    if my_isinstance(tokenizer, LLAMATokenizer) and len(tokenizer.tokenize(text)) >= max_length: # lyx: 长度太长，重新生成
+        return generate(task, nrows, cxt_len, rev_item2str, abstract, plot, verbose,  max_length, tokenizer)
     if verbose: print(text)
     return examples, text, bos_token
 
