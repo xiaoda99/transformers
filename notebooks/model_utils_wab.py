@@ -1196,7 +1196,8 @@ def predict_wab(model,tokenizer,dataset,custom_forward=True, trim=False, num_sp 
             ans = (dataset.word_idx['end'][i].item()+1,dataset.word_idx['end'][i].item()+2),
             io = (dataset.word_idx['IO'][i].item(),dataset.word_idx['IO'][i].item()+1),
             s1 = (dataset.word_idx['S'][i].item(),dataset.word_idx['S'][i].item()+1),
-            s2 = (dataset.word_idx['S2'][i].item(),dataset.word_idx['S2'][i].item()+1)
+            s2 = (dataset.word_idx['S2'][i].item(),dataset.word_idx['S2'][i].item()+1),
+            ans0s= tuple(map(np.array, zip(*[(dataset.word_idx['IO'][i].item(),dataset.word_idx['IO'][i].item()+1),(dataset.word_idx['S'][i].item(),dataset.word_idx['S'][i].item()+1),(dataset.word_idx['S2'][i].item(),dataset.word_idx['S2'][i].item()+1)])))
             )
         ranges_store.append(move_ranges(ranges, len(all_tokens)))
         tokens = [tokenizer.decode([i]) for i in tokenizer.encode(inp)]
@@ -1275,10 +1276,10 @@ def data_tuples_g(mt, result, k_shot, slice_obj):
 
 def abbreviate_attn_pattern(attn_pattern):
     #return attn_pattern.replace('bos', 'B').replace('query', 'Q').replace('tgt', 'T').replace('ans', 'A').replace('sep', 'S')#wab
-    return attn_pattern.replace('bos', 'B').replace('s2', 'S').replace('s1', 'J').replace('io', 'I').replace('ans', 'a')
+    return attn_pattern.replace('bos', 'B').replace('s2', 'S').replace('s1', 'J').replace('io', 'I').replace('ans', 'A')
 
 def restore_attn_pattern(attn_pattern):
-    return attn_pattern.replace('B', 'bos').replace('S', 's2').replace('J', 's1').replace('I', 'io').replace('a', 'ans')#wab
+    return attn_pattern.replace('B', 'bos').replace('S', 's2').replace('J', 's1').replace('I', 'io').replace('A', 'ans')#wab
 
 def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=False, normalize=False):
     attn_pattern = restore_attn_pattern(attn_pattern)
@@ -1295,7 +1296,7 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=F
         return slice(b, e) if not isinstance(b, Iterable) else [slice(_b, _e) for _b, _e in zip(b, e)]
     for r in ranges_q:
         # if 'bos' in q and 'ans' in k and 'ans0' not in k:  # pattern for intermediary heads#wab
-        if 'bos' in q and 'ans' in k and 'io' not in k:  # pattern for intermediary heads#wab
+        if ('bos' in q and 'ans' in k and 'io' not in k and 'ans0' not in k):  # pattern for intermediary heads#wab
             for rk in ranges: attn_labels[get_slice(r, q), get_slice(rk, k)] = 1
         elif k in ['ans0s', 'candidates']:
             for s in get_slice(r, k): attn_labels[get_slice(r, q), s] = 1
@@ -1836,8 +1837,9 @@ def get_label_types(parent, attn_pattern):
     if not point_wise(attn_pattern): return ['attn_labels']
     if parent.parent is None:  return ['labels']
     return [None]
+
 def get_label_types_wab(parent, attn_pattern):
-    if attn_pattern == 'bos->s2' and parent.data.attn_pattern == 'bos->io': return [None, 'attn_labels']
+    # if attn_pattern == 'bos->s2' and parent.data.attn_pattern == 'bos->io': return [None, 'attn_labels']
     if any(not point_wise(n.data.attn_pattern, n.data.label_type) for n in node2path(parent)): return [None]
     if not point_wise(attn_pattern): return ['attn_labels']
     if parent.parent is None:  return ['labels']
@@ -1876,14 +1878,16 @@ def expand_node(parent, head_attr_fn=None, topk=10, threshold_score=0.4,
     parent.children = [c for c in parent.children if not c.data.dummy]
 
     #if pd.step < 1 or pd.step == 1 and pd.attn_pattern == 'bos->query' and pd.label_type == 'attn_labels':
-    if pd.step < 1 or pd.step == 1 and pd.attn_pattern == 'bos->s2' and pd.label_type == 'attn_labels':#wab
+    print('step',pd.step)
+    print('label_type',pd.label_type)
+    if pd.step < 1 or (pd.step == 1 and pd.attn_pattern in ['bos->s2'] )  or (pd.step == 2 and pd.attn_pattern in ['s2->s1+','s2->s1']):#wab
         for d in top_data:
             if d.top_score < threshold_score: continue
             for label_type in get_label_types_wab(parent, d.attn_pattern):#wab
                 #if label_type and 'attn_labels' in label_type and d.attn_pattern.startswith('bos->ans0'):
                 if label_type and 'attn_labels' in label_type and d.attn_pattern.startswith('bos->io'):#wab
-                    # label_type += '/ans0s'#wab
-                    label_type += f':bos->~<s>,{k_shot}'#wab
+                    label_type += '/ans0s'#wab
+                    # label_type += f':bos->~<s>,{k_shot}'#wab
                 _d = deepcopy(d)
                 _d.label_type = label_type
                 _d.attribute_k=attribute_k and label_type and 'attn_labels' in label_type
@@ -1893,8 +1897,8 @@ def expand_node(parent, head_attr_fn=None, topk=10, threshold_score=0.4,
             top_attn_pattern = [ap for ap in ap2score if not point_wise(ap)][0] # e.g. 'bos->ans0]' for step -1
             layers, heads, scores = topk_md(pd.ap_scores[top_attn_pattern], topk // 2)
             label_type = f'attn_labels:{top_attn_pattern},{k_shot}'  # 'attn_labels:bos->ans0],3'
-            # label_type += '/ans0s'#wab
-            label_type = f'attn_labels:bos->~<s>,{k_shot}'#wab
+            label_type += '/ans0s'#wab
+            # label_type = f'attn_labels:bos->~<s>,{k_shot}'#wab
             # add_node(node, head_attr_fn=head_attr_fn, topi=list(range(len(scores))), top_score=scores, dummy=True)
 
             for layer, head, score in zip(layers, heads, scores):
@@ -1927,8 +1931,11 @@ def expand_node(parent, head_attr_fn=None, topk=10, threshold_score=0.4,
 #         p.step == 1 and p.attn_pattern == 'bos->query' and p.label_type == 'attn_labels' and c.attn_pattern == 'bos->ans'
 
 def filter_fn(p, c):
-    return p.step == -1 and c.ap_score > 0.1 and c.top_score > 0 and c.head < c.H or \
-        p.step == 0 and p.attn_pattern == 'bos->io' and c.attn_pattern in ['bos->ans', 'bos->bos'] and c.head < c.H#wab
+    return p.step == -1 and c.ap_score > 0.2 and c.top_score > 0 and c.head < c.H or \
+        p.step == 0 and p.attn_pattern == 'bos->io' and c.attn_pattern in ['bos->s2'] and c.head < c.H or \
+        p.step == 1 and p.attn_pattern == 'bos->s2' and c.attn_pattern in ['s2->s1+','s2->s1'] and c.head < c.H or \
+        p.step == 2 and p.attn_pattern == 's2->s1+' and c.attn_pattern in ['s1+->s1'] and c.head < c.H
+        
 
 def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=0.4,
                 k_shot=None, attribute_k=False, device=None, verbose=True):
@@ -1938,10 +1945,12 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
     d = node.data; node_key = node2key(node)
     if d.step > max_step: return
     *_, o =  data_tuples[0]
+    _topk = round(topk * d.layer / L)
     if d.attr is None or node_key not in o.attn_attr:
         with Timer(f'In attribute_tree: attribute_step {node.name}'):
             d.attr = mr(attribute_step)(data_tuples, model, node)#每个batch
-        d.top_heads = list(zip(*topk_md(d.attr.head, topk)[:2]))
+        d.top_heads = list(zip(*topk_md(d.attr.head, _topk)[:2]))
+        d.top_heads = [(l, h) for l, h in d.top_heads if h < H]
 
         with Timer(f'In attribute_tree: attribute_step stage2 {node.name}'):
             model.wos = torch.stack([rearrange(blocks[l].attn.out_proj.weight.data,
@@ -1966,9 +1975,8 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
         d.attr_ap_scores = OrderedDict([(ap, mr(get_head_matching_scores)(
             data_tuples, ap, node_key=node_key, **kwargs)) for ap in attn_patterns])
 
-    expand_node(node, topk=topk, threshold_score=threshold_score,
+    expand_node(node, topk=_topk, threshold_score=threshold_score,
         k_shot=k_shot, attribute_k=attribute_k, add_dummy_node=True, verbose=verbose)
-
     for child in node.children:
         if not child.data.dummy and child.data.layer > 0 and filter_fn(d, child.data):
             attribute_tree(data_tuples, model, child, max_step, topk=topk, threshold_score=threshold_score,
@@ -2385,11 +2393,11 @@ attn_patterns_by_step = {-1: ['bos->ans0'],
 attn_patterns_by_step_wab = {-1: ['bos->io'],
     0: [ 'bos->s1', 'bos->io+',
         'bos->s2',  # 11-4
-        'bos->s2+',  # 13-11
-        'bos->s1+', # 10-11?
+        'bos->s2+'  # 13-11
+         # 10-11?
         ],
-    1: ['ans->io', 'ans->io+', 's2->s1+','s2->s1', 's2->io'],
-    2: ['s1+->s1', 's1+->io+','s1+->io'], 3: ['tgt+->tgt']}#wab
+    1: [ 's2->s1+', 's2->io','s2->s1'],
+    2: ['s1+->s1', 's1+->io+','s1+->io','s2->s1'], 3: ['tgt+->tgt']}#wab
 all_attn_patterns_wab = join_lists(attn_patterns_by_step_wab.values())# + ['bos->bos']#wab
 
 def plot_attn_attrs(data_tuples, model, tokenizer, node, layer=None, head=None, topi=[0], 

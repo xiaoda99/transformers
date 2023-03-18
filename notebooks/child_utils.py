@@ -343,7 +343,7 @@ tea: There is tea.
         if not text.split()[-1].startswith(noun[:2]): # e.g. 'red' -> 'a red apple'
             text = noun  # print(f'{noun} -> {text}. Skip abnormal wrap')
         return text
-    return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-002'))
+    return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003')) # by lxy
 
 wrap_noun = a_
 
@@ -387,6 +387,41 @@ dog: He likes dogs.
     if noun in d: return d[noun]
     return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003'))  # better than text-davinci-002
 
+def _b(noun): # by lxy add b动词
+    prompt_fn = lambda s: \
+f'''The apple: The apple is john's.
+The chips: The chips are john's.
+The coffee: The coffee is john's.
+The shoes: The shoes are john's.
+The blueberries: The blueberries are john's.
+The tea: The tea is john's.
+{s}: {s}'''
+    def extract_fn(text):
+        text = text.strip()
+        if text.endswith('.'): text = text[:-1]
+        if text.split(' ')[0] not in ('is', 'are'): return 'is'
+        return text.split(' ')[0]
+    return noun + ' ' + extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003')) # by lxy
+    
+
+def _be(noun): # by xd
+    prompt_fn = lambda s: \
+f'''The apple is here.
+The coffee is here.
+The shoes are here.
+The red is here.
+The blueberries are here.
+{s} '''
+    def extract_fn(text):
+        text = text.strip()
+        if text.endswith('.'): text = text[:-1]
+        if text.split(' ')[0] not in ('is', 'are'): return 'is'
+        return text.split(' ')[0]
+    prompt = prompt_fn('')
+    match = re.search(noun + ' ', prompt)
+    if match is not None: return noun + ' ' + prompt[match.end():].split(' ', 1)[0]
+    return noun + ' ' + extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003'))
+
 def wrap_noun_to_french(noun):
     prompt_fn = lambda s: \
 f'''dog: Martin a un chien.
@@ -396,7 +431,7 @@ tea: Martin a du thé.
     def extract_fn(text):
         assert text.endswith('.'); text = text[:-1]
         return text.strip()  # strip leading spaces
-    return extract_fn(query_openai(prompt_fn(noun))) if noun != 'tea' else 'du thé'
+    return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003')) if noun != 'tea' else 'du thé'
 
 def wrap_noun2(noun):
     if noun in clock_of_day: return 'at ' + noun
@@ -505,6 +540,7 @@ class NegativeRelation(Relation):
     def __init__(self, rel):
         self.rel = self.neg_rel = rel
         self.name = 'neg_' + rel.name if not rel.name.startswith('neg_') else rel.name[4:]
+        for name in ['x_f', 'y_f', 'skip_inv_f']: setattr(self, name, getattr(self.rel, name))
 
     def f(self, x): return list_diff(self.rel.codom(), self.rel.f(x))
     def inv_f(self, x): return list_diff(self.rel.dom(), self.rel.inv_f(x))
@@ -521,27 +557,14 @@ class Set(object):
 
     def use(self, rel_names, x_f=None, y_f=None, skip_inv_f=False):
         if isinstance(rel_names, str): rel_names = [rel_names]
-        self.used_rel_names = rel_names
-        self.relations = [getattr(self, rel_name) for rel_name in self.used_rel_names]
+        self.relations = [getattr(self, rel_name) for rel_name in rel_names]
         for rel in self.relations[:1]:  # TODO: check compatibility with NegativeRelation
             rel.x_f, rel.y_f, rel.skip_inv_f = x_f, y_f, skip_inv_f
         return self
 
     def negate_used(self):
-        self.used_rel_names = ['neg_' + rel_name if not rel_name.startswith('neg_') else rel_name[4:] for rel_name in self.used_rel_names]
-        self.relations = [getattr(self, rel_name) for rel_name in self.used_rel_names]
+        self.relations = [NegativeRelation(rel) for rel in self.relations]
         return self
-
-    def build_negative_relations(self):
-        neg_rel_names = []
-        for rel_name in self.rel_names:
-            rel = getattr(self, rel_name)
-            neg_rel_name = 'neg_' + rel_name
-            neg_rel = NegativeRelation(rel)
-            rel.neg_rel = neg_rel
-            setattr(self, neg_rel_name, neg_rel)
-            neg_rel_names.append(neg_rel_name)
-        self.rel_names += neg_rel_names
 
     def __str__(self):
         return f"{self.data.__name__}.{self.__class__.__name__}.{'|'.join(str(rel) for rel in self.relations)}"
@@ -554,7 +577,6 @@ class EqSet(Set):
             setattr(self, rel_name, Relation(name=rel_name, _dict=d))
         self.equal._inv_dict = self.equal._dict
         self.equal.inv_rel = self.equal
-        self.build_negative_relations()
 
 class PoSet(Set):
     def __init__(self, data):
@@ -570,7 +592,6 @@ class PoSet(Set):
         self.equal._inv_dict = self.equal._dict
         self.prev.inv_rel, self.next.inv_rel = self.next, self.prev
         self.equal.inv_rel = self.equal
-        self.build_negative_relations()
 
 class SymSet(Set):
     def __init__(self, data):
@@ -586,7 +607,6 @@ class SymSet(Set):
         self.equal._inv_dict = self.equal._dict
         self.similar.inv_rel, self.opposite.inv_rel = self.similar, self.opposite
         self.equal.inv_rel = self.equal
-        self.build_negative_relations()
         
 class BijectSet(Set):  # can be treated as a special case of TreeSet?
     def __init__(self, data):
@@ -617,7 +637,6 @@ class TreeSet(Set):
         self.child.inv_rel, self.parent.inv_rel = self.parent, self.child
         self.sibling.inv_rel = self.sibling
         self.equal.inv_rel = self.equal
-        self.build_negative_relations()
 
 def enumerate_sample(cxt_len, rel):
     return list(range(cxt_len)), sample(rel.codom(), cxt_len)
@@ -676,7 +695,7 @@ def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):
 
     hop = 1; rel = rels[hop][0]
     candidates[hop], candidates[hop + 1] = distractive_sample(cxt_len, rel)[::-1] if has_local_hop \
-        else (candidates[hop - 1].copy(), [rel.inv_f(x)[0] for x in candidates[hop - 1]])
+        else (candidates[hop - 1].copy(), candidates[hop - 1].copy()) # rel is equal
 
     tuples = list(zip(*candidates.values()))
     i = 0 if query is None else list(candidates.values())[0].index(query)
@@ -731,7 +750,7 @@ def _str(l, vocab=None, sep=' '):
 
 def options2str(options): return '[' + ' | '.join(options) + ']'  # ' or '.join(options) + '?'
 
-def make_examples(task, nrows=4, vocab_for_each_row=True, **kwargs):
+def make_examples(task, nrows=4, vocab_for_each_row=False, **kwargs):
     vocab_fn, example_gen_fn = task[:2]
     vocabs, examples = [], []
     qa_set = set() # for dedup
@@ -972,6 +991,18 @@ def replace_rel(task, hop, replace_type=1):
     task = new_vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a
     return task
 
+def choose_rels(task, rel_indices):
+    vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
+
+    def new_vocab_fn():
+        vocabs = vocab_fn()
+        for hop, rel_i in enumerate(rel_indices):
+            vocabs[hop].relations = vocabs[hop].relations[rel_i: rel_i + 1]
+        return vocabs
+    
+    task = new_vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a
+    return task
+
 def decorate_rel(task, hop, kwargs):
     vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
 
@@ -1004,13 +1035,13 @@ def negate_sent(s):
     s = s.replace(" may also have", " may not have").replace(" may also like", " may not like") # replace_rel1=2
     s = s.replace(" likes", " does not like").replace(" wants ", " does not want ")
     s = re.sub(r"\bcan\b", "can not", s)
-    assert s != s0,  s
+    assert s != s0, s
 
-    singular_subs, plural_subs = ['the boy ', 'the girl '], ['boys ', 'girls ']
+    singular_subs, plural_subs = ['the boy ', 'the girl '], ['the boys ', 'the girls ']
     not_i = list(re.finditer(r"\bnot\b", s))[0].span()[0]
-    if any(sub in s[:not_i] for sub in plural_subs):
-        # for old_sub, new_sub in zip(singular_subs, plural_subs):
-        #     s = s.replace(old_sub, new_sub)
+    if any(sub in s[:not_i] for sub in singular_subs + plural_subs):
+        for old_sub, new_sub in zip(singular_subs, plural_subs):
+            s = s.replace(old_sub, new_sub)
         s = s.replace(" does not", " do not")
     return s
 
@@ -1020,11 +1051,6 @@ def negate(task):
     def new_vocab_fn():
         vocabs = vocab_fn()
         return [vocabs[0].negate_used(), vocabs[1]]
-        
-    def new_gen_fn(*args, **kwargs):
-        cxt, query, candidates, (tgt, *a, ans0, ans) = gen_fn(*args,**kwargs)
-        if query in ['the boy', 'the girl']: query = query + 's'
-        return cxt, query, candidates, (tgt, *a, ans0, ans)
 
     s = negate_sent(query2str('QQQ', None) + bos_token)
     new_bos_token = '?' if s.endswith('?') else ' ' + s.split()[-1]
@@ -1033,10 +1059,10 @@ def negate(task):
         assert new_bos_token in s, f'{new_bos_token} not in {s}'
         return s[:s.rindex(new_bos_token)].strip()
 
-    task = (new_vocab_fn, new_gen_fn, cxt2str, new_query2str, new_bos_token, *a)
+    task = (new_vocab_fn, gen_fn, cxt2str, new_query2str, new_bos_token, *a)
     return task
 
-def remove_local_hop(task, remove_query=False):
+def remove_local_hop(task):
     vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
     data_names = [v.data.__name__ for v in vocab_fn()]
     rel_names = [v.relations[0].name for v in vocab_fn()]
@@ -1045,31 +1071,45 @@ def remove_local_hop(task, remove_query=False):
     if not fixed_query:
         if rel_names[0] in ['equal', 'inv_equal']:
             raise InvalidTransException("invalid rel for rm_local_hop: " + str(rel_names))
-        if remove_query and not is_negative:
-            raise InvalidTransException("invalid rel for rm_local_hop and rm_query" + str(rel_names))
     
     def new_vocab_fn(): vocabs = vocab_fn(); return [vocabs[0], deepcopy(vocabs[0]).use('equal')]
-    if remove_query:
-        def new_gen_fn(*args, **kwargs):
-            cxt, query, candidates, (tgt, *a, ans0, ans) = gen_fn(*args,**kwargs)
-            query, candidates = None, ([None] * len(candidates[1]),) + candidates[1:]
-            return cxt, query, candidates, (tgt, *a, ans0, ans)
-        new_gen_fn.__name__ = f"'rm_query'[{fn2str(gen_fn)}]"
 
     new_cxt2str = partial(_cxt2str, prefix='There are ', sep=', ',
         item2str=lambda i, _: wrap_noun(i) if not i[0].isupper() else i)
-    capitalized = data_names[0] in ['persons', 'genders_of_persons', 'country2capital', 'countries_of_cities']
+    capitalized = new_vocab_fn()[1].relations[0].dom()[0][0].isupper()
     end, new_bos_token = ("?", " The") if not capitalized else ("", "?")
     if not fixed_query:
         wh = 'who' if data_names[0] in ['persons', 'genders_of_persons'] else 'which'
         prep = 'like ' if rel_names[0] in ['sibling', 'neg_sibling'] else ''
         if not is_negative: new_query2str = (lambda q, v: f"{wh} is {prep}{q}{end}")
-        elif not remove_query: new_query2str = (lambda q, v: f"{wh} is not {prep}{q}{end}")
-        else: new_query2str = (lambda q, v: f"{wh} is different{end}")
+        else: new_query2str = (lambda q, v: f"{wh} is not {prep}{q}{end}")
     else:
         new_query2str = lambda q, v: ""
-    task = new_vocab_fn, (new_gen_fn if remove_query else gen_fn), \
-        new_cxt2str, new_query2str, new_bos_token, *a
+    task = new_vocab_fn, gen_fn, new_cxt2str, new_query2str, new_bos_token, *a
+    return task
+
+def remove_query(task):
+    vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
+    data_names = [v.data.__name__ for v in vocab_fn()]
+    rel_names = [v.relations[0].name for v in vocab_fn()]
+    is_negative = rel_names[0].startswith('neg_')
+    if not is_negative:
+        raise InvalidTransException("invalid rel for rm_query" + str(rel_names))
+
+    def new_gen_fn(*args, **kwargs):
+        cxt, query, candidates, (tgt, *a, ans0, ans) = gen_fn(*args,**kwargs)
+        query, candidates = None, ([None] * len(candidates[1]),) + candidates[1:]
+        return cxt, query, candidates, (tgt, *a, ans0, ans)
+    new_gen_fn.__name__ = f"rm_query[{fn2str(gen_fn)}]"
+
+    wh = 'who' if data_names[1] in ['persons', 'genders_of_persons'] else 'which'
+    capitalized = vocab_fn()[1].relations[0].dom()[0][0].isupper()
+    s = ('like' if rel_names[1] == 'sibling' else '') + (' the' if not capitalized else '')
+    s = s.lstrip().capitalize()
+    if s == '': end, new_bos_token = ('', '?')
+    else: end, new_bos_token = f'? {s}'.rsplit(' ', 1); new_bos_token = ' ' + new_bos_token
+    new_query2str = (lambda q, v: f"{wh} is different{end}")
+    task = vocab_fn, new_gen_fn, cxt2str, new_query2str, new_bos_token, *a
     return task
 
 def _g2c(g_fn, cls_labels=['True', 'False']):
@@ -1078,47 +1118,36 @@ def _g2c(g_fn, cls_labels=['True', 'False']):
         (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
             (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
         return cxt, query, candidates, (*a, _ans0, _ans), label
-        if tuple(candidates[0]) == tuple(candidates[1]):
-            return (cxt, (query, choice(list(set(candidates[0]) - {query, ans}))), [labels], labels[1]) \
-                if random() > 0.5 else (cxt, (query, ans), [labels], labels[0])
-        else:
-            ans_idx = candidates[0].index(ans)
-            _ans = candidates[1][ans_idx]
-            p = random()
-            if p < 1/3: ans, label = ans, labels[0]
-            elif 1/3 <= p < 2/3: ans, label = _ans, labels[1]
-            else:
-                if len(list(set(candidates[0] + candidates[1]) - {ans, _ans})) == 0:
-                    print('empty', candidates[0], candidates[1], ans, _ans)
-                ans, label = choice(list(set(candidates[0] + candidates[1]) - {ans, _ans})), labels[2]
-            return cxt, (query, ans), [labels], label
-    wrapped.__name__ = f'g2c({g_fn.__name__})'
+    wrapped.__name__ = f'g2c[{fn2str(g_fn)}]'
     return wrapped
 
 def g2c(task):
-    vocab_fn, gen_fn, *a = task; task = (vocab_fn, _g2c(gen_fn), *a)
+    vocab_fn, gen_fn, *a = task
+    task = (vocab_fn, _g2c(gen_fn), *a)
     return task
 
-def transform_task(task, replace_rel0=0, replace_rel1=0, rel0_kwargs=None, rel1_kwargs=None, do_swap_qa=False, do_negate=False,
+def transform_task(task, rel0_i=None, rel1_i=None, #replace_rel0=0, replace_rel1=0,
+                rel0_kwargs=None, rel1_kwargs=None, do_swap_qa=False, do_negate=False,
                 do_rm_local_hop=False, do_rm_query=False, do_g2c=False):
     try:
-        if replace_rel0 != 0:  # original
-            if do_swap_qa and do_rm_local_hop: raise InvalidTransException('unreplaceable rel0')
-            task = replace_rel(task, 0, replace_rel0)
-        if replace_rel1 != 0:  # original
-            if not do_swap_qa and do_rm_local_hop: raise InvalidTransException('unreplaceable rel1')
-            if replace_rel1 == 2 and not do_swap_qa and not do_g2c: raise InvalidTransException('unreplaceable rel1=2')
-            task = replace_rel(task, 1, replace_rel1)
+        # if replace_rel0 != 0:  # original
+        #     if do_swap_qa and do_rm_local_hop: raise InvalidTransException('unreplaceable rel0')
+        #     task = replace_rel(task, 0, replace_rel0)
+        # if replace_rel1 != 0:  # original
+        #     if not do_swap_qa and do_rm_local_hop: raise InvalidTransException('unreplaceable rel1')
+        #     if replace_rel1 == 2 and not do_swap_qa and not do_g2c: raise InvalidTransException('unreplaceable rel1=2')
+        #     task = replace_rel(task, 1, replace_rel1)
+        if rel0_i is not None: task = choose_rels(task, [rel0_i, rel1_i])
         if rel0_kwargs is not None: task = decorate_rel(task, 0, rel0_kwargs)
         if rel1_kwargs is not None: task = decorate_rel(task, 1, rel1_kwargs)
         if do_swap_qa: task = swap_qa(task)
         if do_negate: task = negate(task)
-        if do_rm_local_hop: task = remove_local_hop(task, remove_query=do_rm_query)
-        elif do_rm_query: raise InvalidTransException('rm_query w/o rm_local_hop')
+        if do_rm_local_hop: task = remove_local_hop(task)
+        if do_rm_query: task = remove_query(task)
         if do_g2c: task = g2c(task)
     except InvalidTransException as e:
-        # trans_args = {k: v for k, v in locals().items() if k not in ['task', 'e']}
-        # print(f'\ntransform_task failed: {e} ({args2str(trans_args)})')
+        trans_args = {k: v for k, v in locals().items() if k not in ['task', 'e']}
+        print(f'\ntransform_task failed: {e} ({args2str(trans_args)})')
         return None
     return task
 
@@ -1139,8 +1168,6 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True
         _ = plt.figure(figsize=(10, 0.7))
         _ = sns.heatmap(label_probs.T, cbar=False); plt.show()
     examples, text, bos_token = make_input_str(task, vocabs, examples, rev_item2str=rev_item2str, abstract=abstract)
-    if my_isinstance(tokenizer, LLAMATokenizer) and len(tokenizer.tokenize(text)) >= max_length: # lyx: 长度太长，重新生成
-        return generate(task, nrows, cxt_len, rev_item2str, abstract, plot, verbose,  max_length, tokenizer)
     if verbose: print(text)
     return examples, text, bos_token
 
@@ -1168,6 +1195,9 @@ def validate_args(task, args, trans_args):
     if trans_args.get('do_swap_qa') and isinstance(gen_fn, partial) and 'query' in gen_fn.keywords: return False
     if trans_args.get('do_rm_local_hop') and args.get('rev_item2str'): return False
     if rels[1].name == 'equal' and args['cxt_len'] == 1: return False
+    if rels[1].name == 'sibling' and not trans_args.get('do_g2c'): return False
+    if rels[0].name in ['sibling', 'neg_sibling'] and trans_args.get('do_rm_query'): return False
+    # if rels[0].name not in ['sibling', 'neg_sibling'] and rels[1].name != 'sibling': return False
     # if rels[1].name != 'equal': return False
     # if not rels[1].skip_inv_f: return False
     return True

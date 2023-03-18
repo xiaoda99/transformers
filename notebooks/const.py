@@ -40,7 +40,7 @@ def persons():
     boys, girls = all_persons(tokenizer)
     return boys + girls
 
-def genders_of_persons(): return {'the boy': boys, 'the girl': girls}
+def genders_of_persons(): return {'boy': boys, 'girl': girls}
 
 verb_form =[
     ('sleep','slept'),

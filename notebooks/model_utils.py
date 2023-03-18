@@ -93,6 +93,7 @@ class AttrData:
     _attr_ap_score: float = None  # for sorting
     top_heads: list = None
     dummy: bool = False
+    mixed: bool = False
 
 @dataclass
 class Result:
@@ -674,7 +675,7 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
     if not isinstance(layer, Iterable): layer, head = [layer], [head]
     L = len(model.transformer.h); H = outputs.attentions[0].size(1)
     if any(h == H for h in head): assert label_type is None or 'attn_labels' not in label_type
-    logits_after_sum = label_type and 'attn_labels' not in label_type # TODO: should always be True?
+    logits_after_sum = label_type and 'attn_labels' not in label_type
     if not isinstance(hidden_states, (list, tuple)): hidden_states = [hidden_states] * len(layer)
     else: assert len(layer) == len(head) == len(hidden_states), \
         f'{len(layer)}, {len(head)}, {len(hidden_states)}'
@@ -709,7 +710,6 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
                 for k, v in kwargs.items()}
         return kwargs
 
-    if len(layer) > 1: assert label_type in [None, 'labels'], f'{len(layer)}, {label_type}'
     fwd_outputs = [head_forward(model, hs, l, h, attribute_k=attribute_k, **get_kwargs(l, h, hs), **kwargs) 
         if h < H else mlp_forward(model, hs, layer=l, **get_kwargs(l, h, hs), **kwargs)
         for l, h, hs in zip(layer, head, hidden_states)]
@@ -1203,6 +1203,7 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
         result.mean_loss, result.mean_acc = np.array(loss).mean(), np.array(join_lists(acc)).mean()
         result.answer_probs = np.array(answer_probs).mean(0)
         print(result.mean_loss, result.mean_acc)
+        plt.plot(result.answer_probs)
     return result
 
 def mask_labels(r):
@@ -1365,19 +1366,21 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         if o.values is not None:
             output = einsum('bkij,kjd->bkid', attn_weights,
                 to(gather_by_heads(o.values, attr_heads), device))
-            # wos = torch.stack([rearrange((blocks[l].attn.out_proj.weight.data),
-            #     'e (n d) -> n d e', n=H)[h] for l, h in attr_heads])  # k*[de]->kde
             output = einsum(f'blid,lde->b{kept_dim}ie', output, model.wos)
-        else:
+        else:  # obsolete. Using head_inputs, though faster, consumes too much memory
             output = einsum(f'blij,lje->b{kept_dim}ie', attn_weights,
                 to(gather_by_heads(o.head_inputs), device))
-        sum_output = sum_output.to(output.device)
         if isinstance(output_layer, Iterable):
-            for i, (l, h) in enumerate(attr_heads):
-                sum_output[l] = sum_output[l] - output[:, i].detach() + output[:, i]
+            assert len(sum_output) == len(output_layer), f'{len(sum_output)} != {len(output_layer)}'
+            _output0 = output.sum(1)  # bkie->bie
+            for i, ol in enumerate(output_layer):
+                mask = torch.Tensor([l < ol for l, _ in attr_heads])
+                _output = torch.einsum('bkie,k->bie', output, to(mask, device)) \
+                    if mask.sum() < len(attr_heads) else _output0
+                sum_output[i] = (to(sum_output[i], device) - _output).detach() + _output
             output = sum_output
         else:
-            output = sum_output - output.detach() + output
+            output = (to(sum_output, device) - output).detach() + output
         if labels is not None: logits, loss = lm_head_forward(model, output, **kwargs)
         if on_gpu: print(f'mem_usage when enter / exit sum_forward stage2: {mu} / {mem_usage(device)}. len = {output.size(1)}')
         return Outputs(hidden_states=(output,), logits=logits, loss=loss)
@@ -1393,14 +1396,13 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         if o.attn_outs is not None:
             attn_outputs = None
             for i in range(l_, _l):
-                attn_output = einsum('bnid,bn->bind',
-                    to(o.attn_outs[i], device), head_mask[:, i])
-                attn_output = rearrange(attn_output, f'b i n d -> b {kept_dim} i (n d)',
-                                    **({kept_dim: 1} if kept_dim else {}))  # l=1
-                attn_output = blocks[i].attn.out_proj(attn_output)  # b{1}ie,ee->b{1}ie
+                attn_output = einsum('bnid,bn->bind', to(o.attn_outs[i], device), head_mask[:, i])
+                attn_output = rearrange(attn_output, 'b i n d -> b i (n d)')
+                attn_output = blocks[i].attn.out_proj(attn_output)  # bie,ee->bie
+                if kept_dim == 'l': attn_output = attn_output.unsqueeze(1)  # bie->blie, l=1
                 attn_outputs = attn_output if attn_outputs is None else \
                     combine_fn([attn_outputs, attn_output])
-        else:
+        else:  # obsolete. Using head_outputs, though faster, consumes too much memory
             # head_outputs = [postprocess_head_output(o, labels != -100) for o in o.head_outputs] # 1nid->1nie
             attn_outputs = einsum(f'lnie,bln->b{kept_dim}ie',
                 to(cat(o.head_outputs[l_: _l]), device), head_mask[:, l_: _l])
@@ -1418,7 +1420,6 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         if blocks[l_].attn.out_proj.bias is not None:
             bias = rearrange([blocks[i].attn.out_proj.bias for i in range(l_, _l)], 'l e -> l 1 e')
             attn_outputs = attn_outputs + einsum(f'l1e->{kept_dim}1e', bias)
-        # print('attn_outputs mem_usage:', mem_usage(device))
     if l_ > 0:
         prev_attn_outputs = einsum(f'lie,bi->b{kept_dim}ie',
             to(cat(o.attn_outputs[: l_]), device), embed_mask.clone().detach())
@@ -1533,19 +1534,17 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, forward_on
         for i in range(0, num_points + 1, batch_size):
             scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
             o = forward_fn(model, forward_only=forward_only, **scaled_x_)
-            hidden_states0 = o.hidden_states[-1].detach()  # maybe reused as sum_output for sum_forward
+            hidden_states0 = o.hidden_states[-1]  # maybe reused as sum_output for sum_forward
             hs, y, logits = post_forward_fn(model, o); ys.append(y); hidden_states.append(hs)
             for tensor, name in [(o.hidden_states[-1], 'hidden_states_in'), (hs, 'hidden_states_out'), 
                                 (y, 'y'), (logits, 'logits')]:
-                if name != 'hidden_states_out' or tensor is not None:
-                    check_abnormal_tensor(tensor, name)
+                if isinstance(tensor, torch.Tensor): check_abnormal_tensor(tensor, name)
             if forward_only: continue
             grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x.values()))
             for j, key in enumerate(grad_keys):
                 grad[key] = grad[key] + grad_[j].sum(dim=0, keepdim=True)
                 check_abnormal_tensor(grad[key], key + '.grad')
     hidden_states, ys = [torch.cat(ts) if ts[0] is not None else None for ts in [hidden_states, ys]]
-    # print('In attribute: ys =', ys); model.hidden_states = hidden_states
     if forward_only: return None, hidden_states0, hidden_states, ys, logits
 
     attr = {key: (grad[key] / (num_points + 1) * (x[key] if key != 'attn_weights' else 1)
@@ -1602,19 +1601,17 @@ def attribute_step(data_tuple, model, node, attribute_k=False,
     else: keys = ['mlp_mask', 'embed_mask', 'head_mask'] if attr_heads is None else ['attn_weights']
     x = OrderedDict((key, get_x(key, o, attr_heads=attr_heads, to_layer=to_layer, device=device)) for key in keys)
     attr, sum_output = attribute(fwd_fn, model, x, fns, num_points=3 if True or attribute_k else 7)[:2]
-    if attr_heads is not None:
-        attr.attn = scatter_by_heads(attr.attn, attr_heads, size=(L, H)) # kij->lnij
-    if attr.head is None and attr.attn is not None:
+    if attr.head is None and attr.attn is not None and attr_heads is None:
         attr.head = torch.einsum('lnij->ln', attr.attn)
-    # fwd_fn = partial(sum_forward, outputs=o, labels=_labels, reduce_fn=torch.cat, scaled=False)
-    # attr2 = attr #attribute2(fwd_fn, model, x, fns)
 
     attr = attributions_to(attr)
     if staged:   # use o to pass sum_output to next call. tricky
         if attr_heads is None: o.sum_output = sum_output  # 1st stage
         else: del o.sum_output  # 2nd stage
     if attr.attn is not None: # associate non-averageable attn attr to current node. tricky
-        o.attn_attr[node2key(node)] = attr.attn
+        o.attn_attr[node2key(node)] = attr.attn if attr_heads is None else \
+            OrderedDict((lh, attr.attn[i]) for i, lh in enumerate(attr_heads))
+            # attr.attn: kij. Keep only topk attn_attr to save memory
     del attr.attn  # avoid being reduced by reduce_objects
     return attr
 
@@ -1717,26 +1714,29 @@ def data2str(data, threshold_score=0.3, verbose=True):
     step, topi, layer, head, H, label_type, attn_pattern, ap_score, attr_ap_score, attribute_k, top_score, sensitivity = \
         d.step, d.topi, d.layer, d.head, d.H, d.label_type, d.attn_pattern, d.ap_score, d.attr_ap_score, d.attribute_k, d.top_score, d.sensitivity
     def wrap(head): return head if head < H else 'm'
+    if attn_pattern: ap = abbreviate_attn_pattern(attn_pattern)
     if head is None: return ''  # root
     if not isinstance(layer, Iterable):
         s = f'{layer}-{wrap(head)}'
         if verbose:
             if top_score is not None: s += f' {int(round(top_score * 100))}'
             if head < H:
-                if attn_pattern: s += f' {abbreviate_attn_pattern(attn_pattern)}'
+                if attn_pattern: s += f' {ap}'
                 if attr_ap_score is not None: s += f' {int(round(attr_ap_score * 100))}'
                 if ap_score is not None: s += f'/{int(round(ap_score * 100))}'
                 if sensitivity is not None and attn_pattern != 'bos->ans]': s += f'/{sensitivity:.1f}'
-    elif d.dummy:  # dummy node
+    elif d.dummy:
         def suffix(score): return f' {int(round(score*100))}' if verbose and \
             top_score is not None and (lt if step < 2 else ge)(score, threshold_score) else ''
         s = ','.join([f'{l}-{wrap(h)}{suffix(score)}' for l, h, score in zip(layer, head,
             top_score if top_score is not None else [None] * len(layer))])
-        if verbose and attn_pattern is not None:
-            s += f' {abbreviate_attn_pattern(attn_pattern)} {int(round(attr_ap_score * 100))}'
-    else:  # mixed node
-        s = ','.join([f'{l}-{wrap(h)}' for l, h in zip(layer, head)])
-    if verbose and topi is not None:
+        if attn_pattern is not None:
+            s += f' {ap} {int(round(attr_ap_score * 100))}'
+    else:
+        assert d.mixed
+        s = ','.join([f'{l}-{wrap(h)}' for l, h in zip(layer, head)]) if len(layer) < 5 else ''
+        if verbose: s += f' {ap}'
+    if (not d.mixed and verbose or d.mixed and len(layer) >= 5) and topi is not None:
         s = (f'@:{len(topi)} ' if isinstance(topi, Iterable) and len(topi) > 1 and list(topi) == list(range(topi[-1] + 1))
             else f'@{topi}'.replace(' ', '') + ' ') + s
     if label_type is not None and label_type != 'labels':
@@ -1760,25 +1760,28 @@ def get_matched_head_attr(data):
 
 def update_attr_data(data, head_attr):
     d = data
-    if d.topi is None: d.topi = topi_md(head_attr, d.layer, d.head)
+    if d.topi is None and not isinstance(d.layer, Iterable):
+        d.topi = topi_md(head_attr, d.layer, d.head)
     if d.top_score is None:
         top_score = head_attr[d.layer, d.head] / head_attr.max()
         d.top_score = top_score.numpy() if isinstance(d.layer, Iterable) else top_score.item()
     return d
 
 def _add_node(parent, data, verbose=True):
-    node = {data2str(c.data, verbose=False): c for c in parent.children}.get(
-            data2str(data, verbose=False))
-    if node is None or data.dummy:
-        node = Node(data2str(data), parent); node.data = data  # prepend=data.dummy
-        if verbose: print('In _add_node: add', node.name)#; plot_tree(node)
-    else:
-        # update name in case data.attn_pattern or data2str has been updated
-        node.name = data2str(data if node.data.attn_pattern != data.attn_pattern else node.data)
+    node = Node(data2str(data), parent); node.data = data  # prepend=data.dummy
+    if verbose: print('In _add_node: add', node.name)
+    # node = {data2str(c.data, verbose=False): c for c in parent.children}.get(
+    #         data2str(data, verbose=False))
+    # if node is None or data.dummy:
+    #     node = Node(data2str(data), parent); node.data = data  # prepend=data.dummy
+    #     if verbose: print('In _add_node: add', node.name)#; plot_tree(node)
+    # else:
+    #     # update name in case data.attn_pattern or data2str has been updated
+    #     node.name = data2str(data if node.data.attn_pattern != data.attn_pattern else node.data)
     return node
 
 def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_type=None, attn_pattern=None, 
-            step=None, dummy=False, force=False, verbose=True, **kwargs):
+            step=None, dummy=False, mixed=False, force=False, verbose=True, **kwargs):
     if parent is None:
         si = -1; node = Node(f' {label_type}' if label_type != 'labels' else '')
         node.data = AttrData(step=si, layer=layer, label_type=label_type)
@@ -1797,8 +1800,8 @@ def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_
     if attn_pattern is None and label_type: _, attn_pattern, _ = parse_label_type(label_type)
     if step is None: step = si + 1
     data = AttrData(step=step, topi=topi, layer=layer, head=head, label_type=label_type, 
-                    attn_pattern=attn_pattern, dummy=dummy, **kwargs)
-    if head_attr is not None and not dummy: update_attr_data(data, head_attr)
+                    attn_pattern=attn_pattern, dummy=dummy, mixed=mixed, **kwargs)
+    if head_attr is not None and not dummy and not mixed: update_attr_data(data, head_attr)
     return _add_node(parent, data, verbose=verbose)
 
 def parse_attn_pattern(attn_pattern):
@@ -1828,8 +1831,8 @@ def get_label_types(parent, attn_pattern):
     if parent.parent is None:  return ['labels']
     return [None]
 
-def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score=0.3,
-                k_shot=None, attribute_k=False, add_dummy_node=False, verbose=True):
+def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score=0.3, k_shot=None,
+                attribute_k=False, add_dummy_nodes=True, add_mixed_nodes=True, verbose=True):
     pd = parent.data; L, H = pd.attr.head.size()
     head_attr_fn = head_attr_fn or get_head_mlp_attr
     layers, heads, scores = topk_md(head_attr_fn(pd), topk)
@@ -1857,7 +1860,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
             d._attn_pattern, d._attr_ap_score = d.attn_pattern, ap2score[d.attn_pattern]
         top_data.append(d)
     top_data = sorted(top_data, key=lambda d: d._attr_ap_score, reverse=True)
-    parent.children = [c for c in parent.children if not c.data.dummy]
+    # parent.children = [c for c in parent.children if not c.data.dummy and not c.data.mixed]
 
     # pd.attn_pattern == 'bos->query' and pd.label_type == 'attn_labels':
     if pd.step < 1 or pd.step == 1 and pd.attn_pattern in ['bos->tgt', 'bos->query']:
@@ -1888,6 +1891,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
             # label_type = f'attn_labels:bos->~<s>,{k_shot}'
 
             for layer, head, score in zip(layers, heads, scores):
+                if (layer, head) in {(d.layer, d.head) for d in top_data}: continue
                 attr_ap_score = None
                 if (layer, head) in pd.top_heads:
                     attn_pattern0, attr_ap_score0 = max([(ap, v[layer, head].item())
@@ -1902,7 +1906,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
         parent.children = sorted(parent.children, key=lambda c: c.data.topi)
         parent.children = sorted(parent.children, key=lambda c: c.data._attr_ap_score, reverse=True)
 
-    if add_dummy_node:
+    if add_dummy_nodes:
         n_chilren = len(parent.children)
         for ap, data_group in groupby(top_data, key=lambda d: d._attn_pattern):
             data_group = list(data_group)
@@ -1910,10 +1914,19 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
                 attr_ap_score=ap2score.get(ap, 0),  # score 0 for 'unk' not in ap2score
                 **{k: [getattr(d, k) for d in data_group] for k in ['layer', 'head', 'topi', 'top_score']})
         parent.children = parent.children[n_chilren:] + parent.children[:n_chilren]  # move dummy nodes to top
+        
+    if add_mixed_nodes:
+        children = [c for c in parent.children if not c.data.dummy and filter_fn(pd, c.data)]
+        for ap, node_group in groupby(children, key=lambda n: n.data.attn_pattern):
+            node_group = list(node_group); d0 = node_group[0].data
+            add_node(parent, mixed=True, verbose=verbose,
+                **{k: getattr(d0, k) for k in ['attn_pattern', 'label_type', 'attribute_k']}, 
+                **{k: [getattr(n.data, k) for n in node_group] for k in ['layer', 'head', 'topi']})
 
 def filter_fn(p, c):
+    if c.layer == 0: return False
     return p.step == -1 and c.attn_pattern.startswith('bos->ans0') and c.ap_score > 0.4 and c.top_score > 0 and c.head < c.H or \
-        p.step == 0 and p.attn_pattern.startswith('bos->ans0') and p.topi < 20 and c.attn_pattern in ['bos->query', 'bos->tgt'] and c.head < c.H or \
+        p.step == 0 and p.attn_pattern.startswith('bos->ans0') and c.attn_pattern in ['bos->query', 'bos->tgt'] and c.head < c.H or \
         p.step == 1 and p.attn_pattern == 'bos->query' and c.attn_pattern == 'query->tgt'
 
 # def filter_fn(p, c):
@@ -1926,9 +1939,8 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
     L, H = len(blocks), blocks[0].attn.num_heads
     device = device or model.lm_head.weight.device
     d = node.data; node_key = node2key(node)
-    if d.step > max_step: return
     *_, o =  data_tuples[0]
-    _topk = round(topk * d.layer / L)
+    _topk = round(topk * (d.layer if not isinstance(d.layer, Iterable) else max(d.layer)) / L)
     if d.attr is None or node_key not in o.attn_attr:
         with Timer(f'In attribute_tree: attribute_step {node.name}, topk={_topk}'):
             d.attr = mr(attribute_step)(data_tuples, model, node)
@@ -1942,8 +1954,6 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
                 # resulting attr.attn saved to o.attn_attr
                 mr(attribute_step)(data_tuples, model, node, attr_heads=d.top_heads)
                 del model.wos
-            for *_, o in data_tuples:  # keep only topk attn_attr to save memory
-                o.attn_attr[node_key] = OrderedDict((lh, o.attn_attr[node_key][lh]) for lh in d.top_heads)
 
         text, input_ids, labels, ranges, *args, o = data_tuples[0]
         d.all_attn_patterns = get_possible_attn_patterns(node, ranges)
@@ -1961,26 +1971,13 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
             d.all_attn_patterns = d.all_attn_patterns[-1:]  # 'x->x'
 
         expand_node(data_tuples, node, topk=_topk, threshold_score=threshold_score,
-            k_shot=k_shot, attribute_k=attribute_k, add_dummy_node=True, verbose=verbose)
+            k_shot=k_shot, attribute_k=attribute_k, add_dummy_nodes=True, add_mixed_nodes=mix, verbose=verbose)
 
-    # for child in node.children:
-    #     if not child.data.dummy and child.data.layer > 0 and filter_fn(d, child.data):
-    #         attribute_tree(data_tuples, model, child, max_step, topk=topk, threshold_score=threshold_score,
-    #             k_shot=k_shot, attribute_k=attribute_k, device=device, verbose=verbose)
-
-    children = [child for child in node.children if not child.data.dummy 
-        and child.data.layer > 0 and filter_fn(d, child.data)]
-    if mix:
-        mixed_children = []
-        for ap, node_group in groupby(children, key=lambda n: n.data.attn_pattern):
-            node_group = list(node_group); d0 = node_group[0].data
-            child = add_node(node, label_type=d0.label_type, attribute_k=d0.attribute_k, verbose=verbose,
-                **{k: [getattr(n.data, k) for n in node_group] for k in ['layer', 'head']})
-            mixed_children.append(child)
-        children = mixed_children
-    for child in children:
-        attribute_tree(data_tuples, model, child, max_step, topk=topk, threshold_score=threshold_score,
-            k_shot=k_shot, attribute_k=attribute_k, device=device, verbose=verbose)
+    if d.step == max_step: return
+    for c in node.children:
+        if (mix and c.data.mixed) or (not mix and not c.data.dummy and filter_fn(d, c.data)):
+            attribute_tree(data_tuples, model, c, max_step, topk=topk, threshold_score=threshold_score,
+                k_shot=k_shot, attribute_k=attribute_k, mix=mix, device=device, verbose=verbose)
 
 def attribute_tree_on(data_tuples, model, node, max_step, device='cpu', **kwargs):
     if node is None: node = add_node(None, label_type='labels')

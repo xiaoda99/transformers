@@ -192,7 +192,7 @@ def connect(sentence,ans):
 def choose(k,head_list): 
     textlist = []
     for i in head_list:
-        if(list(i[1].keys())!=[]): textlist.append(i[0])
+        if len(i[1])>0: textlist.append(i[0])
     text_choice = choices(textlist,k=k)
     return text_choice
 
