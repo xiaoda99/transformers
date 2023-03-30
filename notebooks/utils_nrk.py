@@ -287,16 +287,16 @@ def str2tuple(head_list):
 
 
 #pickle dump head_dict #存json
-def dump_list(head_list,num):
-    with open(f'nrk/head_list_{num}.json', 'w',encoding='utf-8') as fp:   #覆写
+def dump_list(head_list,name,num):
+    with open(f'nrk/{name}_{num}.json', 'w',encoding='utf-8') as fp:   #覆写
 #     with open('nrk/head_list.json', 'a',encoding='utf-8') as fp:   #添加
         head_list = tuple2str(head_list)
         json.dump(head_list, fp)
 
 #pickle load head_dict #读json
-def load_list(num):
+def load_list(name, num):
     head_list1 = []
-    with open(f'nrk/head_list_{num}.json', 'r',encoding='utf-8') as fp:
+    with open(f'nrk/{name}_{num}.json', 'r',encoding='utf-8') as fp:
         head_list = json.load(fp)
     head_list = str2tuple(head_list)
     return head_list
