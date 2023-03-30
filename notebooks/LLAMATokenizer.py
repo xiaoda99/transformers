@@ -21,7 +21,7 @@ class LLAMATokenizer:
 #         )
         assert self.sp_model.vocab_size() == self.sp_model.get_piece_size()
 
-    def encode(self, s, bos = False, eos = False,return_tensors = 'False'):
+    def encode(self, s, bos = True, eos = False, return_tensors = 'False'):
         assert type(s) is str
         t = self.sp_model.Encode(s, add_bos = bos, add_eos = eos)
         return torch.Tensor(t).long().view(1, -1) if return_tensors == 'pt' else t
@@ -29,7 +29,7 @@ class LLAMATokenizer:
     def decode(self, t):
         return self.sp_model.Decode(t)
     
-    def tokenize(self, s, bos= False, eos = False):
+    def tokenize(self, s, bos= True, eos = False):
         t = self.sp_model.Encode(s, str, add_bos = bos, add_eos = eos)
         return t
         

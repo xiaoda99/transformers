@@ -23,14 +23,14 @@ from unseal import transformers_util as tutil
 from unseal import hooks
 import unseal.visuals.utils as utils
 from unseal.hooks import HookedModel
-
+import os
 from utils import *
-from child_utils import *
+# from child_utils import *
 from common_utils import *
-from model_utils import *
+# from model_utils import *
 import pandas as pd
 import matplotlib.pyplot as plt
-
+import einops
 
 
 ###读数据
@@ -47,7 +47,7 @@ def choose_date(name):
         textsent = sentences_CSQA2
     elif(name == "4"):
         sentences_anli = read_anli("../../../data/circuits_datasets/anli_v1.0/anli_v1.0/R1/dev.jsonl")   
-        textsent = sentences_anli
+        textsent = sentences_anli[:10]
     else:
         sentences_RACE = read_RACE("../../../data/circuits_datasets/RACE/dev/middle")
         textsent = sentences_RACE
@@ -130,7 +130,7 @@ def read_anli(file_path: str):
             sentence = connect(context,hypothesis)
             sentences.append(sentence)
 #     random.shuffle(sentences)
-    return sentences
+    return sentences[:10]
 
 #RACE Dataset  中学英语阅读理解，长    （原文+问题+选项）
 def read_RACE(file_path: str):
@@ -160,30 +160,59 @@ def forward(model, tokenizer, text):
     outputs = model(**inputs, output_attentions=True)
     return outputs.attentions
 
-def create_form(act_sent,text_id,j):
-    value = float(max(act_sent))
-    src_loc = j
-    src_id = int(text_id[j])
-    tar_loc = int(torch.squeeze((act_sent == torch.max(act_sent)).nonzero()))
-    tar_id = int(text_id[tar_loc])
+###### 
 
-    tuple_head = ((src_loc,tar_loc),(src_id,tar_id),value)
+#构造输出的格式
+def create_form(act_loc,text_id,value):
+    src_id = int(text_id[act_loc[0]])
+    tar_id = int(text_id[act_loc[1]])
+    tuple_head = (act_loc,(src_id,tar_id),value)
     return tuple_head
 
-# 查找激活的head，但是感觉还是不好，可以改成如果头的注意力分数不是最大的，就加入
-def create_attention(outputs, heads, text): #任何一个开头的注意力分数<0.5，加入该head
+#找到激活的head
+# def create_attention1(outputs, heads, text, tokenizer): 
+#     head = {}
+#     head_list = []
+#     head_list.append(text)
+#     text_id = tokenizer.encode(text)
+#     for i in heads:
+#         tuple_head = [] #格式为[（（src，tar），（sid，tid），value）]
+#         for j,k in enumerate(outputs[i[0]][0][i[1]]):
+#             if j<=2: continue
+#             temp = torch.squeeze((k==torch.max(k)).nonzero(),0)
+#             if temp[0]!=0:
+#                 value = float(max(k))
+#                 tuple_head.append(create_form((j,int(temp[0])),text_id,value))
+#         tuple_head = sort_form(tuple_head)
+#         head[i] = tuple_head
+#     head_list.append(head)
+#     return head_list
+
+def create_attention(outputs, heads, text, tokenizer): 
     head = {}
     head_list = []
     head_list.append(text)
     text_id = tokenizer.encode(text)
     for i in heads:
-        for j in range(2,len(outputs[0][0][0])):
-            if(outputs[i[0]][0][i[1]][j][0] != max(outputs[i[0]][0][i[1]][j])):   
-                tuple_head = create_form(outputs[i[0]][0][i[1]][j],text_id,j)
-                head[i] = tuple_head
-                break
+        tuple_head = []
+        Max = torch.max(outputs[i[0]][0][i[1]], 1)
+        temp = (0 != Max.indices).nonzero().tolist()
+        for j in temp: 
+            tuple_head.append(create_form((j[0], Max.indices[j[0]].item()), text_id, Max.values[j[0]].item()))
+        tuple_head = sort_form(tuple_head)
+        head[i] = tuple_head
     head_list.append(head)
     return head_list
+
+def get_value(t):
+    return t[-1]
+
+def sort_form(tuple_head, k = 5):
+    tuple_head_sort = sorted(tuple_head, key=get_value,reverse=True)
+    return tuple_head_sort[:k]
+
+#########
+
 
 def connect(sentence,ans):
     return sentence+" "+ans.capitalize()
@@ -193,7 +222,7 @@ def choose(k,head_list):
     textlist = []
     for i in head_list:
         if len(i[1])>0: textlist.append(i[0])
-    text_choice = choices(textlist,k=k)
+    text_choice = random.choices(textlist,k=k)
     return text_choice
 
 #激活head拼接
@@ -210,7 +239,7 @@ def concat(attentions, heads):
     return output.detach()
     
 #绘图函数
-def draw(attentions, text, heads):
+def draw(attentions,tokenizer, text, heads):
     html_storage = {}
     val = concat(attentions, heads)
     try:
@@ -239,7 +268,7 @@ def find_activations(model, tokenizer, texts, heads):  # long run
     head_list = []
     for text in tqdm(texts):
         outputs = forward(model, tokenizer, text)#outputs attention矩阵
-        head_list.append(create_attention(outputs, heads, text))
+        head_list.append(create_attention(outputs, heads, text,tokenizer))
     return head_list
 
 def tuple2str(head_list):
@@ -272,15 +301,23 @@ def load_list(num):
     head_list = str2tuple(head_list)
     return head_list
 
+def show_activation(model, tokenizer, head_list, heads, num): 
+    texts = head_list[num][0] #重写函数，随机找k个文本输入
+    head_list = []
+    outputs = forward(model,tokenizer, texts)#outputs attention矩阵
+    attention = create_attention(outputs, heads,  texts,tokenizer)
+    head_list.append(attention)
+    draw(outputs,tokenizer, attention[0], list(attention[1].keys())) #绘图函数
+    
 #展示部分
 def show_activations(model, tokenizer, head_list, heads, k): 
     texts = choose(k,head_list) #重写函数，随机找k个文本输入
     head_list = []
     for i in range(k):
         outputs = forward(model,tokenizer, texts[i])#outputs attention矩阵
-        attention = create_attention(outputs, heads,  texts[i])
+        attention = create_attention(outputs, heads,  texts[i],tokenizer)
         head_list.append(attention)
-        draw(outputs, attention[0], list(attention[1].keys())) #绘图函数
+        draw(outputs,tokenizer, attention[0], list(attention[1].keys())) #绘图函数
 
 # 统计head激活次数与频率     
 def count_head_frequency(head_list,heads):
@@ -290,32 +327,37 @@ def count_head_frequency(head_list,heads):
     length = len(head_list)
     print("数据量：",length)
     for i in head_list:
-        for j in i[1].keys():
-            head_dict[j] += 1
-    head_frequency = sorted(head_dict.items(), key=lambda item:item[1])
+        for j,k in i[1].items():
+            if len(k)>0:   
+                head_dict[j] += 1
+    
+    head_frequency = sorted(head_dict.items(), key=lambda x:x[1])
+  
     data = [[i[1], i[1]/length] for i in head_frequency]
-    return data
+    heads = [i[0] for i in head_frequency]
+    return (heads,data)
 
 #展示head激活频率
 def show_rate(head_list,heads):
     data = count_head_frequency(head_list,heads)
-    rate = pd.DataFrame(data, index = heads, columns = ["出现次数", "出现频率"])
+    rate = pd.DataFrame(data[1], index = data[0], columns = ["出现次数", "出现频率"])
     return rate
 
 #计算token的关注距离
-def count_distence(head_list, head):
+def count_distence(head_list, head, tokenizer):
     text_chose = head_list
     data = []
     dis = []
-    for i in text_chose:
+    for num,i in enumerate(text_chose):
         for j in i[1].items():
-            if(j[0] == head):
-                distence = j[1][0][0]-j[1][0][1]
-                dis.append(distence)
-                src_token = tokenizer.convert_ids_to_tokens(j[1][1][0])
-                tar_token = tokenizer.convert_ids_to_tokens(j[1][1][1])
-                Data = [tar_token,src_token,distence]
-                data.append(Data)
+            if j[0] == head:
+                for k in j[1]:
+                    distence = k[0][0]-k[0][1]
+                    dis.append(distence)
+                    src_token = tokenizer.convert_ids_to_tokens(k[1][0])
+                    tar_token = tokenizer.convert_ids_to_tokens(k[1][1])
+                    Data = [tar_token,src_token,distence,num,k[2]]
+                    data.append(Data)
             else:
                 pass
     return dis,data
@@ -323,33 +365,43 @@ def count_distence(head_list, head):
 #展示关注距离  head_list为load_list函数读取的所有值  head为你想看的名称 如（3，12）
 # def show_loc(head_list, k, head):
 #     text_chose = choices(head_list,k=k)
-def show_loc(head_list, head):
-    dis,data = count_distence(head_list, head)
-    distence = pd.DataFrame(data, columns = ["被关注token", "关注token", "关注距离"])        
+def show_loc(head_list, head,tokenizer,k=100):
+    dis,data = count_distence(head_list, head,tokenizer)
+    data = sort_form(data,k)
+    distence = pd.DataFrame(data, columns = ["被关注token", "关注token", "关注距离", "对应文本编号","注意力分数"])   
+    pd.set_option('display.max_rows', None)      
     return distence
+
+def which_sentence(head_list,num):
+    print(head_list[num][0])
 
 #计算每个距离（list）的激活数
 # 激活次数  [1,5,6,3,2]
 # 激活距离   0 1 2 3 4
 def only_count_distence(dis):
     Max = max(dis)
-    distence = np.zeros(Max+1)
+    num = Max+10-Max%10
+    distence = np.zeros(num)
     for i in dis:
         distence[i] += 1
     return distence
 
 
 #展示每个距离激活次数的柱状图
-def show_times_distence(head_list, heads):
+def show_times_distence(head_list, heads,tokenizer):
     for i in heads:
-        dis,data = count_distence(head_list, i)
-        distence = only_count_distence(dis)
-        x_label = [int(i) for i in range(len(distence))]
-        plt.bar(x_label,distence,0.6)
+        dis,data = count_distence(head_list, i,tokenizer)
+        # distence = only_count_distence(dis)
+        # x_label = [int(i) for i in range(len(distence))]
+        # plt.bar(x_label,distence,0.6)
         plt.title(i)
         plt.xlabel("active_distence")
         plt.ylabel("active_time")
-        plt.xticks(ticks=x_label,rotation=90, fontsize=9)
+        plt.hist(dis, bins = 20, 
+                            density = 1, 
+                            color ='green',
+                            alpha = 0.7)
+        # plt.xticks(range(0,len(x_label),10), [i for i in range(0,len(x_label),10)], fontsize=7)
         plt.show()
 
 def main():

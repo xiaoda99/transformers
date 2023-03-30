@@ -1,3 +1,4 @@
+from lib2to3.pgen2 import token
 import sys
 import os
 import json
@@ -114,7 +115,7 @@ Types of animals: dog, cat, horse, rabbit, pig'''
 def types_of_things(): return {
     'animal': ['duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig', 
             'monkey', 'rabbit', 'elephant', 'wolf', 'deer', 'fox', 'gorilla', 'squirrel', 'mouse'], # 'chicken', 'bear', 'zebra', 'giraffe', 'kangaroo', 21-5, 15-8
-    'fruit': ['apple', 'banana', 'pear', 'grapes', 'cherry', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberry',
+    'fruit': ['apple', 'banana', 'pear', 'grapes', 'cherries', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberries',
             'blueberries', 'strawberries', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'], # may be food too?
     # 'vegetable': ['spinach', 'broccoli', 'lettuce', 'cabbage', 'tomato'],
     'drink': ['tea', 'coffee', 'beer', 'wine', 'whiskey', 'vodka', 'soda', 'juice', 'cocktail'],  # some as alcohol, 21-5, 15-8
@@ -342,6 +343,8 @@ tea: There is tea.
         if text.endswith('.'): text = text[:-1]
         if not text.split()[-1].startswith(noun[:2]): # e.g. 'red' -> 'a red apple'
             text = noun  # print(f'{noun} -> {text}. Skip abnormal wrap')
+        if not text.split()[-1].startswith(noun): # e.g. 'blackberry' -> 'blackberries'
+            text = noun; print(f'{noun} -> {text}. Skip abnormal wrap')
         return text
     return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003')) # by lxy
 
@@ -353,6 +356,8 @@ def strip_a(text):
     return text
 
 def the_(noun, uppercase=True):
+    if noun.lower() in ['who', 'which']: return noun  # in swap_qa
+    if noun[0].isupper(): return noun  # proper noun
     the = 'The' if uppercase else 'the'
     return the + ' ' + strip_a(noun)
 
@@ -420,6 +425,8 @@ The blueberries are here.
     prompt = prompt_fn('')
     match = re.search(noun + ' ', prompt)
     if match is not None: return noun + ' ' + prompt[match.end():].split(' ', 1)[0]
+    dictss = {'The bread': 'The bread is', 'The cake': 'The cake is', 'The pizza': 'The pizza is', 'The cherries':'The cherries are'}
+    if noun in dictss: return dictss[noun] 
     return noun + ' ' + extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003'))
 
 def wrap_noun_to_french(noun):
@@ -523,7 +530,11 @@ class Relation(object):
     def f(self, x): return self._dict.get(x, [])
     def inv_f(self, x): return self._inv_dict.get(x, [])
     def dom(self, xs=None): return list(self._dict.keys())
-    def codom(self, ys=None): return join_lists(self._dict.values())
+    def codom(self, ys=None):
+        elems = join_lists(self._dict.values()) if self.name != 'sibling' else list(self._dict.keys())
+        assert len(elems) == len(set(elems)), f'{len(elems)} != {len(set(elems))}'
+        return elems
+
     def b(self, x0, x1): return x1 in self._dict.get(x0, [])
 
     def __str__(self):
@@ -601,7 +612,7 @@ class SymSet(Set):
             for similars, opposites in [(pair[0], pair[1]), (pair[1], pair[0])]:
                 for i, e in enumerate(similars):
                     self.equal._dict[e] = [e]
-                    if len(similars) > 1: self.similar._dict[e] = list(set(similars) - {e})
+                    if len(similars) > 1: self.similar._dict[e] = list_diff(similars, [e])
                     if i == 0: self.opposite._dict[e] = opposites[:1]
         self.opposite._inv_dict, self.similar._inv_dict = self.opposite._dict, self.similar._dict
         self.equal._inv_dict = self.equal._dict
@@ -630,7 +641,7 @@ class TreeSet(Set):
             for child in children:
                 self.parent._dict[child] = [parent]
                 self.equal._dict[child] = [child]
-                self.sibling._dict[child] = list(set(children) - {child})
+                self.sibling._dict[child] = list_diff(children, [child])
         self.child._inv_dict, self.parent._inv_dict = self.parent._dict, self.child._dict
         self.sibling._inv_dict = self.sibling._dict
         self.equal._inv_dict = self.equal._dict
@@ -847,15 +858,28 @@ def move_ranges(r, offset):
 def locate_ranges(examples, example_strs, tokenizer, bos_token):
     ranges, all_tokens, newline_token = [], [], tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同
     assert len(examples) == len(example_strs)
+    if my_isinstance(tokenizer, LLAMATokenizer):  # add by lxy
+        text = '\n'.join(example_strs) + '\n'
+        all_tokens_llama = [tokenizer.convert_ids_to_tokens(i).replace('▁', ' ') for i in tokenizer.encode(text, bos = True)]
+        all_tokens_llama[2] = all_tokens_llama[2][1:] if len(all_tokens_llama) > 1 else None # space和非space这里有问题
+        sep_tokens, sep_token = [], []
+        for token in all_tokens_llama:
+            if token != '<0x0A>':
+                sep_token.append(token) 
+            else:
+                sep_tokens.append(sep_token[:])
+                sep_token = []
     for i, (e, e_str) in enumerate(zip(examples, example_strs)):
         # tokens = tokenizer.tokenize(e_str)  # can not work with locate
         if my_isinstance(tokenizer, LLAMATokenizer):# by lxy
-            tokens = [tokenizer.convert_ids_to_tokens(i).replace('▁', ' ') for i in tokenizer.encode(e_str)]
-            tokens[0] = tokens[0][1:] if len(tokens) > 0 else None
+            # tokens = [tokenizer.convert_ids_to_tokens(i).replace('▁', ' ') for i in tokenizer.encode(e_str)]
+            # print(tokens)
+            # tokens[0] = tokens[0][1:] if len(tokens) > 0 else None
+            tokens = sep_tokens[i]
             newline_token = '<0x0A>'
         else:
             tokens = [tokenizer.decode([i]) for i in tokenizer.encode(e_str)] #解码不出来空格
-        assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
+            assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
         r = example2ranges(e, tokens, bos_token[i] if isinstance(bos_token, (tuple, list)) else bos_token)
         ranges.append(move_ranges(r, len(all_tokens)))
         all_tokens += tokens + [newline_token]
@@ -891,7 +915,7 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
 # bos_token='▁is'; eos_token='</s>' for s2s
 # bos_token='Ġ->', eos_token='Ċ' for gpt
 def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
-    example_strs = text.strip().split('\n')
+    example_strs = text.strip('\n').split('\n')  # strip the trailing '\n'
 
     input_ids = tokenizer.encode(text, return_tensors='pt')
 
@@ -917,7 +941,7 @@ def query2wh(vocab, query2str):
 
 def capitalize(s): return s[0].upper() + s[1:] if s else ''  # different from str.capitalize() !
 
-def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, options_position=None):
+def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, options_position=None, tokenizer = None):
     cxt, *_ = examples[0]
     cxt_len = len(cxt)
     if abstract:
@@ -941,11 +965,13 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
             _bos_token = "'s" if query_str.endswith("'s") else query_str.split()[-1]
         else:
             _bos_token = bos_token
-        # if do_swap_qa: _bos_token = '?'; s += _bos_token + ' ' + ans2str(real_ans)
         if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
-    return examples, '\n'.join(example_strs) + '\n', bos_tokens
+    if my_isinstance(tokenizer, LLAMATokenizer): # add by lxy
+        return examples, ' ' + '\n '.join(example_strs) + '\n', bos_tokens
+    else:
+        return examples, '\n'.join(example_strs) + '\n', bos_tokens
 
 def get_answer_index(example):
     cxt, query, cands, (*_, ans), *cls = example
@@ -1015,6 +1041,11 @@ def decorate_rel(task, hop, kwargs):
     task = new_vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a
     return task
 
+def split_bos(suffix, end='?'):
+    if suffix == '': end, bos = '', end
+    else: end, bos = f'{end} {suffix.lstrip().capitalize()}'.rsplit(' ', 1); bos = ' ' + bos
+    return end, bos
+
 def swap_qa(task):
     vocab_fn, gen_fn, cxt2str, query2str, bos_token, *a = task
     # task = (vocab_fn, swap_qa(gen_fn), *a)
@@ -1023,10 +1054,12 @@ def swap_qa(task):
     swapped_item2str = lambda i, v: item2str(i[::-1], v)
     new_cxt2str = deepcopy(cxt2str)
     new_cxt2str.keywords['item2str'] = swapped_item2str
+
+    capitalized = new_vocab_fn()[1].relations[0].dom()[0][0].isupper()
+    end, new_bos_token = split_bos('the' if not capitalized else '')
     def new_query2str(q, v):
         wh = 'who' if vocab_fn()[0].data.__name__ in ['persons', 'genders_of_persons'] else 'which'
-        return (query2str(wh, v) + bos_token + ' ' + q).replace("who's", "whose")
-    new_bos_token = '?'
+        return f'{query2str(wh, v)}{bos_token} {q}{end}'.replace("who's", "whose")
     task = (new_vocab_fn, gen_fn, new_cxt2str, new_query2str, new_bos_token, *a)
     return task
 
@@ -1076,8 +1109,10 @@ def remove_local_hop(task):
 
     new_cxt2str = partial(_cxt2str, prefix='There are ', sep=', ',
         item2str=lambda i, _: wrap_noun(i) if not i[0].isupper() else i)
+    # capitalized = data_names[0] in ['persons', 'genders_of_persons', 'country2capital', 'countries_of_cities']
     capitalized = new_vocab_fn()[1].relations[0].dom()[0][0].isupper()
-    end, new_bos_token = ("?", " The") if not capitalized else ("", "?")
+    end, new_bos_token = split_bos('the' if not capitalized else '')
+    
     if not fixed_query:
         wh = 'who' if data_names[0] in ['persons', 'genders_of_persons'] else 'which'
         prep = 'like ' if rel_names[0] in ['sibling', 'neg_sibling'] else ''
@@ -1103,11 +1138,10 @@ def remove_query(task):
     new_gen_fn.__name__ = f"rm_query[{fn2str(gen_fn)}]"
 
     wh = 'who' if data_names[1] in ['persons', 'genders_of_persons'] else 'which'
+    # capitalized = data_names[0] in ['persons', 'genders_of_persons', 'country2capital', 'countries_of_cities']
     capitalized = vocab_fn()[1].relations[0].dom()[0][0].isupper()
-    s = ('like' if rel_names[1] == 'sibling' else '') + (' the' if not capitalized else '')
-    s = s.lstrip().capitalize()
-    if s == '': end, new_bos_token = ('', '?')
-    else: end, new_bos_token = f'? {s}'.rsplit(' ', 1); new_bos_token = ' ' + new_bos_token
+    end, new_bos_token = split_bos(('like' if rel_names[1] == 'sibling' else '')
+        + (' the' if not capitalized else ''))
     new_query2str = (lambda q, v: f"{wh} is different{end}")
     task = vocab_fn, new_gen_fn, cxt2str, new_query2str, new_bos_token, *a
     return task
@@ -1160,15 +1194,18 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True
         ans_counts = Counter([ans for cxt, query, cands, (*_, ans), *cls in examples]).most_common()
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
-        i += 1; assert i < 20, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:3]) + '\n' + str(ind_counts) + '\n' + str(ans_counts)
+        i += 1; assert i < 25, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:3]) + '\n' + str(ind_counts) + '\n' + str(ans_counts)
     # if i > 1: print('In generate: i =', i)
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())
         label_probs = F.one_hot(torch.LongTensor(answer_indices))
         _ = plt.figure(figsize=(10, 0.7))
         _ = sns.heatmap(label_probs.T, cbar=False); plt.show()
-    examples, text, bos_token = make_input_str(task, vocabs, examples, rev_item2str=rev_item2str, abstract=abstract)
+    examples, text, bos_token = make_input_str(task, vocabs, examples, rev_item2str=rev_item2str, abstract=abstract, tokenizer = tokenizer)
     if verbose: print(text)
+    if my_isinstance(tokenizer, LLAMATokenizer):  # add by lxy  avoid  len(text) > max_length
+        if len(tokenizer.tokenize(text)) >= max_length:
+            return generate(task, nrows - 1, cxt_len, rev_item2str, abstract, plot, verbose, max_length, tokenizer)
     return examples, text, bos_token
 
 def task2str(task):
