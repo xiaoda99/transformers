@@ -23,7 +23,10 @@ import torch.nn.functional as F
 # cache_dir = '/nas/xd/.cache/torch/transformers/'
 # tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
 
-def join_lists(x): return list(chain.from_iterable(x))
+def join_lists(x, dedup=False):
+    l = list(chain.from_iterable(x))
+    if dedup: l = list(set(l))
+    return l
 
 def list_diff(l1, l2):  # will preserve order of elements in l1 compared to list(set(l1) - set(l2))
     l2 = set(l2)

@@ -196,8 +196,14 @@ class GPTJAttention(nn.Module):
         attn_weights = attn_weights.to(value.dtype)
         attn_weights = self.attn_dropout(attn_weights)
 
+
         if getattr(self, "mask", None) is not None: #nrk
-            attn_weights = torch.einsum('bnij,ni -> bnij', attn_weights, self.mask)
+            if getattr(self, "pattern", None) is 'dot':
+                self.mask = self.mask.type(torch.float16)
+                attn_weights = torch.einsum('bnij,ij -> bnij', attn_weights, self.mask)
+            else:
+                self.mask = self.mask.type(torch.float16)
+                attn_weights = torch.einsum('bnij,ni -> bnij', attn_weights, self.mask)
 
         # Mask heads if we want to
         if head_mask is not None:

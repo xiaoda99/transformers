@@ -1,51 +1,65 @@
-import random
+import sys
+import os
 import torch
+sys.path.insert(0, '/nas/xd/projects/transformers/src')
+os.environ['HF_HOME'] = '/raid/xd/.cache/torch'
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+# device = torch.device('cuda:4')
+
+from IPython.display import HTML, display
+import copy
+from math import log, exp
+
+import random
+import string
+from itertools import product, chain
+import math
+from functools import reduce
+import json
+from tqdm import tqdm
+from contextlib import suppress
+from typing import Optional
+import numpy as np 
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+import einops
+
+
 
 from transformers.data.data_collator import DataCollator, default_data_collator
 from transformers import AutoConfig, pipeline
 from transformers import RobertaForMaskedLM, RobertaTokenizer, GPT2LMHeadModel, GPT2Tokenizer, GPTNeoForCausalLM, AutoModelForCausalLM
-
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, GPTNeoForCausalLM, GPTJForCausalLM
-import pysvelte as ps 
-import unseal
-import string
-from itertools import product, chain
-import math
-import json
-from tqdm import tqdm
-from IPython.display import HTML, display
 
 import npm
-from contextlib import suppress
-from typing import Optional
-import torch
+import pysvelte as ps 
+import unseal
 from unseal import transformers_util as tutil
 from unseal import hooks
 import unseal.visuals.utils as utils
 from unseal.hooks import HookedModel
-import os
+
+from common_utils import *
 from utils import *
 # from child_utils import *
-from common_utils import *
 # from model_utils import *
-import pandas as pd
-import matplotlib.pyplot as plt
-import einops
+
 
 
 ###读数据
 
 def choose_date(name):
-    if(name == "1"):
+    if name == "1":
         sentences_Winograd = read_Winograd("../../../data/circuits_datasets/winogrande_1.1/winogrande_1.1/dev.jsonl")
         textsent = sentences_Winograd
-    elif(name == "2"):
+    elif name == "2":
         sentences_commonsenseqa = read_commonsenseqa("../../../data/circuits_datasets/commonsenseqa/dev_rand_split.jsonl")
         textsent = sentences_commonsenseqa
-    elif(name == "3"):
+    elif name == "3":
         sentences_CSQA2 = read_CSQA2("../../../data/circuits_datasets/CSQA2/CSQA2_dev.json")   
         textsent = sentences_CSQA2
-    elif(name == "4"):
+    elif name == "4":
         sentences_anli = read_anli("../../../data/circuits_datasets/anli_v1.0/anli_v1.0/R1/dev.jsonl")   
         textsent = sentences_anli[:10]
     else:
@@ -208,7 +222,7 @@ def get_value(t):
     return t[-1]
 
 def sort_form(tuple_head, k = 5):
-    tuple_head_sort = sorted(tuple_head, key=get_value,reverse=True)
+    tuple_head_sort = sorted(tuple_head, key=get_value, reverse=True)
     return tuple_head_sort[:k]
 
 #########
@@ -225,12 +239,13 @@ def choose(k,head_list):
     text_choice = random.choices(textlist,k=k)
     return text_choice
 
-#激活head拼接
-def concat(attentions, heads):
-    if(heads == []):
+#激活head注意力拼接
+def concat_attn(attentions, heads):
+    if heads == []:
         return
+    
     output = attentions[heads[0][0]][0][heads[0][1]]
-    if(len(heads)>1):
+    if len(heads)>1:
         for i in heads[1:]:
             try:
                 output= torch.stack([output, attentions[i[0]][0][i[1]]],0);
@@ -238,10 +253,21 @@ def concat(attentions, heads):
                 output= torch.vstack((output,attentions[i[0]][0][i[1]][None]));
     return output.detach()
     
+#预测概率值拼接（稀疏矩阵）
+def concat_prob(matrix1,matrix2):
+    if type(matrix1) == int:
+        return matrix2
+    else:
+        try:
+            output= torch.stack([matrix1, matrix2],0);
+        except:
+            output= torch.vstack((matrix1,matrix2[None]));
+        return output
+
 #绘图函数
 def draw(attentions,tokenizer, text, heads):
     html_storage = {}
-    val = concat(attentions, heads)
+    val = concat_attn(attentions, heads)
     try:
         vall = einops.rearrange(val[:,:,:], 'h n1 n2 -> n1 n2 h ')
     except:
@@ -284,12 +310,13 @@ def str2tuple(head_list):
         hlist = [i[0],{eval(j) : i[1][j] for j in i[1]}]
         head_list1.append(hlist)
     return head_list1
+    
 
 
 #pickle dump head_dict #存json
 def dump_list(head_list,name,num):
     with open(f'nrk/{name}_{num}.json', 'w',encoding='utf-8') as fp:   #覆写
-#     with open('nrk/head_list.json', 'a',encoding='utf-8') as fp:   #添加
+    # with open(f'nrk/{name}_{num}.json', 'a',encoding='utf-8') as fp:   #添加
         head_list = tuple2str(head_list)
         json.dump(head_list, fp)
 
@@ -404,21 +431,219 @@ def show_times_distence(head_list, heads,tokenizer):
         # plt.xticks(range(0,len(x_label),10), [i for i in range(0,len(x_label),10)], fontsize=7)
         plt.show()
 
+####清除预测概率部分
+def find_position(tokenizer,head_list, num): #num查询第几句话,查询全部可以用循环
+    pos = {}
+    text = head_list[num][0]
+    for k,v in head_list[num][1].items():
+        pos[k] = [(l[0][0],l[0][1]) for l in v]
+    return text, pos
+
+#将需要清除注意力的位置置零
+def create_mask_row(head, position, length):
+    mask = torch.ones(16,length)
+    mask[head, position] = 0
+    return mask
+
+def create_mask_dot(position, length):
+    mask = torch.ones(length,length)
+    mask[position[0],position[1]] = 0
+    return mask
+
+#筛选数据，仅保存两次均预测正确且清除后预测概率发生变化的值
+def pred_right(model, Data, input_ids, out, pos):
+    data = copy.deepcopy(Data)
+    result = input_ids[0][pos+1:] == out.logits[0].argmax(1)[pos:-1]
+    for i in range(len(data)):
+        data[i]["prob_2"] = None
+    
+    for i in range(pos+1,len(data)):
+        if result[i-pos-1] == True:
+            data[i]["prob_2"] = out.logits[0, i-1].softmax(-1)[input_ids[0][i]].item()
+            
+    for i in range(len(data)):
+        data[i]["Prob_diff"] = 0
+        data[i]["cut_pos"] = pos
+        
+    for i in range(pos+1,len(data)):
+        if data[i]["prob_2"] != None:
+            data[i]["Prob_diff"] = log(data[i]["prob_2"]) - log(data[i]["prob_1"])
+            
+    data1 = []        
+    for i in data:
+        if i["Prob_diff"] != 0:
+            data1.append(i)
+    return data1
+
+def show_difference_of_probability(data):
+    difference = pd.DataFrame(data, columns = ["文本编号","token位置", "token_id", "是否预测正确","清除注意力前概率","清除注意力后概率","log概率差","被注意力清除的token位置"])   
+    pd.set_option('display.max_rows', None)      
+    return difference
+
+
+#前传两次，获得全部值
+def make(model,tokenizer, text, pos, num, device, pattern):
+    inputs = tokenizer.encode_plus(text, return_tensors='pt')
+    inputs = prepare_inputs(inputs, device)
+    Data = []
+    json_dict = {}
+    data ={}
+    #前传第一次，不清除注意力
+    out = model(**inputs, output_attentions=True)
+    
+    data["sentence"] = num
+    data["pos"] = 0
+    data["token_id"] = inputs.input_ids[0][0].item()
+    data["is_right"] = 0
+    data["prob_1"] = 0
+    Data.append(data) #开头第一个token，不预测
+    for i in range(1,len(inputs.input_ids[0])):
+        data = {}
+        token = inputs.input_ids[0][i].item()
+        right = 1 if out.logits[0].argmax(1)[i-1] == token else 0
+        prob = out.logits[0, i-1].softmax(-1)[token].item()
+        data["sentence"] = num
+        data["pos"] = i
+        data["token_id"] = token
+        data["is_right"] = right
+        data["prob_1"] = prob
+        Data.append(data)
+    
+    #前传第二次，清除注意力
+    for h,p in pos.items():
+        data_dict = {}
+        layer,head = h
+        if(pattern == "row"):
+            self = model.transformer.h[layer].attn
+            for position in p:
+                self.pattern = pattern
+                self.mask = create_mask_row(head, position[0], len(inputs.input_ids[0]))
+                self.mask = self.mask.to(device)
+                out = model(**inputs, output_attentions=True)
+                data = pred_right(model, Data, inputs.input_ids, out, position[0])
+                data_dict[position[0]] = data
+                json_dict[(layer,head)] = data_dict
+                del self.mask
+                del self.pattern
+            del self
+        else:
+            for position in p:
+                for l in range(28):
+                    self = model.transformer.h[l].attn
+                    self.pattern = pattern
+                    self.mask = create_mask_dot(position, len(inputs.input_ids[0]))
+                    self.mask = self.mask.to(device)
+                out = model(**inputs, output_attentions=True)
+                data = pred_right(model, Data, inputs.input_ids, out, position[0])
+                data_dict[position[0]] = data
+                json_dict[(layer,head)] = data_dict
+                for l in range(28):
+                    self = model.transformer.h[l].attn
+                    # self.pattern = pattern
+                    # self.mask = create_mask_dot(position, len(inputs.input_ids[0]))
+                    # self.mask = self.mask.to(device)
+                    del self.mask
+                    del self.pattern
+                    # del self
+    return [text,json_dict]
+
+#构造可能性矩阵    
+def Constructing_probability_matrix(tokenizer,data, heads, pos): #pos：（行，列）,length:句子长度， out.logits[1,length,50400]
+    prosort = []
+    TF = [len(i[1]) > 0 for i in pos.items()]
+    heads = [heads[i] for i in range(len(TF)) if TF[i] == True]
+    output = 0
+
+    length = len(tokenizer.encode_plus(data[0]).input_ids)
+    for h in heads:
+        for j,k in data[1].items():
+            if j == h:
+                zero = torch.zeros(length,length)
+                for column,r in k.items():
+                    for row in r:
+                        zero[row["pos"]][int(column)] = row["Prob_diff"] * -1  * 10
+                output = concat_prob(output,zero)
+    return output,heads
+
+#画可能性矩阵关系图
+def draw_prob(tokenizer, text, heads, matrix):
+    html_storage = {}
+    val = matrix
+    try:
+        vall = einops.rearrange(val[:,:,:], 'h n1 n2 -> n1 n2 h ')
+    except:
+        val = val[None]
+        vall = einops.rearrange(val[:,:,:], 'h n1 n2 -> n1 n2 h ')
+    sent = tokenizer.tokenize(text)
+    tokenized_text = list(map(tokenizer.convert_tokens_to_string, map(lambda x: [x], sent))) 
+    html_object = ps.AttentionLogits(tokens=tokenized_text, attention=vall, pos_logits=vall, neg_logits=vall, head_labels=[f'{i}:{j}' for i,j in heads])
+    html_object = html_object.update_meta(suppress_title=True)
+    html_str = html_object.html_page_str()
+    html_storage[f'{text}'] = html_str
+    html_objects = {key: HTML(val) for (key, val) in html_storage.items()}
+    print(f'\n')
+    display(html_objects[f'{text}'], display_id=text)
+
+def Filter_head(data, head):
+    data_head = []
+    for i in data:
+        try:
+            data_head.append(i[1][head])
+        except:
+            continue
+    return data_head
+
+
+def sort_prob_diff(data, head):
+    data_head = Filter_head(data, head)
+    data_head_dict = []
+    for i in data_head:
+        for j in list(i.values())[:]:
+            for k in j:
+                data_head_dict.append(k)
+    data_head = sorted(data_head_dict, key=lambda x:x['Prob_diff'])
+    
+    sorted_list = [list(i.values())[:] for i in data_head if list(i.values())[-2] > 1e-2 or list(i.values())[-2] < -1e-2]
+    
+    return data_head, sorted_list
+
+
 def main():
+    
     models = {}
     cache_dir = '/nas/xd/.cache/torch/transformers/'  # for models besides t5-3b/11b
+    # cache_dir = '/mnt/nvme1/xd/.cache/torch/transformers/'  # for gpt-j-6B on elderberry
     proxies = {'http': '192.168.50.1:1081'} 
     model_name = "EleutherAI/gpt-j-6B"
-    model = GPTJForCausalLM.from_pretrained(model_name, proxies=proxies, cache_dir=cache_dir)
+    device = torch.device('cuda:7')
+    model = GPTJForCausalLM.from_pretrained(model_name, proxies=proxies, cache_dir=cache_dir, revision="float16", torch_dtype=torch.float16, low_cpu_mem_usage=True).to(device)
     tokenizer = GPT2Tokenizer.from_pretrained('gpt2', cache_dir=cache_dir)
     models[model_name] = model, tokenizer
 
-    heads = [(5,12), (7,9) , (7,2) , (6,5) , (3,7) , (8,7) , (6,2) , (3,12)]
-    for num in ["1","2","3","4","5"]:
-        print('processing dataset', num)
-        texts = read_texts(num)
-        head_list = find_activations(model, tokenizer, texts, heads)
-        dump_list(head_list,num)
-     
+    # heads = [(5,12), (7,9) , (7,2) , (6,5) , (3,7) , (8,7) , (6,2) , (3,12)]
+    # for num in ["1","2","3","4","5"]:
+    #     print('processing dataset', num)
+    #     texts = read_texts(num)
+    #     head_list = find_activations(model, tokenizer, texts, heads)
+    #     dump_list(head_list,num)
+    for num in ["1"]:
+        head_list = load_list("head_list",num)
+        data = []
+        for i in tqdm(range(len(head_list))):
+            text,pos = find_position(tokenizer, head_list, i)
+            a = tokenizer.encode(text)
+            for j in pos.items():
+                Pos = j[1]  
+                for k in Pos:
+                    if(a[k[0]] != a[k[1]] or k[0]-k[1]==1):
+                        Pos.pop(Pos.index(k))
+            print(pos)
+            return 0           
+            Data = make(model, tokenizer, text, pos, i, device, "dot")
+            data.append(Data)
+        
+        dump_list(data,"probability_dot_without_same",int(num))
+
+
 if __name__== "__main__" :
     main()

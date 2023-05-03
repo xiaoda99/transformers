@@ -800,9 +800,18 @@ class Ranges:
     ans0s: list = None
     example: tuple = None
 
+@dataclass
+class IOIRanges:   # wab
+    bos: tuple = None
+    ans: tuple = None
+    ans0: tuple = None
+    s1: tuple = None
+    s2: tuple = None
+    ans0s: list = None
+    example: tuple = None
 
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
-def locate(tokens, substring, return_last=False):
+def locate(tokens, substring, return_last=False, return_all=False):
     if substring is None: return None
     substring = substring.lower()
     substring = strip_a(substring)
@@ -810,29 +819,47 @@ def locate(tokens, substring, return_last=False):
     whole_string = "".join(t for t in tokens)
     assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
     if substring.strip() in ['->', '?']:
-        index_fn = getattr(whole_string, 'index' if not return_last else 'rindex')
-        char_loc = index_fn(substring)
+        char_locations = [whole_string.index(substring), whole_string.rindex(substring)]
     else:
         pattern = r"\b%s\b" if not substring.startswith(" ") else r"%s\b"
         try: matches = list(re.finditer(pattern % substring, whole_string))
         except Exception: print(f'sub = {substring}, whole = {whole_string}'); raise
         assert len(matches) > 0, f'{tokens}\n{substring} not match {whole_string}'
-        char_loc = matches[-int(return_last)].span()[0]
-    loc = 0; tok_start, tok_end = None, None
-    for i, t in enumerate(tokens):
-        loc += len(t)
-        _t = t[1:] if t.startswith(' ') else t
-        if tok_start is None and loc > char_loc:
-            assert substring.find(_t) in [0, 1], \
-                f'{whole_string}\n{tokens}\n{substring} not startswith {_t} at {i}. loc = {loc}, char_loc = {char_loc}'
-            tok_start = i
-        if tok_end is None and loc >= char_loc + len(substring):
-            assert substring.endswith(_t), f'{whole_string}\n{tokens}\n{substring} not endswith {_t} at {i}'
-            tok_end = i + 1
-            break
-    return (tok_start, tok_end)
+        char_locations = [m.span()[0] for m in matches]
+    if not return_all: char_locations = [char_locations[-int(return_last)]]
+    ranges = []
+    for char_loc in char_locations:
+        loc = 0; tok_start, tok_end = None, None
+        for i, t in enumerate(tokens):
+            loc += len(t)
+            _t = t[1:] if t.startswith(' ') else t
+            if tok_start is None and loc > char_loc:
+                assert substring.find(_t) in [0, 1], \
+                    f'{whole_string}\n{tokens}\n{substring} not startswith {_t} at {i}. loc = {loc}, char_loc = {char_loc}'
+                tok_start = i
+            if tok_end is None and loc >= char_loc + len(substring):
+                assert substring.endswith(_t), f'{whole_string}\n{tokens}\n{substring} not endswith {_t} at {i}'
+                tok_end = i + 1
+                break
+        assert tok_start is not None and tok_end is not None, f'{tok_start}, {tok_end}'
+        if not return_all: return (tok_start, tok_end)
+        ranges.append((tok_start, tok_end))
+    return ranges
 
 def example2ranges(example, tokens, bos_token):
+    if 'IO' in example:  # ioi task
+        e = example
+        ranges = IOIRanges(
+            bos = (e['end'].item(), e['end'].item()+1),
+            ans = (e['end'].item()+1, e['end'].item()+2),
+            ans0 = (e['IO'].item(), e['IO'].item()+1),  # io == ans0
+            s1 = (e['S'].item(), e['S'].item()+1),
+            s2 = (e['S2'].item(), e['S2'].item()+1),
+        )
+        ranges.ans0s = tuple(map(np.array, zip(ranges.ans0, ranges.s1)))  # XD: remove ranges.s2
+        ranges.example = (0, ranges.ans[-1])  # XD
+        return ranges
+
     cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
     ranges = Ranges(
         bos = locate(tokens, bos_token, return_last=True),
@@ -840,10 +867,12 @@ def example2ranges(example, tokens, bos_token):
         ans0 = locate(tokens, ans0),
         query = locate(tokens, query, return_last=True),
         tgt = locate(tokens, tgt),
-        ans0s = tuple(map(np.array, zip(*[locate(tokens, a0) for a0 in candidates[-2]]))) \
-            if candidates else None,
         example = (0, len(tokens))
     )
+    if candidates is not None:
+        max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
+        ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
+            [locate(tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
     if '.' in tokens:
         sep_i = tokens.index('.', ranges.tgt[1])
         ranges.sep = (sep_i, sep_i + 1)
@@ -873,12 +902,11 @@ def locate_ranges(examples, example_strs, tokenizer, bos_token):
         # tokens = tokenizer.tokenize(e_str)  # can not work with locate
         if my_isinstance(tokenizer, LLAMATokenizer):# by lxy
             # tokens = [tokenizer.convert_ids_to_tokens(i).replace('▁', ' ') for i in tokenizer.encode(e_str)]
-            # print(tokens)
             # tokens[0] = tokens[0][1:] if len(tokens) > 0 else None
             tokens = sep_tokens[i]
             newline_token = '<0x0A>'
         else:
-            tokens = [tokenizer.decode([i]) for i in tokenizer.encode(e_str)] #解码不出来空格
+            tokens = [tokenizer.decode([i]) for i in tokenizer.encode(e_str)] # lxy: 解码不出来空格
             assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
         r = example2ranges(e, tokens, bos_token[i] if isinstance(bos_token, (tuple, list)) else bos_token)
         ranges.append(move_ranges(r, len(all_tokens)))
@@ -915,12 +943,12 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
 # bos_token='▁is'; eos_token='</s>' for s2s
 # bos_token='Ġ->', eos_token='Ċ' for gpt
 def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
-    example_strs = text.strip('\n').split('\n')  # strip the trailing '\n'
-
     input_ids = tokenizer.encode(text, return_tensors='pt')
-
+    example_strs = text.strip('\n').split('\n')  # strip the trailing '\n'
     ranges = locate_ranges(examples, example_strs, tokenizer, bos_token)
-    bos_indices = [r.bos[-1] - 1 for r in ranges] # by lxy
+    # bos_indices = [r.bos[0] for r in ranges]
+    # by lxy: when bos is tokenized into multiple tokens, e.g. 'likes' -> ['__lik', 'es'] in LLaMA, use last token's index
+    bos_indices = [r.bos[-1] - 1 for r in ranges]
     bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
     if s2s:  # for t5 models
         bos_i, eos_i = bos_indices[-1], eos_indices[-1]
@@ -1185,7 +1213,7 @@ def transform_task(task, rel0_i=None, rel1_i=None, #replace_rel0=0, replace_rel1
         return None
     return task
 
-def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True, verbose=True, max_length = 512, tokenizer = None):
+def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, plot=True, verbose=True, tokenizer = None, max_length=512):
     ans_counts = [('a', nrows)]; ind_counts = [(0, 9), (1, 1)]; i = 0
     while len(ind_counts) > 1 and (len(ind_counts) < cxt_len or ind_counts[-1][1] == 1 or ind_counts[0][1] > ind_counts[-1][1] * 3) or \
             len(ans_counts) == 1 or len(ans_counts) > 2 and ans_counts[0][1] > nrows / 4 or len(ans_counts) == 2 and ans_counts[0][1] >= ans_counts[1][1] * 2:
