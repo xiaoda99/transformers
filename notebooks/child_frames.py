@@ -188,3 +188,5 @@ def person_adjs(): return _person_adjs
 from common_utils import join_lists
 def positivities_of_adjs():
     return dict(zip(['positive', 'negtive'], map(join_lists, zip(*_person_adjs))))
+
+adjs = join_lists(positivities_of_adjs().values())

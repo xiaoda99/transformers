@@ -24,10 +24,11 @@ import torch.nn.functional as F
 from const import *
 from common_utils import join_lists, list_diff, my_isinstance, lget, fn2str
 from openai_utils import query_openai
+from SwissArmyTransformer import get_tokenizer
 from LLAMATokenizer import LLAMATokenizer
-# sys.path.insert(0, '/nas/xd/projects/PyFunctional')
-# from functional import seq
-# from functional.pipeline import Sequence
+sys.path.insert(0, '/nas/xd/projects/PyFunctional')
+from functional import seq
+from functional.pipeline import Sequence
 
 uppercase = list(string.ascii_uppercase)
 lowercase = list(string.ascii_lowercase)
@@ -43,8 +44,8 @@ full_vocab = uppercase + digits
 
 def types_of_characters(): return {
     'uppercase': uppercase,
-    'lowercase': lowercase,
-    'digit': digits,
+    # 'lowercase': lowercase,
+    # 'digit': digits,
 }
 
 # polygons = ['triangle', 'quadrangle', 'pentagon', 'hexagon', 'heptagon', 'octagon', 'nonagon', 'decagon',]# 'undecagon', 'dodecagon']
@@ -329,9 +330,9 @@ def city2resident():
         city2resident.demonyms.update({'the United States': 'American', 'the United Kingdom': 'British', 'England': 'English'})
     return {capital: city2resident.demonyms[country.replace('the ', '')] for country, capital in _country2capital}
 
-from child_frames import adjs
+from child_frames import positivities_of_adjs
 def a_(noun):  # prepend indefinite article a/an if possible
-    if noun[0].isupper() or noun in temporal_words + adjs:
+    if noun[0].isupper() or noun in temporal_words + join_lists(positivities_of_adjs().values()):
         return noun
     
     d = {'apple':  'an apple',  'chip': 'chips',  'coffee': 'coffee',  'biscuit': 'biscuits', 'dog': 'a dog', 'tea': 'tea'}
@@ -401,6 +402,23 @@ dog: He likes dogs.
     d = {'drink': 'drinks'}
     if noun in d: return d[noun]
     return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003'))  # better than text-davinci-002
+
+def _b(noun): # by lxy add b动词
+    prompt_fn = lambda s: \
+f'''The apple: The apple is john's.
+The chips: The chips are john's.
+The coffee: The coffee is john's.
+The shoes: The shoes are john's.
+The blueberries: The blueberries are john's.
+The tea: The tea is john's.
+{s}: {s}'''
+    def extract_fn(text):
+        text = text.strip()
+        if text.endswith('.'): text = text[:-1]
+        if text.split(' ')[0] not in ('is', 'are'): return 'is'
+        return text.split(' ')[0]
+    return noun + ' ' + extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003')) # by lxy
+    
 
 def _be(noun): # by xd
     prompt_fn = lambda s: \
@@ -521,7 +539,10 @@ class Relation(object):
         self.skip_inv_f = False
 
     def f(self, x): return self._dict.get(x, [])
-    def inv_f(self, x): return self._inv_dict.get(x, [])
+    def inv_f(self, x):
+        if x not in self._inv_dict:
+            print(f'{x} not in {self._inv_dict.keys()}')
+        return self._inv_dict.get(x, [])
     def dom(self, xs=None): return list(self._dict.keys())
     def codom(self, ys=None):
         elems = join_lists(self._dict.values()) if self.name != 'sibling' else list(self._dict.keys())
@@ -755,7 +776,7 @@ def MlMlM_gen(rels, cxt_len=3):
 def _str(l, vocab=None, sep=' '):
     if l is None: return ''
     if isinstance(l, str) or not isinstance(l, Iterable): l = [l]
-    # l = [e for e in l if not my_isinstance(e, Sequence)] #type(e).__name__ != 'Sequence']
+    l = [e for e in l if not my_isinstance(e, Sequence)] #type(e).__name__ != 'Sequence']
     if isinstance(l, (dict, OrderedDict)): l = [f'{k}: {v}' for k, v in l.items()]
     return sep.join(str(i) for i in l)
 
@@ -879,7 +900,7 @@ def example2ranges(example, tokens, bos_token):
         ranges.sep = (sep_i, sep_i + 1)
     return ranges
 
-def move_ranges(r, offset): 
+def move_ranges(r, offset):
     for field in fields(r):
         name = field.name; pair = getattr(r, name)
         if pair is not None: setattr(r, name, tuple([i + offset for i in pair]))
@@ -1013,9 +1034,6 @@ class InvalidTransException(Exception): pass
 
 def choose_rels(task, rel_indices):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
-    vocabs = vocab_fn()
-    for hop, rel_i in enumerate(rel_indices):
-        if rel_i >= len(vocabs[hop].relations): return None
 
     def new_vocab_fn():
         vocabs = vocab_fn()
@@ -1130,6 +1148,7 @@ def remove_local_hop(task, do_rm_query, do_g2c):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
     vocabs = vocab_fn()
     assert vocabs[0].data == vocabs[1].data
+    # class_name = vocabs[0].__class__.__name__
     data_name = vocabs[0].data.__name__
     rel_names = [v.relations[0].name for v in vocab_fn()]
     fixed_query = isinstance(gen_fn, partial) and 'query' in gen_fn.keywords
@@ -1190,6 +1209,16 @@ def g2c(task):
     task = (vocab_fn, _g2c(gen_fn), *a)
     return task
 
+def maybe_refine_verbalization(task):
+    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    rel_names = [vocab.relations[0].name for vocab in vocab_fn()]
+    if any('sibling' in rel_name for rel_name in rel_names):
+        def new_query2str(q, v):
+            return query2str(q, v).replace(' likes', ' may also like').replace(' wanna', ' may also wanna') \
+                .replace(' does not', ' may not').replace(' do not', ' may not')
+        task = (vocab_fn, gen_fn, cxt2str, new_query2str, *a)
+    return task
+
 def refine_query2str(task, phase):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
     if query2str is None: return task
@@ -1197,7 +1226,7 @@ def refine_query2str(task, phase):
     def new_query2str(q, v):
         query_str = query2str(q, v)
         if phase == 0: query_str = query_str + verbalize_relation(vocab_fn()[1])
-        if phase == 1 and any('sibling' in rel_name for rel_name in rel_names): # TODO: should be removed
+        if phase == 1 and any('sibling' in rel_name for rel_name in rel_names):
             query_str = query_str.replace(' likes', ' may also like').replace(' wanna', ' may also wanna') \
                 .replace(' does not', ' may not').replace(' do not', ' may not')
         return query_str
@@ -1208,12 +1237,31 @@ def has_local_hop(task):
     vocab_fn, *a = task; vocabs = vocab_fn()
     return vocabs[0].data != vocabs[1].data
 
+def transform_task0(task, rel0_i=None, rel1_i=None, #replace_rel0=0, replace_rel1=0,
+                rel0_kwargs=None, rel1_kwargs=None, do_swap_qa=False, do_negate=False,
+                do_rm_query=False, do_g2c=False):
+    try:
+        if rel0_i is not None: task = choose_rels(task, [rel0_i, rel1_i])
+        if rel0_kwargs is not None: task = decorate_rel(task, 0, rel0_kwargs)
+        if rel1_kwargs is not None: task = decorate_rel(task, 1, rel1_kwargs)
+        if not has_local_hop(task) and do_swap_qa: return None
+        if do_swap_qa: task = swap_qa(task)
+        if do_negate: task = negate(task)
+        if not has_local_hop(task): task = remove_local_hop(task, do_rm_query, do_g2c)
+        if do_rm_query: task = remove_query(task)
+        task = maybe_refine_verbalization(task)
+        if do_g2c: task = g2c(task)
+    except InvalidTransException as e:
+        trans_args = {k: v for k, v in locals().items() if k not in ['task', 'e']}
+        print(f'\ntransform_task failed: {e} ({args2str(trans_args)})')
+        return None
+    return task
+
 def transform_task(task, rel0_i=None, rel1_i=None, #replace_rel0=0, replace_rel1=0,
                 rel0_kwargs=None, rel1_kwargs=None, do_swap_qa=False, do_negate=False,
                 do_rm_query=False, do_g2c=False):
     try:
         if rel0_i is not None: task = choose_rels(task, [rel0_i, rel1_i])
-        if task is None: return None
         if rel0_kwargs is not None: task = decorate_rel(task, 0, rel0_kwargs)
         if rel1_kwargs is not None: task = decorate_rel(task, 1, rel1_kwargs)
         task = refine_query2str(task, 0)
@@ -1277,6 +1325,8 @@ def validate_args(task, args, trans_args):
     if rels[1].name == 'equal' and args['cxt_len'] == 1: return False
     if rels[1].name == 'sibling' and not trans_args.get('do_g2c'): return False
     return True
+
+
 
 def inc(token):
     assert len(token) == 1 or token in ['->'], token

@@ -44,7 +44,7 @@ from pptree import Node, print_tree
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, topi_md, \
     equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str
 
-from child_utils import make_data_tuple, get_answer_index, generate
+from child_utils_nrk import make_data_tuple, get_answer_index, generate
 from weight_analysis import get_head_weights
 
 @dataclass
@@ -1285,7 +1285,7 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
         result = Result(task=task, gen_args=gen_args, all_examples=all_examples, texts=texts, all_bos_tokens=all_bos_tokens)
     else:
         all_examples, texts, all_bos_tokens = result.all_examples, result.texts, result.all_bos_tokens
-    for text in texts[:1]: print('\n'.join(text.strip('\n').split('\n')[:4]))
+    for text in texts[:1]: print('\n'.join(text.split('\n')[:4]))
     if batch_size == 1: return result
 
     if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):

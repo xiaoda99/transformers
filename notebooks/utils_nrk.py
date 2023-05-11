@@ -607,6 +607,29 @@ def sort_prob_diff(data, head):
     
     return data_head, sorted_list
 
+def which_attn(tokenizer, head_list, num, head):  #看句子中谁关注谁，num为句子的序号，head为（8，7）格式
+    text,pos = find_position(tokenizer, head_list, num)
+    # print(pos)
+    Text = tokenizer.encode(text)
+    # print("length:",len(Text),"\n","token:",Text)
+    print(text)
+    for i in pos[head]:
+        print(f"{i[0]}_{tokenizer.convert_ids_to_tokens(Text[i[0]])}—>{i[1]}_{tokenizer.convert_ids_to_tokens(Text[i[1]])}")
+
+def which_token_mostdiff_in_this_pos(tokenizer,data,num,head, pos):
+    pd.set_option('display.max_columns', None)
+    pos_diff = data[num][1][head][pos]
+    a = tokenizer.encode(data[num][0])
+    pic_dict = {}
+    for i in range(len(a)):
+        pic_dict[i] = ''
+        pic_dict[i] = tokenizer.convert_ids_to_tokens(a[i]).replace('Ġ','')
+
+    df = pd.DataFrame(pic_dict,index=[0])
+
+    pos_diff = sorted(pos_diff, key=lambda x:x['Prob_diff'])
+    
+    return df,pos_diff
 
 def main():
     
@@ -626,23 +649,25 @@ def main():
     #     texts = read_texts(num)
     #     head_list = find_activations(model, tokenizer, texts, heads)
     #     dump_list(head_list,num)
-    for num in ["1"]:
+    for num in ["5"]:
+        print('processing dataset', num)
         head_list = load_list("head_list",num)
         data = []
         for i in tqdm(range(len(head_list))):
             text,pos = find_position(tokenizer, head_list, i)
-            a = tokenizer.encode(text)
-            for j in pos.items():
-                Pos = j[1]  
-                for k in Pos:
-                    if(a[k[0]] != a[k[1]] or k[0]-k[1]==1):
-                        Pos.pop(Pos.index(k))
-            print(pos)
-            return 0           
+            # a = tokenizer.encode(text)
+            # Pos = copy.deepcopy(pos)
+            # for j in Pos.items():
+            #     Pos1 = j[1]
+            #     for k in Pos1:
+            #         if(a[k[0]] != a[k[1]] or k[0]-k[1]==1):
+            #             num1 = pos[j[0]].index(k)
+            #             pos[j[0]].pop(num1)
+                            
             Data = make(model, tokenizer, text, pos, i, device, "dot")
             data.append(Data)
         
-        dump_list(data,"probability_dot_without_same",int(num))
+        dump_list(data,"probability_dot_all",int(num))
 
 
 if __name__== "__main__" :
