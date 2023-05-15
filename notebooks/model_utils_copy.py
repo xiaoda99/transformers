@@ -44,7 +44,7 @@ from pptree import Node, print_tree
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, topi_md, \
     equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str
 
-from child_utils import make_data_tuple, get_answer_index, generate
+from child_utils_copy import make_data_tuple, get_answer_index, generate
 from weight_analysis import get_head_weights
 
 @dataclass
@@ -79,7 +79,7 @@ class AttrData:
     topi: int = None
     layer: int = None
     head: int = None
-    H: int = 64  # 64 for gpt-neox, 16 for gpt-j
+    H: int = 16  # 64 for gpt-neox, 16 for gpt-j/gpt-medium, 12 for gpt2
     label_type: str = None
     attn_pattern: str = None
     attribute_k: bool = False

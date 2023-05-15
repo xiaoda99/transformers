@@ -1069,13 +1069,18 @@ def verbalize_relation(vocab):
     else: rel_str = ''
     return rel_str
 
-def refine_query2str(task, do_swap_qa=False):
+def refine_query2str(task, phase, do_swap_qa=False):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
     if query2str is None: return task
     rel_names = [vocab.relations[0].name for vocab in vocab_fn()]
     def new_query2str(q, v):
+        query_str = query2str(q, v)
         # Tricky: new_query2str called and v passed AFTER swap_qa, so v has been swapped
-        return query2str(q, v) + verbalize_relation(v[1 - do_swap_qa])
+        if phase == 0: query_str = query_str + verbalize_relation(v[1 - do_swap_qa])
+        if phase == 1 and any('sibling' in rel_name for rel_name in rel_names): # TODO: should be removed
+            query_str = query_str.replace(' likes', ' may also like').replace(' wanna', ' may also wanna') \
+                .replace(' does not', ' may not').replace(' do not', ' may not')
+        return query_str
     task = (vocab_fn, gen_fn, cxt2str, new_query2str, *a)
     return task
 
@@ -1094,21 +1099,14 @@ def swap_qa(task):
     return task
 
 def negate_sent(s):  # TODO: a more principled way of negating a sentence
-    s00 = s0 = s
-    # s = s.replace(" likes", " does not like").replace(" wants ", " does not want ").replace(" wanna ", " does not want to ")
-    # s = s.replace(" arrived", " did not arrive").replace(" might be", " might not be")#.replace(" looks like", " does not look like")
-    # if ' has' in s: s = re.sub(r"\bhas\b", "does not have", s)
-    # if ' is' in s: s = re.sub(r"\bis\b", "is not", s)
-    # assert s != s0, s
-    n_replaced = 0
-    for old, new in [(" likes", " does not like"), (" arrived", " did not arrive"),
-        (" wants ", " does not want "), (" wanna ", " does not want to "),
-        (r"\bhas\b", "does not have"), (r"\bis\b", "is not")]:
-        if r"\b" in old: s = re.sub(old, new, s0)
-        else: s = s0.replace(old, new)
-        if s != s0: n_replaced += 1
-        s0 = s
-    assert n_replaced == 1, f'n_replaced = {n_replaced}: {s00} -> {s}'
+    s0 = s
+    # s = s.replace(" may also have", " may not have").replace(" may also like", " may not like") # replace_rel1=2
+    s = s.replace(" likes", " does not like").replace(" wants ", " does not want ").replace(" wanna ", " does not want to ")
+    s = s.replace(" arrived", " did not arrive").replace(" might be", " might not be")#.replace(" looks like", " does not look like")
+    if ' has' in s: s = re.sub(r"\bhas\b", "does not have", s)
+    if ' is' in s: s = re.sub(r"\bis\b", "is not", s)
+    # if ' can' in s: s = re.sub(r"\bcan\b", "can not", s)
+    assert s != s0, s
 
     singular_subs, plural_subs = ['boy ', 'girl '], ['boys ', 'girls ']
     sep = r"\bnot\b" #if " not " in s else r"\bis\b"
@@ -1210,7 +1208,7 @@ def transform_task(task, rel0_i=None, rel1_i=None, #replace_rel0=0, replace_rel1
         if task is None: return None
         if rel0_kwargs is not None: task = decorate_rel(task, 0, rel0_kwargs)
         if rel1_kwargs is not None: task = decorate_rel(task, 1, rel1_kwargs)
-        task = refine_query2str(task, do_swap_qa=do_swap_qa)
+        task = refine_query2str(task, 0, do_swap_qa=do_swap_qa)
         if not has_local_hop(task) and do_swap_qa: return None
         if do_swap_qa: task = swap_qa(task)
         if do_negate: task = negate(task)

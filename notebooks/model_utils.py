@@ -1885,7 +1885,8 @@ def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_
         node.data = AttrData(step=si, layer=layer, label_type=label_type)
         return node
 
-    if parent is not None and parent.data.attr is None and not force:
+    L, H = parent.data.attr.head.size()
+    if parent.data.attr is None and not force:
         print('parent has not been attributed yet, replace it instead of adding to it.')
         _id = id(parent); parent = parent.parent
         parent.children = [child for child in parent.children if id(child) != _id]
@@ -1897,7 +1898,7 @@ def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_
     si = parent.data.step
     if attn_pattern is None and label_type: _, attn_pattern, _ = parse_label_type(label_type)
     if step is None: step = si + 1
-    data = AttrData(step=step, topi=topi, layer=layer, head=head, label_type=label_type, 
+    data = AttrData(step=step, topi=topi, layer=layer, head=head, H=H, label_type=label_type, 
                     attn_pattern=attn_pattern, dummy=dummy, mixed=mixed, **kwargs)
     if head_attr is not None and not dummy and not mixed: update_attr_data(data, head_attr)
     return _add_node(parent, data, verbose=verbose)
@@ -1960,7 +1961,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
 
     top_data = []
     for i, (layer, head, score) in enumerate(zip(layers, heads, scores)):
-        d = AttrData(step=pd.step + 1, topi=i, layer=layer, head=head, top_score=score)
+        d = AttrData(step=pd.step + 1, topi=i, layer=layer, head=head, H=H, top_score=score)
         d._attn_pattern, d._attr_ap_score = 'unk', 0.  # used for sorting
         if head < H:
             d.attn_pattern, d.attr_ap_score = max([(ap, v[layer, head].item())
