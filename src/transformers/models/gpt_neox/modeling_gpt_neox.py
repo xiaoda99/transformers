@@ -198,7 +198,6 @@ class GPTNeoXAttention(nn.Module):
         query, key = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
         query = torch.cat((query, query_pass), dim=-1)
         key = torch.cat((key, key_pass), dim=-1)
-        # del query_rot, query_pass, key_rot, key_pass; torch.cuda.empty_cache()  # XD
 
         # Cache QKV values
         if has_layer_past:
@@ -287,10 +286,6 @@ class GPTNeoXAttention(nn.Module):
 
         attn_weights = nn.functional.softmax(attn_scores, dim=-1)
         attn_weights = attn_weights.to(value.dtype)
-        # XD: output attn_weights -> attn_scores
-        # attn_weights = None; attn_scores = nn.functional.softmax(attn_scores, dim=-1)
-        # attn_scores = attn_scores.to(value.dtype)
-        # return torch.matmul(attn_scores, value), attn_weights
 
         # Mask heads if we want to
         if head_mask is not None:
@@ -299,7 +294,6 @@ class GPTNeoXAttention(nn.Module):
         attn_weights = self.attention_dropout(attn_weights)
 
         attn_output = torch.matmul(attn_weights, value)
-        # self.query, self.key, self.value, self.attn_weights, self.attn_output = query.to('cpu').float(), key.to('cpu').float(), value.to('cpu').float(), attn_weights.to('cpu').float(), attn_output.to('cpu').float()  # XD debug
         return attn_output, attn_weights
 
 
@@ -899,7 +893,6 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_in(input_ids)
-        self.inputs_embeds = inputs_embeds.to('cpu')  # XD
 
         hidden_states = self.emb_dropout(inputs_embeds)
 
@@ -947,7 +940,7 @@ class GPTNeoXModel(GPTNeoXPreTrainedModel):
         hidden_states = self.final_layer_norm(hidden_states)
         # Add last hidden state
         if output_hidden_states:
-            all_hidden_states = all_hidden_states + (hidden_states.to('cpu').float(),)  # XD
+            all_hidden_states = all_hidden_states + (hidden_states,)
 
         # XD: workaround for the weird bug of CausalLMOutputWithPast tampering values
         if output_attentions: self.attentions = all_attentions; all_attentions = None

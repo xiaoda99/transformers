@@ -1129,7 +1129,7 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
             if i == k_shot and j == 0: k_shot_len = len(top1_corrects)
             top1_corrects.append(top1_correct)
             answer_probs.append(ans_prob)
-            if j == 0: candidate_probs.append(cand_probs_)
+            if j == 0: candidate_probs.append(cand_probs_); print('In show_predictions: cand_probs =', cand_probs_)
             if verbose: 
                 print(('*' if top1_correct else ' ') + ans_token, ans_prob, topk_stat, sep, example_str, logits_str)
     if use_openai_api:
@@ -1164,10 +1164,12 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
             custom_forward=True, trim=False, verbose=True, outputs = None):
     input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
         text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
-    if outputs is not None:
-        assert isinstance(tokenizer, LLAMATokenizer)
-        o = outputs
+    if my_isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)): # by lxy
+        prefix, o, encode = '', outputs, partial(tokenizer.encode, bos = False)
+        assert len(tokenizer.tokenize(text)) == input_ids.size(1), \
+            f"llama size {len(tokenizer.tokenize(text))} != {input_ids.size(1)}"  
     else:
+        prefix, encode = ' ', partial(tokenizer.encode)
         with torch.no_grad():
             o = forward0(model, input_ids.to(model.device), by_head=['value', 'attn_out'], ranges=ranges) \
                 if isinstance(model, nn.Module) and custom_forward else \
@@ -1188,8 +1190,6 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
         candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]
         answer_indices = [0 for _ in ranges]
     elif examples[0][2] is not None:  # cxt, query, cands, *_ = examples[0]
-        prefix, encode = ('', partial(tokenizer.encode, add_special_tokens=False)) \
-            if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else (' ', partial(tokenizer.encode))
         candidates = [[encode(prefix + token)[0] for token in cands[-1]]
                     for cxt, query, cands, *_ in examples]
         answer_indices = [get_answer_index(e) for e in examples]
@@ -1297,11 +1297,11 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
             input_ids, labels, ranges, *args = map(list, zip(*[make_data_tuple(
             text, examples, tokenizer, k_shot=k_shot, bos_token=bos_tokens, eos_token=None)
             for i, (examples, text, bos_tokens) in enumerate(zip(all_examples, texts, all_bos_tokens))]))
-            result.data_tuples = ranges
-            dictss = {k: v for k, v in result.__dict__.items() if k in ['data_tuples', 'texts']}
-            dictss['input_ids'] = input_ids
-            return dictss
+            result.data_tuples = labels
+            return {k: v for k, v in result.__dict__.items() if k in ['data_tuples', 'texts']}
             # return result
+            
+
         if True: #with Timer('In generate_and_predict_batch: predict'):
             result.data_tuples, result.eval_results = map(list, zip(*[predict(model, tokenizer, text, examples,
                 k_shot=k_shot, bos_token=bos_tokens, trim=trim, custom_forward=custom_forward, verbose=verbose,
@@ -1313,6 +1313,8 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
         result.answer_probs = np.array(answer_probs).mean(0)
         print(result.mean_loss, result.mean_acc)
         plt.plot(result.answer_probs)
+        # if gen_args.get('save_label', False):
+            # result.data_tuples =
     return result
 
 def show_predictions_by_data_tuples(model, tokenizer, data_tuples, k_shot, to_layer=None, verbose=True):

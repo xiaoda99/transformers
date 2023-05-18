@@ -19,6 +19,7 @@ import pickle
 import gzip
 import seaborn as sns
 import matplotlib.pyplot as plt
+from LLAMATokenizer import LLAMATokenizer
 from pt_model_recorder import BatchShareMemRecorder
 # from sklearn.manifold import TSNE, MDS
 # from sklearn.decomposition import PCA
@@ -31,8 +32,6 @@ import torch.nn.functional as F
 import einops
 from einops import rearrange
 
-from LLAMATokenizer import LLAMATokenizer
-from transformers import LlamaTokenizer
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 from transformers.models.gpt_neo.modeling_gpt_neo import GPTNeoSelfAttention, GPTNeoBlock
 from transformers.models.gptj.modeling_gptj import GPTJAttention, GPTJBlock, GPTJModel
@@ -45,7 +44,7 @@ from pptree import Node, print_tree
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, topi_md, \
     equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str
 
-from child_utils import make_data_tuple, get_answer_index, generate
+from child_utils_mqy import make_data_tuple, get_answer_index, generate
 from weight_analysis import get_head_weights
 
 @dataclass
@@ -1164,10 +1163,12 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
             custom_forward=True, trim=False, verbose=True, outputs = None):
     input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
         text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
-    if outputs is not None:
-        assert isinstance(tokenizer, LLAMATokenizer)
-        o = outputs
+    if my_isinstance(tokenizer, LLAMATokenizer): # by lxy
+        prefix, o, encode = '', outputs, partial(tokenizer.encode, bos = False)
+        assert len(tokenizer.tokenize(text)) == input_ids.size(1), \
+            f"llama size {len(tokenizer.tokenize(text))} != {input_ids.size(1)}"  
     else:
+        prefix, encode = ' ', partial(tokenizer.encode)
         with torch.no_grad():
             o = forward0(model, input_ids.to(model.device), by_head=['value', 'attn_out'], ranges=ranges) \
                 if isinstance(model, nn.Module) and custom_forward else \
@@ -1188,8 +1189,6 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
         candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]
         answer_indices = [0 for _ in ranges]
     elif examples[0][2] is not None:  # cxt, query, cands, *_ = examples[0]
-        prefix, encode = ('', partial(tokenizer.encode, add_special_tokens=False)) \
-            if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else (' ', partial(tokenizer.encode))
         candidates = [[encode(prefix + token)[0] for token in cands[-1]]
                     for cxt, query, cands, *_ in examples]
         answer_indices = [get_answer_index(e) for e in examples]
@@ -1271,7 +1270,7 @@ def result2dict(result):
     return {k: v for k, v in result.__dict__.items() if k in ['mean_loss', 'mean_acc', 'answer_probs', 'texts', 'data_tuples']}
     
 def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size, ioi_dataset=None,
-            trim=False, custom_forward=True, verbose=True, result=None, save_label = False, **gen_args):
+            trim=False, custom_forward=True, verbose=True, result=None, **gen_args):
     if result is None:
         if ioi_dataset is not None:
             indices_groups = np.arange(batch_size * nrows).reshape(batch_size, nrows)
@@ -1292,16 +1291,12 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
     if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):
         batch_outputs = getLLAMAOutputs(texts, tokenizer, gen_args.get('llama_size', '7B'), False) \
             if my_isinstance(tokenizer, LLAMATokenizer) else () # add by lxy
-        # #add lxy get labels to construct dataset
-        if save_label:
-            input_ids, labels, ranges, *args = map(list, zip(*[make_data_tuple(
-            text, examples, tokenizer, k_shot=k_shot, bos_token=bos_tokens, eos_token=None)
-            for i, (examples, text, bos_tokens) in enumerate(zip(all_examples, texts, all_bos_tokens))]))
-            result.data_tuples = ranges
-            dictss = {k: v for k, v in result.__dict__.items() if k in ['data_tuples', 'texts']}
-            dictss['input_ids'] = input_ids
-            return dictss
-            # return result
+        #add lxy get labels to construct dataset
+        # if gen_args.get('save_label', False):
+        #     input_ids, labels, ranges, *args = make_data_tuple(
+        # text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
+            
+
         if True: #with Timer('In generate_and_predict_batch: predict'):
             result.data_tuples, result.eval_results = map(list, zip(*[predict(model, tokenizer, text, examples,
                 k_shot=k_shot, bos_token=bos_tokens, trim=trim, custom_forward=custom_forward, verbose=verbose,
@@ -1624,6 +1619,7 @@ def check_abnormal_tensor(tensor, tensor_name):
 
 def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, forward_only=False):
     batch_size = num_points + 1  # bsz can not be smaller due to scaled_ln
+    print('post_forward_fn', post_forward_fn)
     if isinstance(post_forward_fn, (list, tuple)):
         post_forward_fn = compose_forward_fns(post_forward_fn, scaled=True)
     grad_keys = list(x.keys())  # [key for key in x if key != 'head_mask' or 'attn_weights' not in x]
@@ -1634,7 +1630,9 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, forward_on
             grad[key] = 0.
         ys, hidden_states = [], []  # negative loss and hidden_states
         for i in range(0, num_points + 1, batch_size):
+            print('num_points', num_points, i, batch_size)
             scaled_x_ = OrderedDict({key: scaled_x[key][i: i + batch_size] for key in x})
+            print('scaled_x_', [(k, v.shape) for k,v in scaled_x_.items()])
             o = forward_fn(model, forward_only=forward_only, **scaled_x_)
             hidden_states0 = o.hidden_states[-1]  # maybe reused as sum_output for sum_forward
             hs, y, logits = post_forward_fn(model, o); ys.append(y); hidden_states.append(hs)
@@ -1642,9 +1640,11 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, forward_on
                                 (y, 'y'), (logits, 'logits')]:
                 if isinstance(tensor, torch.Tensor): check_abnormal_tensor(tensor, name)
             if forward_only: continue
+            print('y', y.flatten().shape)
             grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x.values()))
             for j, key in enumerate(grad_keys):
                 grad[key] = grad[key] + grad_[j].sum(dim=0, keepdim=True)
+                print('inner attr', j, key, grad[key].shape, scaled_x[key].shape)
                 check_abnormal_tensor(grad[key], key + '.grad')
     hidden_states, ys = [torch.cat(ts) if ts[0] is not None else None for ts in [hidden_states, ys]]
     if forward_only: return None, hidden_states0, hidden_states, ys, logits
@@ -1691,6 +1691,7 @@ def attribute_step(data_tuple, model, node, attribute_k=False,
     labels = labels.to(device)
 
     fns = path2fns(node, partial(node2fn, outputs=o, ranges=ranges, labels=labels))
+    print('attr step fns', fns)
     if len(fns) > 0: labels = None
     elif node.data.label_type == 'argmax_labels':  # for root
         labels = get_argmax_labels(model, o.hidden_states[-2], labels)
@@ -1702,6 +1703,7 @@ def attribute_step(data_tuple, model, node, attribute_k=False,
     if not staged: keys = ['attn_weights', 'mlp_mask', 'embed_mask']
     else: keys = ['mlp_mask', 'embed_mask', 'head_mask'] if attr_heads is None else ['attn_weights']
     x = OrderedDict((key, get_x(key, o, attr_heads=attr_heads, to_layer=to_layer, device=device)) for key in keys)
+    #print('attr step x', x)
     attr, sum_output = attribute(fwd_fn, model, x, fns, num_points=3 if True or attribute_k else 7)[:2]
     if attr.head is None and attr.attn is not None and attr_heads is None:
         attr.head = torch.einsum('lnij->ln', attr.attn)
@@ -2061,17 +2063,21 @@ def filter_fn(p, c):
 
 def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=0.3,
                 k_shot=None, attribute_k=False, mix=True, device=None, verbose=True):
+    print('attribute_tree', len(data_tuples), node.children)
     blocks = model.transformer.h
     L, H = len(blocks), blocks[0].attn.num_heads
     device = device or model.lm_head.weight.device
     d = node.data; node_key = node2key(node)
     *_, o =  data_tuples[0]
     _topk = round(topk * (d.layer if not isinstance(d.layer, Iterable) else max(d.layer)) / L)
+    print('_topk', _topk)
     if d.attr is None or node_key not in o.attn_attr:
         with Timer(f'In attribute_tree: attribute_step {node.name}, topk={_topk}'):
             d.attr = mr(attribute_step)(data_tuples, model, node)
         d.top_heads = list(zip(*topk_md(get_head_mlp_attr(d), _topk)[:2]))
+        print('top_heads', d.top_heads)
         d.top_heads = [(l, h) for l, h in d.top_heads if h < H]
+        print('top_heads', d.top_heads)
 
         if len(d.top_heads) > 0:
             with Timer(f'In attribute_tree: attribute_step stage2 {node.name}'):

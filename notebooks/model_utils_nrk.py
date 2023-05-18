@@ -741,7 +741,7 @@ def lm_head_forward(model, hidden_states, logits_mask=None, labels=None, loss_re
     hidden_states = scaled_ln(model.transformer.ln_f, hidden_states, scaled=scaled)
     # Keep the logits and loss computation in fp32 to improve accuracy, same as attn_logits
     hidden_states = hidden_states.to(model.lm_head.weight.dtype)
-    logits = model.lm_head(hidden_states)
+    logits = model.lm_head(hidden_states)   #可以通过这个方式仅过模型某一层吗？ nrk
     if logits_mask is not None: logits = logits + logits_mask.to(logits.device, dtype=logits.dtype) * (1e4 if logits.dtype == torch.float16 else 1e9)
     loss = compute_loss(logits, labels, reduction=loss_reduction) if labels is not None else None
     if compact:
@@ -766,8 +766,8 @@ def compute_loss(logits, labels, reduction=None):
         loss = loss.view(labels.size(0), -1) #4,16
         if reduction == 'per_example_mean':
             # loss = einops.reduce(loss, 'b i -> b', 'sum') / einops.reduce(labels != -100, 'b i -> b', 'sum')
-            loss = torch.einsum('bi->b', loss) / torch.einsum('bi->b', labels != -100)
-    return loss
+            loss = torch.einsum('bi->b', loss) / torch.einsum('bi->b', labels != -100)  #仅计算目标位置的损失,但这里为什么不用乘法,乘法更好理解一点 nrk
+    return loss 
 
 def block2gpu(block, mlp_to_gpu=False):
     names = ['ln_1', 'attn']
@@ -1683,15 +1683,16 @@ def attribute_step(data_tuple, model, node, attribute_k=False,
     fns = path2fns(node, partial(node2fn, outputs=o, ranges=ranges, labels=labels))
     if len(fns) > 0: labels = None
     elif node.data.label_type == 'argmax_labels':  # for root
-        labels = get_argmax_labels(model, o.hidden_states[-2], labels)
-    from_layer = math.floor(L / 2.5) if to_layer == L else 0
-    sum_output = o.sum_output if attr_heads is not None else None
+        labels = get_argmax_labels(model, o.hidden_states[-2], labels)    #取label不应该取最后一层的h吗，为何取倒数第二个？ nrk
+    from_layer = math.floor(L / 2.5) if to_layer == L else 0  #math.floor(x)返回小于参数x的最大整数,即对浮点数向下取整
+    sum_output = o.sum_output if attr_heads is not None else None   #[4, 217, 4096]   ?,token_length,hidden_size  nrk
+    # if sum_output != None: print("sum_output:",sum_output.size()) 
     fwd_fn = partial(sum_forward, outputs=o, labels=labels,
                 from_layer=from_layer, output_layer=output_layer,
                 sum_output=sum_output, attr_heads=attr_heads, device=device)
     if not staged: keys = ['attn_weights', 'mlp_mask', 'embed_mask']
     else: keys = ['mlp_mask', 'embed_mask', 'head_mask'] if attr_heads is None else ['attn_weights']
-    x = OrderedDict((key, get_x(key, o, attr_heads=attr_heads, to_layer=to_layer, device=device)) for key in keys)
+    x = OrderedDict((key, get_x(key, o, attr_heads=attr_heads, to_layer=to_layer, device=device)) for key in keys) #按序插入
     attr, sum_output = attribute(fwd_fn, model, x, fns, num_points=3 if True or attribute_k else 7)[:2]
     if attr.head is None and attr.attn is not None and attr_heads is None:
         attr.head = torch.einsum('lnij->ln', attr.attn)
@@ -1880,22 +1881,23 @@ def _add_node(parent, data, verbose=True):
 
 def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_type=None, attn_pattern=None, 
             step=None, dummy=False, mixed=False, force=False, verbose=True, **kwargs):
-    if parent is None:
+    print("parent:",parent)
+    if parent is None:   #*
         si = -1; node = Node(f' {label_type}' if label_type != 'labels' else '')
         node.data = AttrData(step=si, layer=layer, label_type=label_type)
-        return node
+        return node   
 
     if parent is not None and parent.data.attr is None and not force:
         print('parent has not been attributed yet, replace it instead of adding to it.')
         _id = id(parent); parent = parent.parent
         parent.children = [child for child in parent.children if id(child) != _id]
-    head_attr_fn = head_attr_fn or get_head_mlp_attr  # get_matched_head_attr
-    head_attr = head_attr_fn(parent.data)
+    head_attr_fn = head_attr_fn or get_head_mlp_attr  # get_matched_head_attr  #*
+    head_attr = head_attr_fn(parent.data) #*
     if layer is None and topi is not None:
         layer, head = topk_md(head_attr, 10, transpose=True)[topi][:2] if type(topi) == int \
             else np.array(topk_md(head_attr, 10)[:2])[:, topi] # list
-    si = parent.data.step
-    if attn_pattern is None and label_type: _, attn_pattern, _ = parse_label_type(label_type)
+    si = parent.data.step  #*
+    if attn_pattern is None and label_type: _, attn_pattern, _ = parse_label_type(label_type)  #*
     if step is None: step = si + 1
     data = AttrData(step=step, topi=topi, layer=layer, head=head, label_type=label_type, 
                     attn_pattern=attn_pattern, dummy=dummy, mixed=mixed, **kwargs)
@@ -2054,10 +2056,11 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
     L, H = len(blocks), blocks[0].attn.num_heads
     device = device or model.lm_head.weight.device
     d = node.data; node_key = node2key(node)
+    print("d.layer:",d.layer)
     *_, o =  data_tuples[0]
-    _topk = round(topk * (d.layer if not isinstance(d.layer, Iterable) else max(d.layer)) / L)
+    _topk = round(topk * (d.layer if not isinstance(d.layer, Iterable) else max(d.layer)) / L)   #_topk = 1
     if d.attr is None or node_key not in o.attn_attr:
-        with Timer(f'In attribute_tree: attribute_step {node.name}, topk={_topk}'):
+        with Timer(f'In attribute_tree: attribute_step {node.name}, topk={_topk}'):   #node.name = ''
             d.attr = mr(attribute_step)(data_tuples, model, node)
         d.top_heads = list(zip(*topk_md(get_head_mlp_attr(d), _topk)[:2]))
         d.top_heads = [(l, h) for l, h in d.top_heads if h < H]

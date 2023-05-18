@@ -7,7 +7,7 @@ from transformers import AutoTokenizer, GPT2Tokenizer
 from common_utils import Timer
 
 cache_dir = '/nas/xd/.cache/torch/transformers/'
-with Timer('Loading tokenizer'): tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-j-6B', cache_dir=cache_dir)
+with Timer('In const.py: Loading tokenizer'): tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-j-6B', local_files_only=True, cache_dir=cache_dir)
 
 # from https://eslyes.com/namesdict/popular_names.htm
 boys = [

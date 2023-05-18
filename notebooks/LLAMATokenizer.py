@@ -4,6 +4,7 @@ from typing import List
 import torch
 import os
 import numpy as np
+
 class LLAMATokenizer:
     def __init__(self, model_path: str):
         # reload tokenizer
@@ -21,15 +22,16 @@ class LLAMATokenizer:
 #         )
         assert self.sp_model.vocab_size() == self.sp_model.get_piece_size()
 
-    def encode(self, s, bos = True, eos = False, return_tensors = 'False'):
+    def encode(self, s, bos = True, eos = False, add_special_tokens = True, return_tensors = 'False'):
         assert type(s) is str
+        if not add_special_tokens: bos, eos = False, False  # XD: add add_special_tokens to align with hf LlamaTokenizer
         t = self.sp_model.Encode(s, add_bos = bos, add_eos = eos)
         return torch.Tensor(t).long().view(1, -1) if return_tensors == 'pt' else t
 
     def decode(self, t):
         return self.sp_model.Decode(t)
     
-    def tokenize(self, s, bos= True, eos = False):
+    def tokenize(self, s, bos = False, eos = False):  # XD: bos=True->False, align with hf LlamaTokenizer
         t = self.sp_model.Encode(s, str, add_bos = bos, add_eos = eos)
         return t
         
