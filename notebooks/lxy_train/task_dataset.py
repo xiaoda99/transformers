@@ -1,17 +1,22 @@
 from cProfile import label
+from importlib.resources import contents
 import json
 
 import pandas as pd
 import torch
 from datasets import load_dataset
 from torch.utils.data import Dataset
+# import sys
+# sys.path.insert(0, '/nas/xd/projects/transformers/notebooks')
+# from child_utils import Ranges
 import pickle
-
+from transformers import AutoTokenizer
 class TasksDataset(Dataset):
     def __init__(self, train_path, tokenizer, train_mode = 'train', split = 0.8, max_length = 1024, k_shot = 1):
 
-        with open(train_path, 'rb') as file:   
-            self.dataset = pickle.load(file)
+        with open(train_path, 'r') as f:   
+            content = f.read()
+        self.dataset = json.loads(content)
 
         split_threhold = int(len(self.dataset) * split)
         task_keys = list(self.dataset.keys())[:split_threhold] if train_mode == 'train' \
@@ -34,14 +39,14 @@ class TasksDataset(Dataset):
  
     def __getitem__(self, idx):
         key, texts, ranges, origin_ids = self.post_lists[idx]
-        
+
         encodings_dict = self.tokenizer(texts, truncation=True, max_length=self.max_length, padding="max_length")
 
         input_ids = torch.tensor(encodings_dict["input_ids"])
         attn_masks = torch.tensor(encodings_dict["attention_mask"])
 
         # assert和原来一致
-        origin_ids = origin_ids.reshape(-1)
+        origin_ids = torch.tensor(origin_ids).reshape(-1)
         # print(origin_ids.equal(input_ids[:origin_ids.size(0)]))
         assert origin_ids.equal(input_ids[:origin_ids.size(0)])
         # ssert 0 == ((x != y).sum())
@@ -49,7 +54,7 @@ class TasksDataset(Dataset):
 
         labels = torch.ones_like(input_ids) * (-100)
 
-        bos_indices = [r.bos[-1] - 1 for r in ranges]
+        bos_indices = [r[-1] - 1 for r in ranges]
         eos_indices = [bos_i + 2 for bos_i in bos_indices]
         for bos_i, eos_i in zip(bos_indices, eos_indices):
             labels[bos_i + 1: eos_i] = input_ids[bos_i + 1: eos_i]
@@ -167,3 +172,11 @@ class AllSummDataset(Dataset):
             "attention_mask": attn_masks,
             "labels": input_ids,
         }
+
+
+if __name__ == "__main__":
+    tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-j-6B')
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+    dataset = TasksDataset('/nas/xd/projects/transformers/notebooks/lxy_train/task_datasets.pickle', tokenizer)
+    print(dataset[0])

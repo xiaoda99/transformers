@@ -32,7 +32,7 @@ def main():
         (ModelArguments, DataTrainingArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses(
         )
-
+    training_args.sampler = None
     # Detecting last checkpoint.
     last_checkpoint = None
     if os.path.isdir(
@@ -80,10 +80,11 @@ def main():
     set_seed(training_args.seed)
 
     # Load model and tokenizer
-    cache_dir = '/nas/lxy/.cache/torch/transformers/'
-    # proxies = {'http': '192.168.50.1:1081'} 
+    
+    cache_dir = '/nas/xd/.cache/torch/transformers/'
+    proxies = {'http': '192.168.50.1:1081'} 
 
-    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, cache_dir=cache_dir)
+    model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, cache_dir=cache_dir, proxies = proxies)#, low_cpu_mem_usage=True)
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, cache_dir=cache_dir)
     
@@ -92,7 +93,8 @@ def main():
     tokenizer.pad_token_id = tokenizer.eos_token_id
     model.config.end_token_id = tokenizer.eos_token_id
     model.config.pad_token_id = model.config.eos_token_id
-
+    print(model.config.use_cache)
+    model.config.use_cache = False
     print(tokenizer.eos_token, tokenizer.eos_token_id)
 
     if data_args.block_size is None:
@@ -134,9 +136,10 @@ def main():
     # rouge = evaluate.load("rouge")
     # 这里可以计算准确率
     def compute_metrics(eval_preds):
-        labels_ids = eval_preds.label_ids[:, -1].contiguous()
-        pred_ids = eval_preds.predictions[:, 1:].contiguous()
-
+        pred_ids = torch.tensor(eval_preds.predictions[:, :-1])
+        labels_ids = torch.tensor(eval_preds.label_ids[:, 1:])
+        logger.info(labels_ids.shape)
+        logger.info(pred_ids.shape)
         assert labels_ids.size() == pred_ids.size(), f'{labels_ids.size()} != {pred_ids.size()}'
         
         label_mask = (labels_ids != -100)
@@ -148,7 +151,8 @@ def main():
         # pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
         # label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
         # result = rouge.compute(predictions=pred_str, references=label_str)
-        return accuracy, accuracy.mean()
+        return {'accuracy': accuracy,
+                'mean_acc': accuracy.mean()}
 
     # Create a preprocessing function to extract out the proper logits from the model output
     def preprocess_logits_for_metrics(logits, labels):

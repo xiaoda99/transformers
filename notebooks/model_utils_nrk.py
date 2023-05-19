@@ -1437,7 +1437,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     assert len(o.mlp_outputs) > 0 or len(o.hidden_states) > 2  # latter for forward_only
     if output_layer is None: _l = len(o.mlp_outputs) or len(o.hidden_states) - 2
     else: _l = max(output_layer) if isinstance(output_layer, Iterable) else output_layer
-    l_ = from_layer
+    l_ = from_layer  #不明白from——layer的作用 nrk
     kept_dim, combine_fn = ('l', partial(torch.cat, dim=1)) \
         if isinstance(output_layer, Iterable) else ('', sum)
     kwargs = dict(labels=labels, loss_reduction=loss_reduction, scaled=scaled)  # for lm_head_forward
@@ -1448,12 +1448,12 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     on_gpu = False # device != torch.device('cpu')
     if on_gpu: mu = mem_usage(device)
 
-    if forward_only:
+    if forward_only:  #不走 nrk
         output = einsum('bie,b->bie', o.hidden_states[_l], mlp_mask.mean(1))  # 1ie,(bl->b)->bie
         if labels is not None: logits, loss = lm_head_forward(model, output, **kwargs)
         return Outputs(hidden_states=(output,), logits=logits, loss=loss)
 
-    if sum_output is not None and attr_heads is not None:
+    if sum_output is not None and attr_heads is not None:  
         # TODO: check that out_proj.bias can be safely ignored
         if o.values is not None:
             output = einsum('bkij,kjd->bkid', attn_weights,
@@ -1683,7 +1683,7 @@ def attribute_step(data_tuple, model, node, attribute_k=False,
     fns = path2fns(node, partial(node2fn, outputs=o, ranges=ranges, labels=labels))
     if len(fns) > 0: labels = None
     elif node.data.label_type == 'argmax_labels':  # for root
-        labels = get_argmax_labels(model, o.hidden_states[-2], labels)    #取label不应该取最后一层的h吗，为何取倒数第二个？ nrk
+        labels = get_argmax_labels(model, o.hidden_states[-2], labels)    
     from_layer = math.floor(L / 2.5) if to_layer == L else 0  #math.floor(x)返回小于参数x的最大整数,即对浮点数向下取整
     sum_output = o.sum_output if attr_heads is not None else None   #[4, 217, 4096]   ?,token_length,hidden_size  nrk
     # if sum_output != None: print("sum_output:",sum_output.size()) 
@@ -2078,6 +2078,7 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
         if len(d.top_heads) > 0:
             kwargs = dict(k_shot=k_shot, attribute_k=attribute_k)
             ap_scores = get_root(node).data.ap_scores
+            print("ap_scores",ap_scores)
             _attn_patterns = [ap for ap in d.all_attn_patterns if ap not in ap_scores]
             if True: #with Timer('get ap_scores'):
                 ap_scores.update(mr(get_head_matching_scores)(

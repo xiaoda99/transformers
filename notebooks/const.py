@@ -1,6 +1,6 @@
 from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass
-from pattern.en import lexeme
+# from pattern.en import lexeme
 # from nltk.corpus import cmudict  # nltk.download('cmudict')
  
 from transformers import AutoTokenizer, GPT2Tokenizer
