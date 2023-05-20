@@ -1088,48 +1088,47 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
     # if k_shot == 0: mask_logits = True  # ioi task
     if isinstance(mask_logits, types.FunctionType): logits = mask_logits(logits); mask_logits = False
     use_openai_api = hasattr(logits, 'token_logprobs')  # isinstance(model, types.FunctionType)
-    ans_nlls, logits_mask, labels_mask = (None, torch.zeros_like(logits), torch.zeros_like(labels)) \
-        if not use_openai_api and candidates is not None else ([], None, None)
+    ans_nlls = []
+    labels_mask = torch.zeros_like(labels)
+    logits_mask = torch.zeros_like(logits) if candidates is not None else None
 
     assert len(bos_indices) == len(example_strs), '%d != %d' % (len(bos_indices), len(example_strs))
     top1_corrects, answer_probs, candidate_probs = [], [], []
     convert_fn = tokenizer.convert_ids_to_tokens if True else partial(convert_ids_to_tokens, tokenizer=tokenizer)
     for i, (example_str, bos_i, eos_i, ans_ids) in enumerate(zip(example_strs, bos_indices, eos_indices, answers)):
         ans_tokens = convert_fn(ans_ids)
-        for j, ans_id, ans_token in zip(range(len(ans_ids)), ans_ids, ans_tokens):#, ans_probs, ans_prob_dist):
+        for j, (ans_id, ans_token) in enumerate(zip(ans_ids, ans_tokens)):#, ans_probs, ans_prob_dist):
             logits_str = ''
             if use_openai_api:
                 dist = get_prob_dist(logits.top_logprobs[bos_i + 1 + j], topk=topk)
                 ans_prob = round(math.exp(logits.token_logprobs[bos_i + 1 + j]), 3)
                 if i >= k_shot: ans_nlls.append(-logits.token_logprobs[bos_i + 1 + j])
                 top1_correct = max(dist.items(), key=lambda x: x[1])[0] == ans_token.replace('Ġ', ' ')
-                cand_probs_ = [dist.get(cand, 0.) for cand in [t.replace('Ġ', ' ')
-                    for t in convert_fn(candidates[i])]]
+                if candidates is not None:
+                    candidate_probs.append([dist.get(cand, 0.) for cand in [t.replace('Ġ', ' ')
+                        for t in convert_fn(candidates[i])]])
                 topk_stat = dist
             else:
                 logits_ = logits[0, bos_i + j]
-                if j == 0 and candidates is not None:
+                labels_mask[:, bos_i + j] = logits_.argmax() == ans_id
+                if candidates is not None and j == 0:
                     logits_mask[:, bos_i] = -1; logits_mask[:, bos_i, candidates[i]] = 0
                     masked_logits_ = logits_ + logits_mask[0, bos_i] * (1e4 if logits.dtype == torch.float16 else 1e9)
                     if mask_logits: logits_ = masked_logits_
-                    # mask_logits=True may produce more top1_corrects than mask_logits=False
-                    # where the losses are actually used for attribution
-                    labels_mask[:, bos_i + j] = (masked_logits_.argmax() == ans_id).item()
+                    # amend labels_mask with masked_logits which is used in attribution by default
+                    labels_mask[:, bos_i + j] = masked_logits_.argmax() == ans_id
                     logits_str = ' '.join(('*' if cand == ans_id else '') +
                         f'{tokenizer.convert_ids_to_tokens(cand)}:{logits[0, bos_i, cand].item():.3f}'
                         for cand in candidates[i])
-                else:
-                    labels_mask[:, bos_i + j] = (logits_.argmax() == ans_id).item()
+                    candidate_probs.append([dist[cand].item() for cand in candidates[i]])
                 dist = logits_.softmax(-1)
                 ans_prob = round(dist[ans_id].item(), 3)
                 top1_correct = (dist.argmax() == ans_id).item()
-                cand_probs_ = [dist[cand].item() for cand in candidates[i]]
                 topk_stat = show_topk(*dist.topk(topk), indices_fn=convert_fn)
 
             if i == k_shot and j == 0: k_shot_len = len(top1_corrects)
             top1_corrects.append(top1_correct)
             answer_probs.append(ans_prob)
-            if j == 0: candidate_probs.append(cand_probs_)
             if verbose: 
                 print(('*' if top1_correct else ' ') + ans_token, ans_prob, topk_stat, sep, example_str, logits_str)
     if use_openai_api:
@@ -1138,13 +1137,13 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
         loss = compute_loss(logits, labels, reduction=loss_reduction)
         loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100].tolist()  # 'none'
         
-    if verbose and candidates is not None and answer_indices is not None:
+    if verbose:
         print(loss, np.array(top1_corrects[k_shot_len:]).mean())
         f, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 2.4), sharex=True)
         x = [i + 0.5 for i in range(len(example_strs))] # to align with sns.heatmap
         _ = ax0.bar(x, top1_corrects, width=0.9, alpha=0.5)
         _ = ax0.plot(x, answer_probs, color='r')
-        if answer_indices is not None:
+        if candidates is not None and answer_indices is not None:
             label_probs = F.one_hot(torch.LongTensor(answer_indices))
             _ = sns.heatmap(torch.cat([label_probs, torch.Tensor(candidate_probs)], dim=1).T, cbar=False, ax=ax1)
         plt.show()
@@ -1199,8 +1198,9 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
         tokenizer, *args, logits=logits, labels=labels, loss_reduction='mean',
         k_shot=k_shot, topk=3, verbose=verbose)
     o.logits_mask = logits_mask
-    labels[labels_mask == 0] == -100  # once evaluation completes, revise labels for attribution
-    assert not (labels == -100).all()
+    if labels_mask is not None:  # once evaluation completes, revise labels for attribution
+        labels[labels_mask == 0] = -100
+        assert not (labels == -100).all()
     # use only correct labels for subsequent attribution
     # _labels = labels[labels != -100]
     # _labels[~torch.BoolTensor(top1_corrects)] = -100
@@ -1363,14 +1363,20 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=F
     q, k = attn_pattern.split('->')  # e.g. 'bos->ans0'
     cross_example = k.endswith('^'); k = k.replace('^', '')
     ranges_q = ranges[k_shot:] if attribute_k or not is_relating(attn_pattern) else ranges[: -k_shot]
+    if k == 'ans0s' and getattr(ranges_q[0], k) is None:
+        k = 'example'  # tasks with cxt_len=1 has no 'ans0s'. Fall back to 'example'
     attn_labels = torch.zeros(*attn_size)
     def get_slice(r, name):
-        if name == '*': b, e = 0, attn_size[0]
-        elif name.startswith('['): b, _ = getattr(r, name[1:]); e = b + 1
-        elif name.endswith(']'): _, e = getattr(r, name[:-1]); b = e - 1
-        elif name.endswith('+'): _, e = getattr(r, name[:-1]); b, e = e, e + 1
-        elif name.endswith('-'): b, _ = getattr(r, name[:-1]); b, e = b - 1, b
-        else: b, e = getattr(r, name)
+        try:
+            if name == '*': b, e = 0, attn_size[0]
+            elif name.startswith('['): b, _ = getattr(r, name[1:]); e = b + 1
+            elif name.endswith(']'): _, e = getattr(r, name[:-1]); b = e - 1
+            elif name.endswith('+'): _, e = getattr(r, name[:-1]); b, e = e, e + 1
+            elif name.endswith('-'): b, _ = getattr(r, name[:-1]); b, e = b - 1, b
+            else: b, e = getattr(r, name)
+        except Exception as e:
+            print(f'In attn_pattern2labels: name = {name} not in {[k for k, v in r.__dict__.items() if v]}?')
+            raise e
         return slice(b, e) if not isinstance(b, Iterable) else [slice(_b, _e) for _b, _e in zip(b, e)]
     for r in ranges_q:
         if cross_example: # is_intermediary(attn_pattern):
@@ -1652,6 +1658,7 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, forward_on
                 grad[key] = grad[key] + grad_[j].sum(dim=0, keepdim=True)
                 check_abnormal_tensor(grad[key], key + '.grad')
     hidden_states, ys = [torch.cat(ts) if ts[0] is not None else None for ts in [hidden_states, ys]]
+    # print('In attribute: ys =', ys)
     if forward_only: return None, hidden_states0, hidden_states, ys, logits
 
     attr = {key: (grad[key] / (num_points + 1) * (x[key] if key != 'attn_weights' else 1)
@@ -1936,10 +1943,10 @@ ioi_attn_patterns_by_step = {-1: ['bos->ans0'],
 
 all_attn_patterns = join_lists(attn_patterns_by_step.values())# + ['bos->bos']
 
-# def parse_attn_pattern(attn_pattern):
-#     src, tgt = attn_pattern.split('->')
-#     for s in ['[', ']', '+', '-', '^']: src, tgt = src.replace(s, ''), tgt.replace(s, '')
-#     return src, tgt
+def parse_attn_pattern(attn_pattern):
+    src, tgt = attn_pattern.split('->')
+    for s in ['[', ']', '+', '-', '^']: src, tgt = src.replace(s, ''), tgt.replace(s, '')
+    return src, tgt
 
 def get_possible_attn_patterns(parent, ranges):
     d = parent.data
@@ -1947,8 +1954,8 @@ def get_possible_attn_patterns(parent, ranges):
     elif d.label_type is not None and 'attn_labels' in d.label_type and not d.attribute_k:
         src = d.attn_pattern.split('->')[0]
     else: src = d.attn_pattern.split('->')[1].split(':')[0].replace('^', '')
-    return [ap for ap in all_attn_patterns if ap.startswith(src + '->')] + [f'{src}->{src}'] #and
-        # getattr(ranges[0], parse_attn_pattern(ap)[1], None) is not None] + [f'{src}->{src}']
+    return [ap for ap in all_attn_patterns if ap.startswith(src + '->') and
+        getattr(ranges[0], parse_attn_pattern(ap)[1], None) is not None] + [f'{src}->{src}']
 
 def point_wise(attn_pattern):
     src, dst = attn_pattern.split('->')
@@ -1989,7 +1996,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
     pd = parent.data; L, H = pd.attr.head.size()
     head_attr_fn = head_attr_fn or get_head_mlp_attr
     layers, heads, scores = topk_md(head_attr_fn(pd), topk)
-    assert scores[0] > 0, str(scores[0])
+    assert scores[0] > 0, str(scores)
     scores = scores / scores[0]
 
     def reduce_fn(scores): return sum(scores) / len(scores)

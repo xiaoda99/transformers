@@ -138,8 +138,8 @@ def main():
     def compute_metrics(eval_preds):
         pred_ids = torch.tensor(eval_preds.predictions[:, :-1])
         labels_ids = torch.tensor(eval_preds.label_ids[:, 1:])
-        logger.info(labels_ids.shape)
-        logger.info(pred_ids.shape)
+        # logger.info(labels_ids.shape)
+        # logger.info(pred_ids.shape)
         assert labels_ids.size() == pred_ids.size(), f'{labels_ids.size()} != {pred_ids.size()}'
         
         label_mask = (labels_ids != -100)
@@ -147,12 +147,14 @@ def main():
         accuracy = torch.einsum('bi->b', (pred_ids == labels_ids ) * label_mask) \
             / torch.einsum('bi->b', label_mask)
 
-    
+
         # pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
         # label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
         # result = rouge.compute(predictions=pred_str, references=label_str)
-        return {'accuracy': accuracy,
-                'mean_acc': accuracy.mean()}
+        # 16这个参数需要修改,到时候可以加载模型验证
+        return {'example_acc': accuracy,
+                'task_acc':accuracy.view(-1, 16).mean(-1),
+                'all_acc': accuracy.mean()}
 
     # Create a preprocessing function to extract out the proper logits from the model output
     def preprocess_logits_for_metrics(logits, labels):

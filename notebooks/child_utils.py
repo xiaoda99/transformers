@@ -1175,7 +1175,6 @@ def remove_query(task):
 
     def new_query2str(q, v):
         wh, the = get_wh_and_the(v[1])
-        print('data_names =', [i.data.__name__ for i in v])
         rel_str = verbalize_relation(v[1]) + the
         return f"{wh} is different?" + capitalize(rel_str)
     task = vocab_fn, new_gen_fn, cxt2str, new_query2str, *a

@@ -1,0 +1,250 @@
+{
+    "os": "Linux-4.15.0-142-generic-x86_64-with-debian-stretch-sid",
+    "python": "3.7.0",
+    "heartbeatAt": "2023-05-19T10:23:56.511370",
+    "startedAt": "2023-05-19T10:23:53.747438",
+    "docker": null,
+    "cuda": null,
+    "args": [
+        "--local_rank=0",
+        "--output_dir",
+        "tasks_test",
+        "--do_train",
+        "--do_eval",
+        "--evaluation_strategy",
+        "steps",
+        "--eval_steps",
+        "2",
+        "--per_device_train_batch_size",
+        "2",
+        "--per_device_eval_batch_size",
+        "2",
+        "--gradient_accumulation_steps",
+        "1",
+        "--eval_accumulation_steps",
+        "1",
+        "--learning_rate",
+        "1e-5",
+        "--adam_beta1",
+        "0.9",
+        "--adam_beta2",
+        "0.95",
+        "--warmup_steps",
+        "100",
+        "--num_train_epochs",
+        "6",
+        "--gradient_checkpointing",
+        "--logging_steps",
+        "1",
+        "--save_strategy",
+        "steps",
+        "--save_steps",
+        "200",
+        "--fp16",
+        "--deepspeed",
+        "/nas/xd/projects/transformers/notebooks/lxy_train/ds_config_gptj.json",
+        "--train_file",
+        "/nas/xd/projects/transformers/notebooks/lxy_train/task_datasets.json",
+        "--block_size",
+        "1024",
+        "--max_input_length",
+        "512",
+        "--validation_split_percentage",
+        "80",
+        "--k_shot",
+        "3",
+        "--model_name_or_path",
+        "EleutherAI/gpt-j-6B",
+        "--tokenizer_name",
+        "EleutherAI/gpt-j-6B",
+        "--overwrite_output_dir"
+    ],
+    "state": "running",
+    "program": "train_model_tasks.py",
+    "codePath": "notebooks/lxy_train/train_model_tasks.py",
+    "git": {
+        "remote": "git@github.com:xiaoda99/transformers.git",
+        "commit": "af3cb8fbd1cbd716bccfa2a77b04420057d352db"
+    },
+    "email": "xiaoda99@gmail.com",
+    "root": "/nas/xd/projects/transformers",
+    "host": "durian",
+    "username": "xd",
+    "executable": "/nas2/lishengping/miniconda3/envs/xl-dialogue/bin/python3.7",
+    "cpu_count": 12,
+    "cpu_count_logical": 24,
+    "cpu_freq": {
+        "current": 2331.4766666666665,
+        "min": 1200.0,
+        "max": 3700.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 1242.964,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1423.627,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 2829.942,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 3600.641,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 3599.711,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1490.237,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1476.504,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 3614.855,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 3614.839,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1201.573,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1214.801,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 2008.472,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1229.354,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1420.759,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 3392.316,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 3616.856,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 3616.799,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1343.375,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1480.689,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 3601.56,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 3627.84,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1200.078,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 1259.598,
+            "min": 1200.0,
+            "max": 3700.0
+        },
+        {
+            "current": 2848.05,
+            "min": 1200.0,
+            "max": 3700.0
+        }
+    ],
+    "disk": {
+        "total": 218.99824905395508,
+        "used": 182.47092819213867
+    },
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "gpu_count": 9,
+    "gpu_devices": [
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25447170048
+        },
+        {
+            "name": "NVIDIA GeForce GTX 1080 Ti",
+            "memory_total": 11721506816
+        },
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25447170048
+        },
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25447170048
+        },
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25447170048
+        },
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25447170048
+        },
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25447170048
+        },
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25447170048
+        },
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25447170048
+        }
+    ],
+    "memory": {
+        "total": 251.80319595336914
+    }
+}
