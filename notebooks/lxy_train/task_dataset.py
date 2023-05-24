@@ -12,13 +12,13 @@ from torch.utils.data import Dataset
 import pickle
 from transformers import AutoTokenizer
 class TasksDataset(Dataset):
-    def __init__(self, train_path, tokenizer, train_mode = 'train', split = 0.8, max_length = 1024, k_shot = 1):
+    def __init__(self, train_path, tokenizer, train_mode = 'train', split = 80, max_length = 1024, k_shot = 1):
 
         with open(train_path, 'r') as f:   
             content = f.read()
         self.dataset = json.loads(content)
 
-        split_threhold = int(len(self.dataset) * split)
+        split_threhold = int(len(self.dataset) * split / 100.0)
         task_keys = list(self.dataset.keys())[:split_threhold] if train_mode == 'train' \
             else list(self.dataset.keys())[split_threhold:]
 
@@ -32,7 +32,7 @@ class TasksDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.k_shot = k_shot
-        
+        self.post_lists = self.post_lists[:32]
 
     def __len__(self):
         return len(self.post_lists)

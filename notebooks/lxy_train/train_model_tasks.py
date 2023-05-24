@@ -111,7 +111,7 @@ def main():
         data_args.train_file,
         tokenizer,
         'train',
-        0.8,
+        data_args.validation_split_percentage,
         max_length=data_args.max_input_length,
         k_shot = data_args.k_shot
     )
@@ -120,7 +120,7 @@ def main():
         data_args.train_file,
         tokenizer,
         'train',
-        0.8,
+        data_args.validation_split_percentage,
         max_length=data_args.max_input_length,
         k_shot = data_args.k_shot
     )
@@ -128,32 +128,37 @@ def main():
         data_args.train_file,
         tokenizer,
         'eval',
-        0.8,
+        data_args.validation_split_percentage,
         max_length=data_args.max_input_length,
         k_shot = data_args.k_shot
     )
     # # Set up the metric
     # rouge = evaluate.load("rouge")
     # 这里可以计算准确率
-    def compute_metrics(eval_preds):
+    def compute_metrics1(eval_preds):
         pred_ids = torch.tensor(eval_preds.predictions[:, :-1])
         labels_ids = torch.tensor(eval_preds.label_ids[:, 1:])
-        # logger.info(labels_ids.shape)
-        # logger.info(pred_ids.shape)
         assert labels_ids.size() == pred_ids.size(), f'{labels_ids.size()} != {pred_ids.size()}'
         
         label_mask = (labels_ids != -100)
 
         accuracy = torch.einsum('bi->b', (pred_ids == labels_ids ) * label_mask) \
             / torch.einsum('bi->b', label_mask)
-
-
-        # pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-        # label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
-        # result = rouge.compute(predictions=pred_str, references=label_str)
         # 16这个参数需要修改,到时候可以加载模型验证
         return {'example_acc': accuracy,
                 'task_acc':accuracy.view(-1, 16).mean(-1),
+                'all_acc': accuracy.mean()}
+    def compute_metrics(eval_preds):
+        pred_ids = eval_preds.predictions[:, :-1]
+        labels_ids = eval_preds.label_ids[:, 1:]
+        assert labels_ids.shape == pred_ids.shape, f'{labels_ids.shape} != {pred_ids.shape}'
+        
+        label_mask = (labels_ids != -100)
+
+        accuracy = ((pred_ids == labels_ids ) * label_mask).sum(-1) / label_mask.sum(-1)
+        # 16这个参数需要修改,到时候可以加载模型验证
+        return {'example_acc': accuracy,
+                'task_acc':accuracy.reshape((-1, 16)).mean(-1),
                 'all_acc': accuracy.mean()}
 
     # Create a preprocessing function to extract out the proper logits from the model output
@@ -162,11 +167,12 @@ def main():
             logits = logits[0]
         return logits.argmax(dim=-1)
 
+    merge_dataset = {'train_eval_dataset': train_eval_dataset, 'eval_dataset': eval_dataset}
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset={'train_eval_dataset': train_eval_dataset, 'eval_dataset': eval_dataset},
+        eval_dataset=merge_dataset,
         compute_metrics=compute_metrics,
         data_collator=default_data_collator,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
@@ -179,6 +185,19 @@ def main():
     # trainer.model = deepspeed_engine.module
     # trainer.model_wrapped = deepspeed_engine
     # trainer.deepspeed = deepspeed_engine
+    # trainer.optimizer = optimizer
+    # trainer.lr_scheduler = lr_scheduler
+
+    # if training_args.do_eval:
+    #     logger.info("*** Evaluate ***")
+    #     for eval_dataset_name, eval_dataset in merge_dataset.items():
+    #         metrics = trainer.evaluate(
+    #             eval_dataset=eval_dataset,
+    #             metric_key_prefix=f"eval_{eval_dataset_name}",
+    #         )
+    #         logger.info("eval", metrics)
+            # trainer.save_metrics("eval", metrics)
+
     if training_args.do_train:
         if last_checkpoint is not None:
             checkpoint = last_checkpoint
@@ -194,17 +213,20 @@ def main():
         trainer.log_metrics("train", metrics)
         # perplexity = math.exp(metrics["eval_loss"])
         # metrics["perplexity"] = perplexity
-        trainer.save_metrics("train", metrics)
+        # trainer.save_metrics("train", metrics)
         
     # Evaluation
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
-
-        metrics = trainer.evaluate()
-        perplexity = math.exp(metrics["eval_loss"])
-        metrics["perplexity"] = perplexity
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
+        for eval_dataset_name, eval_dataset in merge_dataset.items():
+            metrics = trainer.evaluate(
+                eval_dataset=eval_dataset,
+                metric_key_prefix=f"eval_{eval_dataset_name}",
+            )
+            if is_main_process(training_args.local_rank):
+                print("eval", metrics)
+            # logger.info("eval", metrics)
+            # trainer.save_metrics("eval", metrics)
 
 
 if __name__ == "__main__":

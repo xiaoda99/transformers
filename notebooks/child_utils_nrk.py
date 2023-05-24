@@ -8,6 +8,7 @@ from collections import defaultdict, OrderedDict, Counter, Iterable
 from functools import partial, wraps
 import string
 from random import choice, choices, shuffle, sample, randint, random, seed
+import itertools
 from dataclasses import dataclass, fields
 from copy import deepcopy
 import traceback
@@ -24,11 +25,11 @@ import torch.nn.functional as F
 from const import *
 from common_utils import join_lists, list_diff, my_isinstance, lget, fn2str
 from openai_utils import query_openai
-from SwissArmyTransformer import get_tokenizer
 from LLAMATokenizer import LLAMATokenizer
-sys.path.insert(0, '/nas/xd/projects/PyFunctional')
-from functional import seq
-from functional.pipeline import Sequence
+from transformers import LlamaTokenizer
+# sys.path.insert(0, '/nas/xd/projects/PyFunctional')
+# from functional import seq
+# from functional.pipeline import Sequence
 
 uppercase = list(string.ascii_uppercase)
 lowercase = list(string.ascii_lowercase)
@@ -42,10 +43,11 @@ digit2ordinal = OrderedDict(zip(digits, ordinals))
 # lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
 full_vocab = uppercase + digits
 
+
 def types_of_characters(): return {
     'uppercase': uppercase,
-    # 'lowercase': lowercase,
-    # 'digit': digits,
+    'lowercase': lowercase,
+    'digit': digits,
 }
 
 # polygons = ['triangle', 'quadrangle', 'pentagon', 'hexagon', 'heptagon', 'octagon', 'nonagon', 'decagon',]# 'undecagon', 'dodecagon']
@@ -75,8 +77,9 @@ posets = [times_of_day,clock_of_day,years, days_of_week, months, seasons]
 closed_posets = [list(string.ascii_uppercase)[:7], list(string.ascii_lowercase)[:7],][:] + [digits, cardinals, #ordinals[:5], 
     days_of_week, months, ]#seasons, times_of_history, ages_of_life, sizes]
 open_posets = [times_of_day, ages_of_life, times_of_history, units_of_length, units_of_mass, things, sizes, ]
-def temporal_posets(): return [clock_of_day, days_of_week, months, seasons, years]
-temporal_words = join_lists(temporal_posets())
+temporal_posets = [clock_of_day, days_of_week, months, seasons, years]
+def temporal_poset(): return choice(temporal_posets)
+temporal_words = join_lists(temporal_posets)
 
 antonyms = [
     ('big', 'small'),
@@ -140,7 +143,7 @@ def types_of_things(): return {
     # 'age': [],
     # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
     'electronics': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
-    'ball': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport
+    'sport': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport or ball?
     'musical instrument': ['piano', 'violin', 'guitar'],
     # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
@@ -330,9 +333,9 @@ def city2resident():
         city2resident.demonyms.update({'the United States': 'American', 'the United Kingdom': 'British', 'England': 'English'})
     return {capital: city2resident.demonyms[country.replace('the ', '')] for country, capital in _country2capital}
 
-from child_frames import positivities_of_adjs
+from child_frames import adjs
 def a_(noun):  # prepend indefinite article a/an if possible
-    if noun[0].isupper() or noun in temporal_words + join_lists(positivities_of_adjs().values()):
+    if noun[0].isupper() or noun in temporal_words + adjs:
         return noun
     
     d = {'apple':  'an apple',  'chip': 'chips',  'coffee': 'coffee',  'biscuit': 'biscuits', 'dog': 'a dog', 'tea': 'tea'}
@@ -402,23 +405,6 @@ dog: He likes dogs.
     d = {'drink': 'drinks'}
     if noun in d: return d[noun]
     return extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003'))  # better than text-davinci-002
-
-def _b(noun): # by lxy add b动词
-    prompt_fn = lambda s: \
-f'''The apple: The apple is john's.
-The chips: The chips are john's.
-The coffee: The coffee is john's.
-The shoes: The shoes are john's.
-The blueberries: The blueberries are john's.
-The tea: The tea is john's.
-{s}: {s}'''
-    def extract_fn(text):
-        text = text.strip()
-        if text.endswith('.'): text = text[:-1]
-        if text.split(' ')[0] not in ('is', 'are'): return 'is'
-        return text.split(' ')[0]
-    return noun + ' ' + extract_fn(query_openai(prompt_fn(noun), 'text-davinci-003')) # by lxy
-    
 
 def _be(noun): # by xd
     prompt_fn = lambda s: \
@@ -539,10 +525,7 @@ class Relation(object):
         self.skip_inv_f = False
 
     def f(self, x): return self._dict.get(x, [])
-    def inv_f(self, x):
-        if x not in self._inv_dict:
-            print(f'{x} not in {self._inv_dict.keys()}')
-        return self._inv_dict.get(x, [])
+    def inv_f(self, x): return self._inv_dict.get(x, [])
     def dom(self, xs=None): return list(self._dict.keys())
     def codom(self, ys=None):
         elems = join_lists(self._dict.values()) if self.name != 'sibling' else list(self._dict.keys())
@@ -611,7 +594,7 @@ class EqSet(Set):
 class PoSet(Set):
     def __init__(self, data):
         super().__init__(data, ['prev', 'next', 'equal'])
-        data = choice(data())
+        data = self._data = data()
         for rel_name, d in zip(self.rel_names, [{data[i]: [data[i - 1]] for i in range(1, len(data))},
                                                 {data[i]: [data[i + 1]] for i in range(0, len(data) - 1)},
                                                 {data[i]: [data[i]] for i in range(1, len(data) - 1)}]):
@@ -776,7 +759,7 @@ def MlMlM_gen(rels, cxt_len=3):
 def _str(l, vocab=None, sep=' '):
     if l is None: return ''
     if isinstance(l, str) or not isinstance(l, Iterable): l = [l]
-    l = [e for e in l if not my_isinstance(e, Sequence)] #type(e).__name__ != 'Sequence']
+    # l = [e for e in l if not my_isinstance(e, Sequence)] #type(e).__name__ != 'Sequence']
     if isinstance(l, (dict, OrderedDict)): l = [f'{k}: {v}' for k, v in l.items()]
     return sep.join(str(i) for i in l)
 
@@ -900,38 +883,36 @@ def example2ranges(example, tokens, bos_token):
         ranges.sep = (sep_i, sep_i + 1)
     return ranges
 
-def move_ranges(r, offset):
+def move_ranges(r, offset): 
     for field in fields(r):
         name = field.name; pair = getattr(r, name)
         if pair is not None: setattr(r, name, tuple([i + offset for i in pair]))
     return r
 
-def locate_ranges(examples, example_strs, tokenizer, bos_token):
+def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
     assert len(examples) == len(example_strs)
     ranges = []
-    newline_token = '<0x0A>' if my_isinstance(tokenizer, LLAMATokenizer) else tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同
-    all_tokens = [newline_token]
-    if my_isinstance(tokenizer, LLAMATokenizer):  # add by lxy
-        text = '\n'.join(example_strs) + '\n'
-        all_tokens_llama = [tokenizer.convert_ids_to_tokens(i).replace('▁', ' ') for i in tokenizer.encode(text, bos = True)]
-        all_tokens_llama[2] = all_tokens_llama[2][1:] if len(all_tokens_llama) > 1 else None # space和非space这里有问题
-        sep_tokens, sep_token = [], []
-        for token in all_tokens_llama:
-            if token != newline_token:
-                sep_token.append(token) 
-            else:
-                sep_tokens.append(sep_token[:])
-                sep_token = []
+    use_llama_tokenizer = my_isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer))
+    newline_token = '<0x0A>' if use_llama_tokenizer else '\n' #tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同
+    if use_llama_tokenizer:  # add by lxy
+        # tokenizer.decode will strip leading '__'
+        all_tokens_llama = [tokenizer.convert_ids_to_tokens(id).replace('▁', ' ') for id in input_ids]
+        assert all_tokens_llama[0] == tokenizer.bos_token, str(all_tokens_llama)
+        all_tokens = [tokenizer.bos_token]
+        assert all_tokens_llama[1].startswith(' '), all_tokens_llama[1]
+        all_tokens_llama[1] = all_tokens_llama[1][1:]
+        all_tokens_llama = all_tokens_llama[1:]  # treat leading bos as prefix_token and remove it from all_tokens_llama
+        # split all_tokens_llama using newline_token as delimiter
+        # https://stackoverflow.com/questions/15357830/splitting-a-list-based-on-a-delimiter-word
+        sep_tokens = [list(y) for x, y in itertools.groupby(all_tokens_llama, lambda z: z == newline_token) if not x]
+        assert len(sep_tokens) == len(example_strs)
+    else:
+        all_tokens = [newline_token] if tokenizer.decode(input_ids[0]) == newline_token else []
     for i, (e, e_str) in enumerate(zip(examples, example_strs)):
         # tokens = tokenizer.tokenize(e_str)  # can not work with locate
-        if my_isinstance(tokenizer, LLAMATokenizer):# by lxy
-            # tokens = [tokenizer.convert_ids_to_tokens(i).replace('▁', ' ') for i in tokenizer.encode(e_str)]
-            # tokens[0] = tokens[0][1:] if len(tokens) > 0 else None
-            tokens = sep_tokens[i]
-            # newline_token = '<0x0A>'
-        else:
-            tokens = [tokenizer.decode([i]) for i in tokenizer.encode(e_str)] # lxy: 解码不出来空格
-            assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
+        tokens = sep_tokens[i] if use_llama_tokenizer else \
+            [tokenizer.decode(id) for id in tokenizer.encode(e_str)] # lxy: LLAMATokenizer decode不出单词前面的空格
+        assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
         r = example2ranges(e, tokens, bos_token[i] if isinstance(bos_token, (tuple, list)) else bos_token)
         ranges.append(move_ranges(r, len(all_tokens)))
         all_tokens += tokens + [newline_token]
@@ -968,7 +949,7 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
 def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
     input_ids = tokenizer.encode(text, return_tensors='pt')
     example_strs = text.strip('\n').split('\n')  # strip the trailing '\n'
-    ranges = locate_ranges(examples, example_strs, tokenizer, bos_token)
+    ranges = locate_ranges(examples, example_strs, tokenizer, input_ids[0].tolist(), bos_token)
     # by lxy: when bos is tokenized into multiple tokens, e.g. 'likes' -> ['__lik', 'es'] in LLaMA, use last token's index
     bos_indices = [r.bos[-1] - 1 for r in ranges]  # [r.bos[0] for r in ranges]
     bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
@@ -1021,10 +1002,9 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
-    if my_isinstance(tokenizer, LLAMATokenizer): # add by lxy
-        return examples, '\n ' + '\n '.join(example_strs) + '\n', bos_tokens
-    else:
-        return examples, '\n' + '\n'.join(example_strs) + '\n', bos_tokens
+    text = '\n '.join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
+        '\n' + '\n'.join(example_strs) + '\n'  # prepend '\n' to act as bos for tokenizer without bos
+    return examples, text, bos_tokens
 
 def get_answer_index(example):
     cxt, query, cands, (*_, ans), *cls = example
@@ -1034,6 +1014,9 @@ class InvalidTransException(Exception): pass
 
 def choose_rels(task, rel_indices):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    vocabs = vocab_fn()
+    for hop, rel_i in enumerate(rel_indices):
+        if rel_i >= len(vocabs[hop].relations): return None
 
     def new_vocab_fn():
         vocabs = vocab_fn()
@@ -1056,30 +1039,73 @@ def decorate_rel(task, hop, kwargs):
     task = new_vocab_fn, gen_fn, cxt2str, query2str, *a
     return task
 
+def get_wh_and_the(vocab):
+    data_name, rel_name = vocab.data.__name__, vocab.relations[0].name
+    wh = 'who' if data_name in ['persons', 'genders_of_persons'] else 'which'
+    the = ' the' if data_name == 'genders_of_persons' and rel_name == 'child' or \
+        data_name == 'capabilities_of_things' and rel_name != 'child' or \
+        data_name == 'types_of_things' and rel_name != 'child' else ''
+    return wh, the
+
+def verbalize_relation(vocab):
+    data_name, rel_name = vocab.data.__name__, vocab.relations[0].name
+    _rel_name = rel_name.split('neg_')[-1]
+    r2v = {'genders_of_persons': ('', 'one'),
+        'types_of_things': (' a kind of', 'one'),
+        'capabilities_of_things': (' the thing that can', 'one'),
+        'countries_of_cities': (' the city in', 'city'), 
+    }
+    if _rel_name in ['prev', 'next']:
+        temporal_word = {tuple(clock_of_day): 'time', tuple(days_of_week): 'day', tuple(months):'month',
+            tuple(seasons): 'season', tuple(years): 'year'}[tuple(vocab._data)]
+    if _rel_name == 'child': rel_str = r2v[data_name][0]
+    elif _rel_name == 'sibling': rel_str = f' the {r2v[data_name][1]} like'
+    elif _rel_name == 'prev': rel_str = f' the {temporal_word} just before'
+    elif _rel_name == 'next': rel_str = f' the {temporal_word} just after'
+    elif _rel_name == 'opposite': rel_str = ' the opposite of'
+    else: rel_str = ''
+    return rel_str
+
+def refine_query2str(task, do_swap_qa=False):
+    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    if query2str is None: return task
+    rel_names = [vocab.relations[0].name for vocab in vocab_fn()]
+    def new_query2str(q, v):
+        # Tricky: new_query2str called and v passed AFTER swap_qa, so v has been swapped
+        return query2str(q, v) + verbalize_relation(v[1 - do_swap_qa])
+    task = (vocab_fn, gen_fn, cxt2str, new_query2str, *a)
+    return task
+
 def swap_qa(task):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
-    new_vocab_fn = lambda: vocab_fn()[::-1]  # would cause infinite recursion bug if use same name
+    def new_vocab_fn(): return vocab_fn()[::-1]  # would cause infinite recursion bug if use same name
     item2str = cxt2str.keywords['item2str']
     swapped_item2str = lambda i, v: item2str(i[::-1], v)
     new_cxt2str = deepcopy(cxt2str)
     new_cxt2str.keywords['item2str'] = swapped_item2str
 
     def new_query2str(q, v):
-        wh = 'who' if vocab_fn()[0].data.__name__ in ['persons', 'genders_of_persons'] else 'which'
-        capitalized = new_vocab_fn()[1].relations[0].dom()[0][0].isupper()
-        return f'{query2str(wh, v)} {q}?'.replace("who's", "whose") + (' The' if not capitalized else '')
+        wh, the = get_wh_and_the(v[1])
+        return f'{query2str(wh, v)} {q}?'.replace("who's", "whose") + the
     task = (new_vocab_fn, gen_fn, new_cxt2str, new_query2str, *a)
     return task
 
 def negate_sent(s):  # TODO: a more principled way of negating a sentence
-    s0 = s
-    s = s.replace(" may also have", " may not have").replace(" may also like", " may not like") # replace_rel1=2
-    s = s.replace(" likes", " does not like").replace(" wants ", " does not want ").replace(" wanna ", " does not want to ")
-    s = s.replace(" arrived", " did not arrive").replace(" might be", " might not be")#.replace(" looks like", " does not look like")
-    if ' can' in s: s = re.sub(r"\bcan\b", "can not", s)
-    if ' has' in s: s = re.sub(r"\bhas\b", "does not have", s)
-    if ' is' in s: s = re.sub(r"\bis\b", "is not", s)
-    assert s != s0, s
+    s00 = s0 = s
+    # s = s.replace(" likes", " does not like").replace(" wants ", " does not want ").replace(" wanna ", " does not want to ")
+    # s = s.replace(" arrived", " did not arrive").replace(" might be", " might not be")#.replace(" looks like", " does not look like")
+    # if ' has' in s: s = re.sub(r"\bhas\b", "does not have", s)
+    # if ' is' in s: s = re.sub(r"\bis\b", "is not", s)
+    # assert s != s0, s
+    n_replaced = 0
+    for old, new in [(" likes", " does not like"), (" arrived", " did not arrive"),
+        (" wants ", " does not want "), (" wanna ", " does not want to "),
+        (r"\bhas\b", "does not have"), (r"\bis\b", "is not")]:
+        if r"\b" in old: s = re.sub(old, new, s0)
+        else: s = s0.replace(old, new)
+        if s != s0: n_replaced += 1
+        s0 = s
+    assert n_replaced == 1, f'n_replaced = {n_replaced}: {s00} -> {s}'
 
     singular_subs, plural_subs = ['boy ', 'girl '], ['boys ', 'girls ']
     sep = r"\bnot\b" #if " not " in s else r"\bis\b"
@@ -1098,57 +1124,15 @@ def negate(task):
         return [vocabs[0].negate_used(), vocabs[1]]
 
     new_query2str = (lambda q, v: negate_sent(query2str(q, v))) \
-        if query2str is not None else query2str
+        if query2str is not None else None
 
     task = (new_vocab_fn, gen_fn, cxt2str, new_query2str, *a)
     return task
-
-# def verbalize_relation0(vocab, has_verb):
-#     data_name, rel_name = vocab.data.__name__, vocab.relations[0].name
-#     is_negative = rel_name.startswith('neg_')
-#     rel_name = rel_name.split('neg_')[-1]
-#     is_can = data_name == 'capabilities_of_things' and rel_name == 'child'
-#     verb = (' can' if is_can else ' is') if has_verb else ''
-#     if data_name == 'types_of_things' and rel_name == 'child': prep = ' a kind of'
-#     elif rel_name == 'sibling': prep = ' like' if has_verb else ' the one like'
-#     elif rel_name == 'prev': prep = ' just before' if has_verb else ' the time just before'
-#     elif rel_name == 'next': prep = ' just after' if has_verb else ' the time just after'
-#     elif rel_name == 'opposite': prep = ' the opposite of'
-#     elif data_name == 'countries_of_cities' and rel_name == 'child': prep = ' in' if has_verb else ' the city in'
-#     elif is_can and not has_verb: prep = ' the thing that can'
-#     else: prep = ''
-#     return f"{verb}{' not' if is_negative else ''}{prep}"
-
-def verbalize_relation(vocab):
-    data_name, rel_name = vocab.data.__name__, vocab.relations[0].name
-    is_negative = rel_name.startswith('neg_')
-    _rel_name = rel_name.split('neg_')[-1]
-    r2v = {'genders_of_persons': ('', 'one'),
-        'types_of_things': (' a kind of', 'one'),
-        'capabilities_of_things': (' the thing that can', 'one'),
-        'countries_of_cities': (' the city in', 'city'), 
-    }
-    if _rel_name == 'child': prep = r2v[data_name][0]
-    elif _rel_name == 'sibling': prep = f' the {r2v[data_name][1]} like'
-    elif _rel_name == 'prev': prep = ' the time just before'
-    elif _rel_name == 'next': prep = ' the time just after'
-    elif _rel_name == 'opposite': prep = ' the opposite of'
-    else: prep = ''
-    return f"{' not' if is_negative else ''}{prep}"
-
-def get_wh_and_the(vocab):
-    data_name, rel_name = vocab.data.__name__, vocab.relations[0].name
-    wh = 'who' if data_name in ['persons', 'genders_of_persons'] else 'which'
-    the = ' the' if data_name == 'genders_of_persons' and rel_name == 'child' or \
-        data_name == 'capabilities_of_things' and rel_name != 'child' or \
-        data_name == 'types_of_things' and rel_name != 'child' else ''
-    return wh, the
     
 def remove_local_hop(task, do_rm_query, do_g2c):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
     vocabs = vocab_fn()
     assert vocabs[0].data == vocabs[1].data
-    # class_name = vocabs[0].__class__.__name__
     data_name = vocabs[0].data.__name__
     rel_names = [v.relations[0].name for v in vocab_fn()]
     fixed_query = isinstance(gen_fn, partial) and 'query' in gen_fn.keywords
@@ -1166,11 +1150,11 @@ def remove_local_hop(task, do_rm_query, do_g2c):
     
     if query2str is None:
         if not fixed_query:
-            print('In remove_local_hop: 111')
-            wh, the = get_wh_and_the(vocabs[1])
             def query2str(q, v):
-                rel_str = verbalize_relation(vocabs[1]) + the
-                return f"{wh} is{verbalize_relation(vocabs[0])} {q}?" + capitalize(rel_str)
+                wh, the = get_wh_and_the(v[1])
+                rel_str = verbalize_relation(v[1]) + the
+                neg_str = ' not' if rel_names[0].startswith('neg_') else ''
+                return f"{wh} is{neg_str}{verbalize_relation(v[0])} {q}?" + capitalize(rel_str)
         else:
             query2str = lambda q, v: ""
     task = vocab_fn, gen_fn, cxt2str, query2str, *a
@@ -1189,9 +1173,10 @@ def remove_query(task):
         return cxt, query, candidates, (tgt, *a, ans0, ans)
     new_gen_fn.__name__ = f"rm_query[{fn2str(gen_fn)}]"
 
-    wh, the = get_wh_and_the(vocabs[1])
-    rel_str = verbalize_relation(vocabs[1]) + the
-    new_query2str = lambda q, v: f"{wh} is different?" + capitalize(rel_str)
+    def new_query2str(q, v):
+        wh, the = get_wh_and_the(v[1])
+        rel_str = verbalize_relation(v[1]) + the
+        return f"{wh} is different?" + capitalize(rel_str)
     task = vocab_fn, new_gen_fn, cxt2str, new_query2str, *a
     return task
 
@@ -1209,66 +1194,22 @@ def g2c(task):
     task = (vocab_fn, _g2c(gen_fn), *a)
     return task
 
-def maybe_refine_verbalization(task):
-    vocab_fn, gen_fn, cxt2str, query2str, *a = task
-    rel_names = [vocab.relations[0].name for vocab in vocab_fn()]
-    if any('sibling' in rel_name for rel_name in rel_names):
-        def new_query2str(q, v):
-            return query2str(q, v).replace(' likes', ' may also like').replace(' wanna', ' may also wanna') \
-                .replace(' does not', ' may not').replace(' do not', ' may not')
-        task = (vocab_fn, gen_fn, cxt2str, new_query2str, *a)
-    return task
-
-def refine_query2str(task, phase):
-    vocab_fn, gen_fn, cxt2str, query2str, *a = task
-    if query2str is None: return task
-    rel_names = [vocab.relations[0].name for vocab in vocab_fn()]
-    def new_query2str(q, v):
-        query_str = query2str(q, v)
-        if phase == 0: query_str = query_str + verbalize_relation(vocab_fn()[1])
-        if phase == 1 and any('sibling' in rel_name for rel_name in rel_names):
-            query_str = query_str.replace(' likes', ' may also like').replace(' wanna', ' may also wanna') \
-                .replace(' does not', ' may not').replace(' do not', ' may not')
-        return query_str
-    task = (vocab_fn, gen_fn, cxt2str, new_query2str, *a)
-    return task
-
 def has_local_hop(task):
     vocab_fn, *a = task; vocabs = vocab_fn()
     return vocabs[0].data != vocabs[1].data
-
-def transform_task0(task, rel0_i=None, rel1_i=None, #replace_rel0=0, replace_rel1=0,
-                rel0_kwargs=None, rel1_kwargs=None, do_swap_qa=False, do_negate=False,
-                do_rm_query=False, do_g2c=False):
-    try:
-        if rel0_i is not None: task = choose_rels(task, [rel0_i, rel1_i])
-        if rel0_kwargs is not None: task = decorate_rel(task, 0, rel0_kwargs)
-        if rel1_kwargs is not None: task = decorate_rel(task, 1, rel1_kwargs)
-        if not has_local_hop(task) and do_swap_qa: return None
-        if do_swap_qa: task = swap_qa(task)
-        if do_negate: task = negate(task)
-        if not has_local_hop(task): task = remove_local_hop(task, do_rm_query, do_g2c)
-        if do_rm_query: task = remove_query(task)
-        task = maybe_refine_verbalization(task)
-        if do_g2c: task = g2c(task)
-    except InvalidTransException as e:
-        trans_args = {k: v for k, v in locals().items() if k not in ['task', 'e']}
-        print(f'\ntransform_task failed: {e} ({args2str(trans_args)})')
-        return None
-    return task
 
 def transform_task(task, rel0_i=None, rel1_i=None, #replace_rel0=0, replace_rel1=0,
                 rel0_kwargs=None, rel1_kwargs=None, do_swap_qa=False, do_negate=False,
                 do_rm_query=False, do_g2c=False):
     try:
         if rel0_i is not None: task = choose_rels(task, [rel0_i, rel1_i])
+        if task is None: return None
         if rel0_kwargs is not None: task = decorate_rel(task, 0, rel0_kwargs)
         if rel1_kwargs is not None: task = decorate_rel(task, 1, rel1_kwargs)
-        task = refine_query2str(task, 0)
+        task = refine_query2str(task, do_swap_qa=do_swap_qa)
         if not has_local_hop(task) and do_swap_qa: return None
         if do_swap_qa: task = swap_qa(task)
         if do_negate: task = negate(task)
-        # task = refine_query2str(task, 1)
         if not has_local_hop(task): task = remove_local_hop(task, do_rm_query, do_g2c)
         if do_rm_query: task = remove_query(task)
         if do_g2c: task = g2c(task)
@@ -1325,8 +1266,6 @@ def validate_args(task, args, trans_args):
     if rels[1].name == 'equal' and args['cxt_len'] == 1: return False
     if rels[1].name == 'sibling' and not trans_args.get('do_g2c'): return False
     return True
-
-
 
 def inc(token):
     assert len(token) == 1 or token in ['->'], token

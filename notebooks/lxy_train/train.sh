@@ -20,7 +20,7 @@ deepspeed   train_model_tasks.py \
     --adam_beta1 0.9 \
     --adam_beta2 0.95 \
     --warmup_steps 100 \
-    --num_train_epochs 6 \
+    --num_train_epochs 1 \
     --gradient_checkpointing \
     --logging_steps 1 \
     --save_strategy "steps" \

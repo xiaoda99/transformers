@@ -143,7 +143,7 @@ def types_of_things(): return {
     # 'age': [],
     # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
     'electronics': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
-    'sport': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport or ball?
+    'ball': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport or ball?
     'musical instrument': ['piano', 'violin', 'guitar'],
     # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
@@ -783,15 +783,12 @@ def make_examples(task, nrows=4, vocab_for_each_row=False, **kwargs):
         if len(examples) == nrows: break
     return vocabs, examples
 
-def _item2str(item, vocab=None, reverse=False):
-    return (f'{item[1]} {item[0]}' if reverse else f'{item[0]} {item[1]}') if isinstance(item, tuple) else f'{item}'
+def _item2str(item, vocab=None): #, reverse=False):
+    return [f'{item[0]} {item[1]}', f'{item[1]} {item[0]}'] if isinstance(item, tuple) else f'{item}'
 
-def _cxt2str(cxt, vocab=None, prefix='', suffix='', sep='. ', item2str=_item2str, rev_item2str=False):
+def _cxt2str(cxt, vocab=None, prefix='', suffix='', sep=' ', item2str=_item2str, rev_item2str=False):
     def try_wrap(s):
-        # return [s] if type(s) == str else s
-        if type(s) == str: return [s]
-        assert type(s) == list and len(s) == 2, f'{type(s)} {len(s)} {s}'
-        return s
+        return [s] if type(s) == str else s
     return prefix + sep.join([try_wrap(item2str(item, vocab))[int(rev_item2str)] for item in cxt]) + suffix
 
 @dataclass
@@ -826,7 +823,7 @@ def locate(tokens, substring, return_last=False, return_all=False):
     if substring.strip() in ['->', '?']:
         char_locations = [whole_string.index(substring), whole_string.rindex(substring)]
     else:
-        pattern = r"\b%s\b" if not substring.startswith(" ") else r"%s\b"
+        pattern = r"\b%s(?:s|es)?\b" if not substring.startswith(" ") else r"%s(?:s|es)?\b"
         try: matches = list(re.finditer(pattern % substring, whole_string))
         except Exception: print(f'sub = {substring}, whole = {whole_string}'); raise
         assert len(matches) > 0, f'{tokens}\n{substring} not match {whole_string}'
@@ -838,12 +835,14 @@ def locate(tokens, substring, return_last=False, return_all=False):
         for i, t in enumerate(tokens):
             loc += len(t)
             _t = t[1:] if t.startswith(' ') else t
+            forms = [substring, substring + 's', substring + 'es']
             if tok_start is None and loc > char_loc:
-                assert substring.find(_t) in [0, 1], \
+                assert any(s.find(_t) in [0, 1] for s in forms), \
                     f'{whole_string}\n{tokens}\n{substring} not startswith {_t} at {i}. loc = {loc}, char_loc = {char_loc}'
                 tok_start = i
             if tok_end is None and loc >= char_loc + len(substring):
-                assert substring.endswith(_t), f'{whole_string}\n{tokens}\n{substring} not endswith {_t} at {i}'
+                assert any(s.endswith(_t) for s in forms), \
+                    f'{whole_string}\n{tokens}\n{substring} not endswith {_t} at {i}'
                 tok_end = i + 1
                 break
         assert tok_start is not None and tok_end is not None, f'{tok_start}, {tok_end}'
@@ -851,7 +850,7 @@ def locate(tokens, substring, return_last=False, return_all=False):
         ranges.append((tok_start, tok_end))
     return ranges
 
-def example2ranges(example, tokens, bos_token):
+def example2ranges(example, tokens, bos_token, trimmed=False):
     if 'IO' in example:  # ioi task
         e = example
         ranges = IOIRanges(
@@ -866,6 +865,7 @@ def example2ranges(example, tokens, bos_token):
         return ranges
 
     cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
+    if trimmed: return Ranges(bos = locate(tokens, bos_token, return_last=True))
     ranges = Ranges(
         bos = locate(tokens, bos_token, return_last=True),
         ans = locate(tokens, ans, return_last=True),
@@ -878,7 +878,7 @@ def example2ranges(example, tokens, bos_token):
         max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
         ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
             [locate(tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
-    if '.' in tokens:
+    if ranges.tgt is not None and '.' in tokens[ranges.tgt[1]:]:  # TODO: debug
         sep_i = tokens.index('.', ranges.tgt[1])
         ranges.sep = (sep_i, sep_i + 1)
     return ranges
@@ -983,20 +983,25 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
     cxt, *_ = examples[0]
     cxt_len = len(cxt)
     if abstract:
-        cxt2str, item2str, query2str = _cxt2str, partial(_item2str, reverse=rev_item2str), _str
+        prefix="< "; suffix=" >."; query2str = _str
         if cxt_len == 1:
-            item2str, query2str = lambda i, _: f'{i[1]}', lambda q, _: ''
             examples = [(cxt, None, None, (None, ans0, ans), *cls)
                 for cxt, query, options, (tgt, ans0, ans), *cls in examples]
-        if isinstance(cxt[0], str): cxt2str = partial(_cxt2str, sep=' ') # item_len == 1
-        cxt2str, bos_token, ans2str = partial(cxt2str, item2str=item2str), abstract_bos_token, _str
+            prefix=""; suffix=""; query2str = lambda q, _: ''
+        sep = choice([', ', ' ']) if isinstance(cxt[0], str) else ' '
+        i2s = choice([lambda i: f'( {i[0]}, {i[1]} )', lambda i: f'( {i[0]} {i[1]} )',
+                    lambda i: f'{i[0]}, {i[1]}.', lambda i: f'{i[0]} {i[1]}.'])
+        def item2str(item, vocab=None):
+            return [i2s(i) for i in [item, item[::-1]]] if isinstance(item, tuple) else f'{item}'
+        cxt2str = partial(_cxt2str, prefix=prefix, suffix=suffix, sep=sep, item2str=item2str)
+        bos_token, ans2str = abstract_bos_token, _str
     else:
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '' if i == 4 else _str) for i in range(2, 6)]
     def example2str(vocab, example):
         cxt, query, candidates, (*_, ans), *cls = example
         strs = [cxt2str(cxt, vocab, rev_item2str=rev_item2str), capitalize(query2str(query, vocab))]
         if options_position is not None: strs.insert(options_position, options2str([c[-1] for c in candidates]))
-        s = '. '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
+        s = ' '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
         _bos_token = bos_token
         if bos_token == '': query_str = strs[1]; _bos_token = rsplit_bos(query_str)
         if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
@@ -1086,24 +1091,23 @@ def swap_qa(task):
 
     def new_query2str(q, v):
         wh, the = get_wh_and_the(v[1])
-        return f'{query2str(wh, v)} {q}?'.replace("who's", "whose") + the
+        return f'{query2str(wh, v)} {q}?'.replace("who's", "whose") + capitalize(the)
     task = (new_vocab_fn, gen_fn, new_cxt2str, new_query2str, *a)
     return task
 
 def negate_sent(s):  # TODO: a more principled way of negating a sentence
     s00 = s0 = s
-    # s = s.replace(" likes", " does not like").replace(" wants ", " does not want ").replace(" wanna ", " does not want to ")
-    # s = s.replace(" arrived", " did not arrive").replace(" might be", " might not be")#.replace(" looks like", " does not look like")
-    # if ' has' in s: s = re.sub(r"\bhas\b", "does not have", s)
-    # if ' is' in s: s = re.sub(r"\bis\b", "is not", s)
-    # assert s != s0, s
     n_replaced = 0
-    for old, new in [(" likes", " does not like"), (" arrived", " did not arrive"),
+    for old, new in [(" likes", " does not like"), (" owns", " does not own"),
         (" wants ", " does not want "), (" wanna ", " does not want to "),
-        (r"\bhas\b", "does not have"), (r"\bis\b", "is not")]:
+        (" arrived", " did not arrive"),
+        (r"\bis\b", "is not"), (r"\bhas\b", "does not have")]:
         if r"\b" in old: s = re.sub(old, new, s0)
         else: s = s0.replace(old, new)
-        if s != s0: n_replaced += 1
+        if s != s0:
+            n_replaced += 1
+            # skip 'has' if 'is' is present. e.g. 'What John has is' -> 'What John has is not'
+            if old == r"\bis\b": break
         s0 = s
     assert n_replaced == 1, f'n_replaced = {n_replaced}: {s00} -> {s}'
 
@@ -1215,13 +1219,13 @@ def transform_task(task, rel0_i=None, rel1_i=None, #replace_rel0=0, replace_rel1
         if do_g2c: task = g2c(task)
     except InvalidTransException as e:
         trans_args = {k: v for k, v in locals().items() if k not in ['task', 'e']}
-        print(f'\ntransform_task failed: {e} ({args2str(trans_args)})')
+        # print(f'\ntransform_task failed: {e} ({args2str(trans_args)})')
         return None
     return task
 
 def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, tokenizer = None, max_length=512, plot=True, verbose=True):
     ans_counts = [('a', nrows)]; ind_counts = [(0, 9), (1, 1)]; i = 0
-    while len(ind_counts) > 1 and (len(ind_counts) < cxt_len or ind_counts[-1][1] == 1 or ind_counts[0][1] > ind_counts[-1][1] * 3) or \
+    while len(ind_counts) > 1 and (len(ind_counts) < cxt_len or ind_counts[0][1] > ind_counts[-1][1] * 3) or \
             len(ans_counts) == 1 or len(ans_counts) > 2 and ans_counts[0][1] > nrows / 4 or len(ans_counts) == 2 and ans_counts[0][1] >= ans_counts[1][1] * 2:
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
         # print('In generate: example =', examples[0])
@@ -1263,7 +1267,9 @@ def validate_args(task, args, trans_args):
     rels = [vocab.relations[0] for vocab in vocab_fn()]
     if trans_args.get('do_swap_qa') and isinstance(gen_fn, partial) and 'query' in gen_fn.keywords: return False
     if not has_local_hop(task) and args.get('rev_item2str'): return False
-    if rels[1].name == 'equal' and args['cxt_len'] == 1: return False
+    if args['cxt_len'] == 1 and (rels[1].name == 'equal' or rels[0].name != 'equal' or 
+                                trans_args.get('do_negate') or trans_args.get('do_g2c')):
+        return False
     if rels[1].name == 'sibling' and not trans_args.get('do_g2c'): return False
     return True
 

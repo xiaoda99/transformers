@@ -1109,19 +1109,18 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
                         for t in convert_fn(candidates[i])]])
                 topk_stat = dist
             else:
-                logits_ = logits[0, bos_i + j]
+                logits_ = logits[0, bos_i + j]; dist = logits_.softmax(-1)
                 labels_mask[:, bos_i + j] = logits_.argmax() == ans_id
                 if candidates is not None and j == 0:
                     logits_mask[:, bos_i] = -1; logits_mask[:, bos_i, candidates[i]] = 0
                     masked_logits_ = logits_ + logits_mask[0, bos_i] * (1e4 if logits.dtype == torch.float16 else 1e9)
-                    if mask_logits: logits_ = masked_logits_
+                    if mask_logits: logits_ = masked_logits_; dist = logits_.softmax(-1)
                     # amend labels_mask with masked_logits which is used in attribution by default
                     labels_mask[:, bos_i + j] = masked_logits_.argmax() == ans_id
                     logits_str = ' '.join(('*' if cand == ans_id else '') +
                         f'{tokenizer.convert_ids_to_tokens(cand)}:{logits[0, bos_i, cand].item():.3f}'
                         for cand in candidates[i])
                     candidate_probs.append([dist[cand].item() for cand in candidates[i]])
-                dist = logits_.softmax(-1)
                 ans_prob = round(dist[ans_id].item(), 3)
                 top1_correct = (dist.argmax() == ans_id).item()
                 topk_stat = show_topk(*dist.topk(topk), indices_fn=convert_fn)
@@ -1198,13 +1197,10 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
         tokenizer, *args, logits=logits, labels=labels, loss_reduction='mean',
         k_shot=k_shot, topk=3, verbose=verbose)
     o.logits_mask = logits_mask
-    if labels_mask is not None:  # once evaluation completes, revise labels for attribution
+    # once evaluation completes, revise labels to use only correctly predicted labels for subsequent attribution
+    if labels_mask is not None:
         labels[labels_mask == 0] = -100
         assert not (labels == -100).all()
-    # use only correct labels for subsequent attribution
-    # _labels = labels[labels != -100]
-    # _labels[~torch.BoolTensor(top1_corrects)] = -100
-    # labels[labels != -100] =  _labels
     if trim: o = trim_outputs(o)
 
     data_tuple = [text, input_ids, labels, ranges] + args + [o]
@@ -1268,10 +1264,10 @@ def getLLAMAOutputs(texts, tokenizer, layers, only_logits = True):
     return batch_outputs
 
 def result2dict(result):
-    return {k: v for k, v in result.__dict__.items() if k in ['mean_loss', 'mean_acc', 'answer_probs', 'texts', 'data_tuples']}
+    return {k: v for k, v in result.__dict__.items() if k in ['mean_loss', 'mean_acc', 'answer_probs', 'texts']}
     
 def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size, ioi_dataset=None,
-            trim=False, custom_forward=True, verbose=True, result=None, save_label = False, **gen_args):
+            trim=False, custom_forward=True, verbose=True, result=None, save_label = False, test_acc = False, **gen_args):
     if result is None:
         if ioi_dataset is not None:
             indices_groups = np.arange(batch_size * nrows).reshape(batch_size, nrows)
@@ -1292,7 +1288,7 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
     if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):
         batch_outputs = getLLAMAOutputs(texts, tokenizer, gen_args.get('llama_size', '7B'), False) \
             if my_isinstance(tokenizer, LLAMATokenizer) else () # add by lxy
-        # #add lxy get labels to construct dataset
+        # add lxy get labels to construct dataset
         if save_label:
             input_ids, labels, ranges, *args = map(list, zip(*[make_data_tuple(
             text, examples, tokenizer, k_shot=k_shot, bos_token=bos_tokens, eos_token=None)
@@ -1312,7 +1308,10 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
         result.mean_loss, result.mean_acc = np.array(loss).mean(), np.array(join_lists(acc)).mean()
         result.answer_probs = np.array(answer_probs).mean(0)
         print(result.mean_loss, result.mean_acc)
-        plt.plot(result.answer_probs); plt.show()
+        # plt.plot(result.answer_probs); plt.show()
+    if test_acc:
+        result.texts = texts[:1]
+        return result2dict(result)
     return result
 
 def show_predictions_by_data_tuples(model, tokenizer, data_tuples, k_shot, to_layer=None, verbose=True):

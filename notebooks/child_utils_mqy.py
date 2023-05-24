@@ -8,6 +8,7 @@ from collections import defaultdict, OrderedDict, Counter, Iterable
 from functools import partial, wraps
 import string
 from random import choice, choices, shuffle, sample, randint, random, seed
+import itertools
 from dataclasses import dataclass, fields
 from copy import deepcopy
 import traceback
@@ -24,8 +25,8 @@ import torch.nn.functional as F
 from const import *
 from common_utils import join_lists, list_diff, my_isinstance, lget, fn2str
 from openai_utils import query_openai
-from transformers import LlamaTokenizer
 from LLAMATokenizer import LLAMATokenizer
+from transformers import LlamaTokenizer
 # sys.path.insert(0, '/nas/xd/projects/PyFunctional')
 # from functional import seq
 # from functional.pipeline import Sequence
@@ -142,7 +143,7 @@ def types_of_things(): return {
     # 'age': [],
     # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
     'electronics': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
-    'ball': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport
+    'sport': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport or ball?
     'musical instrument': ['piano', 'violin', 'guitar'],
     # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
@@ -785,7 +786,7 @@ def make_examples(task, nrows=4, vocab_for_each_row=False, **kwargs):
 def _item2str(item, vocab=None, reverse=False):
     return (f'{item[1]} {item[0]}' if reverse else f'{item[0]} {item[1]}') if isinstance(item, tuple) else f'{item}'
 
-def _cxt2str(cxt, vocab=None, prefix='', suffix='', sep='. ', item2str=_item2str, rev_item2str=False):
+def _cxt2str(cxt, vocab=None, prefix='', suffix='', sep=' ', item2str=_item2str, rev_item2str=False):
     def try_wrap(s):
         # return [s] if type(s) == str else s
         if type(s) == str: return [s]
@@ -877,7 +878,7 @@ def example2ranges(example, tokens, bos_token):
         max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
         ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
             [locate(tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
-    if '.' in tokens:
+    if '.' in tokens:  # debug
         sep_i = tokens.index('.', ranges.tgt[1])
         ranges.sep = (sep_i, sep_i + 1)
     return ranges
@@ -888,33 +889,30 @@ def move_ranges(r, offset):
         if pair is not None: setattr(r, name, tuple([i + offset for i in pair]))
     return r
 
-def locate_ranges(examples, example_strs, tokenizer, bos_token, prefix_tokens=[]):
+def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
     assert len(examples) == len(example_strs)
     ranges = []
     use_llama_tokenizer = my_isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer))
-    newline_token = '<0x0A>' if use_llama_tokenizer else tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同
-    all_tokens = prefix_tokens
+    newline_token = '<0x0A>' if use_llama_tokenizer else '\n' #tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同
     if use_llama_tokenizer:  # add by lxy
-        text = '\n'.join(example_strs) + '\n'
-        all_tokens_llama = [tokenizer.convert_ids_to_tokens(i).replace('▁', ' ') for i in tokenizer.encode(text, bos = True)]
-        all_tokens_llama[2] = all_tokens_llama[2][1:] if len(all_tokens_llama) > 1 else None # space和非space这里有问题
-        sep_tokens, sep_token = [], []
-        for token in all_tokens_llama:
-            if token != newline_token:
-                sep_token.append(token) 
-            else:
-                sep_tokens.append(sep_token[:])
-                sep_token = []
+        # tokenizer.decode will strip leading '__'
+        all_tokens_llama = [tokenizer.convert_ids_to_tokens(id).replace('▁', ' ') for id in input_ids]
+        assert all_tokens_llama[0] == tokenizer.bos_token, str(all_tokens_llama)
+        all_tokens = [tokenizer.bos_token]
+        assert all_tokens_llama[1].startswith(' '), all_tokens_llama[1]
+        all_tokens_llama[1] = all_tokens_llama[1][1:]
+        all_tokens_llama = all_tokens_llama[1:]  # treat leading bos as prefix_token and remove it from all_tokens_llama
+        # split all_tokens_llama using newline_token as delimiter
+        # https://stackoverflow.com/questions/15357830/splitting-a-list-based-on-a-delimiter-word
+        sep_tokens = [list(y) for x, y in itertools.groupby(all_tokens_llama, lambda z: z == newline_token) if not x]
+        assert len(sep_tokens) == len(example_strs)
+    else:
+        all_tokens = [newline_token] if tokenizer.decode(input_ids[0]) == newline_token else []
     for i, (e, e_str) in enumerate(zip(examples, example_strs)):
         # tokens = tokenizer.tokenize(e_str)  # can not work with locate
-        if use_llama_tokenizer:# by lxy
-            # tokens = [tokenizer.convert_ids_to_tokens(i).replace('▁', ' ') for i in tokenizer.encode(e_str)]
-            # tokens[0] = tokens[0][1:] if len(tokens) > 0 else None
-            tokens = sep_tokens[i]
-            # newline_token = '<0x0A>'
-        else:
-            tokens = [tokenizer.decode([i]) for i in tokenizer.encode(e_str)] # lxy: 解码不出来空格
-            assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
+        tokens = sep_tokens[i] if use_llama_tokenizer else \
+            [tokenizer.decode(id) for id in tokenizer.encode(e_str)] # lxy: LLAMATokenizer decode不出单词前面的空格
+        assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
         r = example2ranges(e, tokens, bos_token[i] if isinstance(bos_token, (tuple, list)) else bos_token)
         ranges.append(move_ranges(r, len(all_tokens)))
         all_tokens += tokens + [newline_token]
@@ -951,9 +949,7 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
 def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
     input_ids = tokenizer.encode(text, return_tensors='pt')
     example_strs = text.strip('\n').split('\n')  # strip the trailing '\n'
-    newline_token = '<0x0A>' if my_isinstance(tokenizer, LLAMATokenizer) else tokenizer.tokenize('\n')[0]
-    prefix_tokens = [newline_token] if text.startswith('\n') else []
-    ranges = locate_ranges(examples, example_strs, tokenizer, bos_token, prefix_tokens=prefix_tokens)
+    ranges = locate_ranges(examples, example_strs, tokenizer, input_ids[0].tolist(), bos_token)
     # by lxy: when bos is tokenized into multiple tokens, e.g. 'likes' -> ['__lik', 'es'] in LLaMA, use last token's index
     bos_indices = [r.bos[-1] - 1 for r in ranges]  # [r.bos[0] for r in ranges]
     bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
@@ -1000,16 +996,12 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         cxt, query, candidates, (*_, ans), *cls = example
         strs = [cxt2str(cxt, vocab, rev_item2str=rev_item2str), capitalize(query2str(query, vocab))]
         if options_position is not None: strs.insert(options_position, options2str([c[-1] for c in candidates]))
-        s = '. '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
+        s = ' '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
         _bos_token = bos_token
         if bos_token == '': query_str = strs[1]; _bos_token = rsplit_bos(query_str)
         if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
-    # if my_isinstance(tokenizer, LLAMATokenizer): # add by lxy
-    #     return examples, '\n ' + '\n '.join(example_strs) + '\n', bos_tokens
-    # else:
-    #     return examples, '\n' + '\n'.join(example_strs) + '\n', bos_tokens
     text = '\n '.join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
         '\n' + '\n'.join(example_strs) + '\n'  # prepend '\n' to act as bos for tokenizer without bos
     return examples, text, bos_tokens
@@ -1183,7 +1175,6 @@ def remove_query(task):
 
     def new_query2str(q, v):
         wh, the = get_wh_and_the(v[1])
-        print('data_names =', [i.data.__name__ for i in v])
         rel_str = verbalize_relation(v[1]) + the
         return f"{wh} is different?" + capitalize(rel_str)
     task = vocab_fn, new_gen_fn, cxt2str, new_query2str, *a

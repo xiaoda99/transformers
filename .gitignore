@@ -173,6 +173,10 @@ notebooks/results
 notebooks/gpt-j-6B
 notebooks/nrk/attention
 notebooks/nrk
-notebooks/lxy
 notebooks/lzt
 notebooks/nohup.out
+notebooks/lxy
+notebooks/lxy_train/tasks_test
+notebooks/lxy_train/wandb
+notebooks/lxy_train/*.json
+notebooks/lxy_train/*.pickle
