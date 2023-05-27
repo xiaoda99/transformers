@@ -486,6 +486,15 @@ def xxx_be(positive=True):
     s = choice(choice(ss))
     return s if s.startswith(",") else " " + s
     
+synonym_dict = {
+    'has': ['owns', 'possesses'], 'have': ['own', 'possesse'],
+    'wants to go to': ['wants to visit', 'longs for', 'yearns for'], 'want to go to': ['want to visit', 'long for', 'yearn for'],
+    'arrived': ['appeared', 'showed up'], 'arrive': ['appear', 'show up'],
+}
+synonym_dict = {k: [k] + v for k, v in synonym_dict.items()}
+
+def sampled_synonym_dict(): return {k: choice(v) for k, v in synonym_dict.items()}
+
 grammar_correction = [
     ('Anna and Mike is going skiing.', 'Anna and Mike are going skiing.'),
     ('Anna and Pat are married; he has been together for 20 years.', 'Anna and Pat are married; they have been together for 20 years.'),
@@ -786,7 +795,7 @@ def make_examples(task, nrows=4, vocab_for_each_row=False, **kwargs):
 def _item2str(item, vocab=None): #, reverse=False):
     return [f'{item[0]} {item[1]}', f'{item[1]} {item[0]}'] if isinstance(item, tuple) else f'{item}'
 
-def _cxt2str(cxt, vocab=None, prefix='', suffix='', sep=' ', item2str=_item2str, rev_item2str=False):
+def _cxt2str(cxt, vocab=None, prefix='< ', suffix=' >.', sep=' ', item2str=_item2str, rev_item2str=False):
     def try_wrap(s):
         return [s] if type(s) == str else s
     return prefix + sep.join([try_wrap(item2str(item, vocab))[int(rev_item2str)] for item in cxt]) + suffix
@@ -979,7 +988,20 @@ def rsplit_bos(s):
     if s.endswith("?"): return "?"
     return ' ' + s.split()[-1]
 
+def post_compose(fn, fn2):
+    def new_fn(*args, **kwargs):
+        return fn2(fn(*args, **kwargs))
+    return new_fn
+
+def multi_replace(s, pairs):
+    for old, new in pairs.items():
+        if old in s: s = re.sub(r"\b%s\b" % old, new, s)
+    return s
+
 def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, options_position=None, tokenizer = None):
+    # Randomized transformations here are per input basis, i.e. each example in an input are the same,
+    # while each input in a task's batch may be different. It is finer-grained than transform_task which are per task basis.
+    # Hierarchy: task >= batch > input > example
     cxt, *_ = examples[0]
     cxt_len = len(cxt)
     if abstract:
@@ -997,6 +1019,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         bos_token, ans2str = abstract_bos_token, _str
     else:
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '' if i == 4 else _str) for i in range(2, 6)]
+        query2str = post_compose(query2str, partial(multi_replace, pairs=sampled_synonym_dict()))
     def example2str(vocab, example):
         cxt, query, candidates, (*_, ans), *cls = example
         strs = [cxt2str(cxt, vocab, rev_item2str=rev_item2str), capitalize(query2str(query, vocab))]
@@ -1098,8 +1121,9 @@ def swap_qa(task):
 def negate_sent(s):  # TODO: a more principled way of negating a sentence
     s00 = s0 = s
     n_replaced = 0
-    for old, new in [(" likes", " does not like"), (" owns", " does not own"),
-        (" wants ", " does not want "), (" wanna ", " does not want to "),
+    for old, new in [
+        # (" likes", " does not like"), (" owns", " does not own"), (" possesses", " does not possess"),
+        (" wants ", " does not want "), #(" wanna ", " does not want to "),
         (" arrived", " did not arrive"),
         (r"\bis\b", "is not"), (r"\bhas\b", "does not have")]:
         if r"\b" in old: s = re.sub(old, new, s0)
@@ -1142,15 +1166,17 @@ def remove_local_hop(task, do_rm_query, do_g2c):
     fixed_query = isinstance(gen_fn, partial) and 'query' in gen_fn.keywords
     
     assert not rel_names[1].startswith('neg_'), rel_names[1]
-    if rel_names[0] == 'equal' or rel_names[1] in ['child', 'sibling'] and not rel_names[0].startswith('neg_'):
+    if fixed_query:
+        pass  # TODO: Is there any rule for fixed_query?
+    elif rel_names[0] == 'equal' or rel_names[1] in ['child', 'sibling'] and not rel_names[0].startswith('neg_'):
         raise InvalidTransException("invalid rel for rm_local_hop: " + str(rel_names))
-    if rel_names[1] in ['child', 'sibling'] and len(vocabs[1].child.dom()) == 2 and not do_rm_query:
+    elif rel_names[1] in ['child', 'sibling'] and len(vocabs[1].child.dom()) == 2 and not do_rm_query:
         raise InvalidTransException(f"invalid rel for rm_local_hop: {rel_names}. len({data_name}.child.dom()) == 2")
-    if not do_rm_query and do_g2c:  # solvable without cxt
+    elif not do_rm_query and do_g2c:  # solvable without cxt
         raise InvalidTransException(f"invalid rel for rm_local_hop with g2c: {rel_names}")
     
     if cxt2str is None:
-        cxt2str = partial(_cxt2str, prefix='There are ', sep=', ', item2str=lambda i, _: a_(i))
+        cxt2str = partial(_cxt2str, prefix='There are ', suffix='.', sep=', ', item2str=lambda i, _: a_(i))
     
     if query2str is None:
         if not fixed_query:
@@ -1219,20 +1245,30 @@ def transform_task(task, rel0_i=None, rel1_i=None, #replace_rel0=0, replace_rel1
         if do_g2c: task = g2c(task)
     except InvalidTransException as e:
         trans_args = {k: v for k, v in locals().items() if k not in ['task', 'e']}
-        # print(f'\ntransform_task failed: {e} ({args2str(trans_args)})')
+        print(f'\ntransform_task failed: {e} ({args2str(trans_args)})')
         return None
     return task
 
 def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, tokenizer = None, max_length=512, plot=True, verbose=True):
+    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    position_relevant = isinstance(gen_fn, partial) and \
+        'cxt_sample_fn' in gen_fn.keywords and 'query' in gen_fn.keywords and \
+        gen_fn.keywords['cxt_sample_fn'].__name__ == 'enumerate_sample'
+
     ans_counts = [('a', nrows)]; ind_counts = [(0, 9), (1, 1)]; i = 0
-    while len(ind_counts) > 1 and (len(ind_counts) < cxt_len or ind_counts[0][1] > ind_counts[-1][1] * 3) or \
-            len(ans_counts) == 1 or len(ans_counts) > 2 and ans_counts[0][1] > nrows / 4 or len(ans_counts) == 2 and ans_counts[0][1] >= ans_counts[1][1] * 2:
+    while (not position_relevant and len(ind_counts) > 1 and (len(ind_counts) < cxt_len 
+                                    or ind_counts[0][1] > ind_counts[-1][1] * 3) or
+            len(ans_counts) == 1 or
+            len(ans_counts) > 2 and ans_counts[0][1] > nrows / 4 or
+            len(ans_counts) == 2 and ans_counts[0][1] >= ans_counts[1][1] * 2):
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
         # print('In generate: example =', examples[0])
         ans_counts = Counter([ans for cxt, query, cands, (*_, ans), *cls in examples]).most_common()
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
-        i += 1; assert i < 25, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:3]) + '\n' + str(ind_counts) + '\n' + str(ans_counts)
+        i += 1
+        assert i < 25, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:]) + \
+            '\n' + str(ind_counts) + '\n' + str(ans_counts)
     # if i > 1: print('In generate: i =', i)
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())

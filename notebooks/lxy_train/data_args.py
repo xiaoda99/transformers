@@ -100,6 +100,12 @@ class DataTrainingArguments:
             "value if set."
         },
     )
+    eval_task_file: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "The file containing extra tokens to add to the tokenizer."
+        },
+    )
 
     def __post_init__(self):
         if self.dataset_name is None and self.train_file is None and self.validation_file is None:

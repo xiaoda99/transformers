@@ -1712,7 +1712,7 @@ def attribute_step(data_tuple, model, node, attribute_k=False,
     labels = labels.to(device)
 
     fns = path2fns(node, partial(node2fn, outputs=o, ranges=ranges, labels=labels))
-    #print('!!!fns', fns)
+    print('!!!fns', len(fns), node2key(node))
     if len(fns) > 0: labels = None
     elif node.data.label_type == 'argmax_labels':  # for root
         labels = get_argmax_labels(model, o.hidden_states[-2], labels)
@@ -1930,6 +1930,7 @@ def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_
     si = parent.data.step
     if attn_pattern is None and label_type: _, attn_pattern, _ = parse_label_type(label_type)
     if step is None: step = si + 1
+    print('before attrdata instantiation layer head', layer, head)
     data = AttrData(step=step, topi=topi, layer=layer, head=head, H=H, label_type=label_type, 
                     attn_pattern=attn_pattern, dummy=dummy, mixed=mixed, **kwargs)
     if head_attr is not None and not dummy and not mixed: update_attr_data(data, head_attr)
@@ -2094,9 +2095,10 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
 def filter_fn(p, c):
     if c.layer == 0 or c.head == c.H: return False
     pap, ap = abbreviate_attn_pattern(p.attn_pattern or ''), abbreviate_attn_pattern(c.attn_pattern)
-    return (p.step == -1  and c.ap_score > 0.2 and c.top_score > 0.6 or
+    return (p.step == -1  and c.ap_score > 0.29 and c.top_score > 0.4 or
         #p.step == 0 and (pap.startswith('B->A0') or pap.startswith('B->B')) or
-        p.step == 0 and (pap.startswith('B->A0') or pap.startswith('B->B') or ap.startswith('B->A0')) or
+        p.step == 0  or
+        #p.step == 0 and (pap.startswith('B->A0') or pap.startswith('B->B') or ap.startswith('B->A0')) or
         p.step == 1 and (ap == 'B->A]^' or ap=='B->B^') )
         #p.step == 1 and pap == 'B->Q' and ap == 'Q->T')
         # p.step == 0 and pap.startswith('B->A0') and (ap.startswith('B->A0') and c.ap_score > 0.4 or ap == 'B->B' and c.ap_score > 0.6 or ap in ['B->Q', 'B->A]']) or \
@@ -2160,9 +2162,13 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
         def key_fn(node): return tuple([wrap_none(getattr(node.data, k)) for k in keys])
         for _, node_group in groupby(sorted(children, key=key_fn), key=key_fn):
             node_group = list(node_group); node0 = node_group[0]
+            print('args1', {k: getattr(node0.data, k) for k in keys})
+            print('args2', {k: [getattr(n.data, k) for n in node_group] for k in ['layer', 'head', 'topi']})
             child = add_node(node, mixed=True, verbose=verbose, **{k: getattr(node0.data, k) for k in keys},
                 **{k: [getattr(n.data, k) for n in node_group] for k in ['layer', 'head', 'topi']})
             _children.append(child)
+            print('k,v', _, node2key(child))
+            print('node_group',len(node_group), [node2key(n) for n in node_group])
         children = _children
 
     for c in children:
@@ -2312,6 +2318,7 @@ def node2fn(node, outputs=None, ranges=None, labels=None):
     hidden_states0 = None
     k_node = getattr(node, 'k_node', None)
     if k_node is not None:
+        print('!!!! k_node')
         l = k_node.data.layer
         fns = path2fns(k_node, partial(node2fn, outputs=outputs, ranges=ranges), except_last=True)
         fwd_fn = partial(sum_forward, outputs=outputs, output_layer=l)

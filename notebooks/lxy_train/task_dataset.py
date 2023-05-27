@@ -6,24 +6,39 @@ import pandas as pd
 import torch
 from datasets import load_dataset
 from torch.utils.data import Dataset
-# import sys
-# sys.path.insert(0, '/nas/xd/projects/transformers/notebooks')
-# from child_utils import Ranges
+import random
 import pickle
 from transformers import AutoTokenizer
+from transformers.trainer_utils import get_last_checkpoint, is_main_process
 class TasksDataset(Dataset):
-    def __init__(self, train_path, tokenizer, train_mode = 'train', split = 80, max_length = 1024, k_shot = 1):
+    def __init__(self, train_path, tokenizer, train_mode = 'train', split = 80, max_length = 1024, \
+        k_shot = 1, seed = 42 , local_rank = 0, eval_task_file = ""):
 
+        # 读取制作的数据集，进行反序列化
         with open(train_path, 'r') as f:   
             content = f.read()
         self.dataset = json.loads(content)
 
+        # 设置种子的目的，方便随机选取的测试集可复现，task_key是固定的。
+        # random.seed(seed)
         split_threhold = int(len(self.dataset) * split / 100.0)
-        task_keys = list(self.dataset.keys())[:split_threhold] if train_mode == 'train' \
-            else list(self.dataset.keys())[split_threhold:]
-
-        self.post_lists = [] # (tuple: key,texts,label)
+        random_keys = random.sample(self.dataset.keys(), len(self.dataset.keys()))
+        # 根据split_threhold切分训练集测试集
+        task_keys = random_keys[:split_threhold] if train_mode == 'train' \
+            else random_keys[split_threhold:]
         
+        # 保存评估时的任务，方便在child_utils中测试模型微调后每个任务的准确率
+        if train_mode == 'eval' and is_main_process(local_rank):
+            dictss = {}
+            for key in task_keys:
+                text = self.dataset[key]['texts'][0]
+                dictss[key] = text
+            contents = json.dumps(dictss)
+            with open(eval_task_file,'w') as f:
+                f.write(contents)
+
+        # 保存每个样本 tuple(key,text,bos,input_ids)
+        self.post_lists = [] 
         for key, value in self.dataset.items():
             if key not in task_keys: continue
             pos_tuple = (key, )
@@ -32,7 +47,6 @@ class TasksDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.k_shot = k_shot
-        self.post_lists = self.post_lists[:32]
 
     def __len__(self):
         return len(self.post_lists)
@@ -44,23 +58,23 @@ class TasksDataset(Dataset):
 
         input_ids = torch.tensor(encodings_dict["input_ids"])
         attn_masks = torch.tensor(encodings_dict["attention_mask"])
-
-        # assert和原来一致
         origin_ids = torch.tensor(origin_ids).reshape(-1)
-        # print(origin_ids.equal(input_ids[:origin_ids.size(0)]))
+
+        # 确保该tokenizer的input_ids和origin_id内容一致
         assert origin_ids.equal(input_ids[:origin_ids.size(0)])
-        # ssert 0 == ((x != y).sum())
+        # 确保padding后面都是pad_token_id
         assert (input_ids[origin_ids.size(0):] != self.tokenizer.pad_token_id).sum() == 0
 
+        #构造label,将计算loss的位置设置为非-100的值
         labels = torch.ones_like(input_ids) * (-100)
-
         bos_indices = [r[-1] - 1 for r in ranges]
         eos_indices = [bos_i + 2 for bos_i in bos_indices]
         for bos_i, eos_i in zip(bos_indices, eos_indices):
             labels[bos_i + 1: eos_i] = input_ids[bos_i + 1: eos_i]
-            # ans_ids = input_ids[0, bos_i + 1: eos_i]
-            # labels[0, bos_i: eos_i - 1] = ans_ids
-        labels[:bos_indices[self.k_shot]] = -100
+
+        # 计算k-shot后的loss
+        label_indices = [bos + 1 for bos in bos_indices]
+        labels[:label_indices[self.k_shot]] = -100
 
         return {
             # 'key':key,
@@ -68,7 +82,6 @@ class TasksDataset(Dataset):
             "input_ids": input_ids,
             "attention_mask": attn_masks,
             "labels": labels
-            # "ranges": ranges,
         }
 
 

@@ -7,24 +7,24 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 # --overwrite_output_dir \
 #--overwrite_output_dir \
 deepspeed   train_model_tasks.py \
-    --output_dir "tasks_test" \
+    --output_dir "train_tasks_0526" \
     --do_train \
     --do_eval \
     --evaluation_strategy "steps" \
     --eval_steps 2 \
-    --per_device_train_batch_size 2 \
-    --per_device_eval_batch_size 2 \
+    --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 16 \
     --gradient_accumulation_steps 1 \
     --eval_accumulation_steps 1 \
     --learning_rate 1e-5 \
     --adam_beta1 0.9 \
     --adam_beta2 0.95 \
     --warmup_steps 100 \
-    --num_train_epochs 1 \
+    --num_train_epochs 3 \
     --gradient_checkpointing \
-    --logging_steps 1 \
+    --logging_steps 5 \
     --save_strategy "steps" \
-    --save_steps 200 \
+    --save_steps 2 \
     --fp16 \
     --deepspeed /nas/xd/projects/transformers/notebooks/lxy_train/ds_config_gptj.json \
     --train_file /nas/xd/projects/transformers/notebooks/lxy_train/task_datasets.json \
@@ -34,5 +34,6 @@ deepspeed   train_model_tasks.py \
     --k_shot 3 \
     --model_name_or_path EleutherAI/gpt-j-6B \
     --tokenizer_name EleutherAI/gpt-j-6B \
+    --eval_task_file /nas/xd/projects/transformers/notebooks/lxy_train/eval_task_file.json \
     --overwrite_output_dir \
-    | tee train0511.log
+    | tee train0526.log

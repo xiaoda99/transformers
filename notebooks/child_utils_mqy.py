@@ -878,7 +878,7 @@ def example2ranges(example, tokens, bos_token):
         max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
         ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
             [locate(tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
-    if '.' in tokens:  # debug
+    if ranges.tgt is not None and '.' in tokens[ranges.tgt[1]:]:  # TODO: debug
         sep_i = tokens.index('.', ranges.tgt[1])
         ranges.sep = (sep_i, sep_i + 1)
     return ranges

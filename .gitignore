@@ -176,6 +176,7 @@ notebooks/nrk
 notebooks/lzt
 notebooks/nohup.out
 notebooks/lxy
+notebooks/lxy_train/tasks_0525
 notebooks/lxy_train/tasks_test
 notebooks/lxy_train/wandb
 notebooks/lxy_train/*.json
