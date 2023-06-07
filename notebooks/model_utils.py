@@ -1109,7 +1109,7 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
                         for t in convert_fn(candidates[i])]])
                 topk_stat = dist
             else:
-                logits_ = logits[0, bos_i + j]; dist = logits_.softmax(-1)
+                logits_ = logits[0, bos_i + j]; dist = logits_.softmax(-1)  # mqy
                 labels_mask[:, bos_i + j] = logits_.argmax() == ans_id
                 if candidates is not None and j == 0:
                     logits_mask[:, bos_i] = -1; logits_mask[:, bos_i, candidates[i]] = 0
@@ -1179,24 +1179,14 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
                 if isinstance(v, torch.Tensor) and v.device != torch.device('cpu'):
                     setattr(o, name, v.to('cpu').float())
 
-    logits = o.logits.float() # add lxy 
-    candidates, answer_indices = None, None
-    if isinstance(examples[0], dict):  # ioi task
-        def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()
-        candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]
-        answer_indices = [0 for _ in ranges]
-    elif examples[0][2] is not None:  # cxt, query, cands, *_ = examples[0]
-        prefix, encode = ('', partial(tokenizer.encode, add_special_tokens=False)) \
-            if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else (' ', partial(tokenizer.encode))
-        candidates = [[encode(prefix + token)[0] for token in cands[-1]]
-                    for cxt, query, cands, *_ in examples]
-        answer_indices = [get_answer_index(e) for e in examples]
-    args = args + [candidates, answer_indices]
-    
+    logits = o.logits.float() # add lxy  
     loss, top1_corrects, answer_probs, candidate_probs, logits_mask, labels_mask = show_predictions(
         tokenizer, *args, logits=logits, labels=labels, loss_reduction='mean',
         k_shot=k_shot, topk=3, verbose=verbose)
-    o.logits_mask = logits_mask
+    # logits_mask is used when rel1 is equal relation and cxt_len > 1 (checked in make_data_tuple)
+    cxt, query, cands, *_ = examples[0]
+    if cands is not None and cands[-2] == cands[-1] and logits_mask is not None: # rel1 is copy
+        o.logits_mask = logits_mask
     # once evaluation completes, revise labels to use only correctly predicted labels for subsequent attribution
     if labels_mask is not None:
         labels[labels_mask == 0] = -100
@@ -1344,10 +1334,10 @@ def data_tuples_g(mt, result, k_shot, slice_obj):
             bos_token=bos_tokens, verbose=False)[0]
 
 def abbreviate_attn_pattern(attn_pattern):
-    return attn_pattern.replace('bos', 'B').replace('query', 'Q').replace('tgt', 'T').replace('ans', 'A').replace('sep', 'S')
+    return attn_pattern.replace('bos', 'B').replace('query', 'Q').replace('tgt', 'T').replace('ans', 'A').replace('sep', 'S').replace('rel', 'R')
 
 def restore_attn_pattern(attn_pattern):
-    return attn_pattern.replace('B', 'bos').replace('Q', 'query').replace('T', 'tgt').replace('A', 'ans').replace('S', 'sep')
+    return attn_pattern.replace('B', 'bos').replace('Q', 'query').replace('T', 'tgt').replace('A', 'ans').replace('S', 'sep').replace('R', 'rel')
 
 def is_intermediary(attn_pattern):
     # return attn_pattern.endswith('^')
@@ -1926,7 +1916,7 @@ def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_
 
 attn_patterns_by_step = {
     -1: ['bos->ans0'],
-    0: ['bos->ans]^', 'bos->query', 'bos->ans0+', 'bos->tgt', 'bos->bos^',
+    0: ['bos->ans]^', 'bos->query', 'bos->ans0+', 'bos->tgt', 'bos->bos^', 'bos->rel',
         'bos->sep',  # 11-4
         'bos->sep+',  # 13-11
         'bos->query-', # 10-11?
@@ -1974,8 +1964,8 @@ def get_label_types(parent, d, k_shot=3, icl_ap_score_thld=0.5): # use fixed k_s
     elif is_root(parent) and point_wise(d.attn_pattern): label_types = ['labels']  # e.g. bos->bos at step 0
     else: label_types = [None]
     icl_ap_score = d.icl_ap_score or 0
-    if icl_ap_score > icl_ap_score_thld:
-        activating_attn_labels = f'attn_labels:bos->~<s>,{k_shot}'
+    if icl_ap_score > icl_ap_score_thld or is_predicting_head and d.attn_pattern.startswith('bos->query'):  # mqy TODO
+        activating_attn_labels = f'attn_labels:bos->~<s>,{min(3, k_shot)}'
         head_label_types = get_root(parent).data.head_label_types
         head_label_type = (d.layer, d.head, activating_attn_labels)
         if head_label_type not in head_label_types:
@@ -1983,11 +1973,12 @@ def get_label_types(parent, d, k_shot=3, icl_ap_score_thld=0.5): # use fixed k_s
             head_label_types.add(head_label_type)
         if not is_predicting_head and not is_recurrent_head and not point_wise(d.attn_pattern):
             label_types += [normalized_attn_labels]
-    if is_predicting_head: label_types += ['attn_labels:attribute_k']
+    # if is_predicting_head: label_types += ['attn_labels:attribute_k']
+    if is_predicting_head and d.attn_pattern.startswith('bos->query'): label_types += ['labels']  # mqy TODO
     return label_types
 
 def get_icl_ap_score(ap_scores, k_shot=3): # use fixed k_shot
-    _ap_score = ap_scores[k_shot:].mean()
+    _ap_score = ap_scores[min(3, k_shot):].mean()
     return ((_ap_score - ap_scores[0]) / _ap_score).item()
 
 def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score=0.3, k_shot=None,
@@ -1995,7 +1986,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
     pd = parent.data; L, H = pd.attr.head.size()
     head_attr_fn = head_attr_fn or get_head_mlp_attr
     layers, heads, scores = topk_md(head_attr_fn(pd), topk)
-    assert scores[0] > 0, str(scores)
+    assert scores[0] > 0, f'{parent.name} {scores}'
     scores = scores / scores[0]
 
     def reduce_fn(scores): return sum(scores) / len(scores)
@@ -2014,7 +2005,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
             if k_shot > 0: # not ioi task
                 d.icl_ap_score = 0 if is_intermediary(d.attn_pattern) or is_relating(d.attn_pattern) else \
                     get_icl_ap_score(mr(get_head_matching_scores)(data_tuples, d.attn_pattern,
-                    layer=layer, head=head, averaged=False, k_shot=0))
+                    layer=layer, head=head, averaged=False, k_shot=0), k_shot=k_shot)
                 d.sensitivity = mr(get_sensitivity)(data_tuples, layer, head,
                     d.attn_pattern, node2key(parent), k_shot=k_shot).item()
         else:  # mlp
@@ -2029,7 +2020,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
     if True: #pd.step < 1 or pd.step == 1 and pd.attn_pattern in ['bos->tgt', 'bos->query']:
         for d in top_data:
             if d.top_score < threshold_score: continue
-            label_types = get_label_types(parent, d)
+            label_types = get_label_types(parent, d, k_shot=k_shot)
             for label_type in label_types:
                 _d = deepcopy(d)
                 _attribute_k = label_type and label_type.endswith(':attribute_k')
@@ -2045,7 +2036,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
                     if (d.layer, d.head) in attn_attr: del attn_attr[d.layer, d.head]
                 # print('In expand_node: remove attn_attr', data2str(d))
                 
-        if pd.step == -1:
+        if False and pd.step == -1:
             top_attn_pattern = [ap for ap in ap2score if not point_wise(ap)][0] # e.g. 'bos->ans0]' for step -1
             layers, heads, scores = topk_md(pd.ap_scores[top_attn_pattern], 5) #topk // 2)
             label_types = [f'attn_labels:{top_attn_pattern},{k_shot}/ans0s']  # 'attn_labels:bos->ans0],3'
@@ -2059,7 +2050,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
                         for ap, v in pd.attr_ap_scores.items()], key=lambda x: x[1])
                     if attn_pattern0 == top_attn_pattern: attr_ap_score = attr_ap_score0
                 icl_ap_score = get_icl_ap_score(mr(get_head_matching_scores)(data_tuples, top_attn_pattern,
-                    layer=layer, head=head, averaged=False, k_shot=0)) if k_shot > 0 else 0
+                    layer=layer, head=head, averaged=False, k_shot=0), k_shot=k_shot) if k_shot > 0 else 0
                 for label_type in label_types + (['attn_labels:bos->~<s>,3'] if icl_ap_score > 0.5 else []):
                     add_node(parent, layer=layer, head=head, head_attr_fn=head_attr_fn, label_type=label_type,
                         attn_pattern=top_attn_pattern, attr_ap_score=attr_ap_score,
@@ -2105,7 +2096,7 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
     *_, o =  data_tuples[0]
     _topk = round(topk * (d.layer if not isinstance(d.layer, Iterable) else max(d.layer)) / L)
     if d.attr is None or node_key not in o.attn_attr:
-        if True: # with Timer(f'In attribute_tree: attribute_step {node.name}, topk={_topk}'):
+        with Timer(f'In attribute_tree: attribute_step {node.name}, topk={_topk}'):
             d.attr = mr(attribute_step)(data_tuples, model, node)
         d.top_heads = list(zip(*topk_md(get_head_mlp_attr(d), _topk)[:2]))
         d.top_heads = [(l, h) for l, h in d.top_heads if h < H]
@@ -2501,7 +2492,7 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
     aw_size = o.attentions[0][0, 0].size()  # l*[bnij]->ij
     ystart = 0
-    if k_shot > 0:  # not ioi task
+    if k_shot > 1:  # not ioi task
         bos_indices = args[1]
         ystart = bos_indices[k_shot]
     ystop = aw_size[0]
@@ -2556,8 +2547,9 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
                     # figsize=(20*len(attns)*(ystop-ystart)/aw_size[0], 20))
         if len(attns) == 1: axs = [axs]
         for ax, a in zip(axs, attns):
+            fontsize = 30 if ystop - ystart == aw_size[0] else 10
             _plot_attn(a, tokens, ax=ax, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
-                fontsize=10, transpose=True, use_imshow=False)
+                fontsize=fontsize, transpose=True, use_imshow=False)
         plt.show()
     return ap_scores
 

@@ -50,6 +50,9 @@ def types_of_characters(): return {
     'digit': digits,
 }
 
+def letter2uppercase(): return {l: [u] for u, l in zip(uppercase, lowercase)}
+def uppercases_of_letters(): return {u: [l] for u, l in zip(uppercase, lowercase)}
+
 # polygons = ['triangle', 'quadrangle', 'pentagon', 'hexagon', 'heptagon', 'octagon', 'nonagon', 'decagon',]# 'undecagon', 'dodecagon']
 times_of_day = ['dawn', 'morning', 'noon', 'afternoon', 'evening', 'night',]# 'midnight']
 clock_of_day = [f"{i} o'clock" for i in range (1, 13)]
@@ -150,6 +153,8 @@ def types_of_things(): return {
 }
 
 def things(): return {thing: [thing] for thing in join_lists(types_of_things().values())}
+def word2capitalized(): return {thing: [capitalize(thing)] for thing in join_lists(types_of_things().values()) if not thing[0].isupper()}
+def capitalized_forms_of_words(): return {capitalize(thing): [thing] for thing in join_lists(types_of_things().values()) if not thing[0].isupper()}
 
 # A list of words with their types:
 # big small -> size
@@ -299,8 +304,8 @@ _country2capital = [ #The capital of Germany is Berlin.
     ('Greece', 'Athens'),
 ]
 
-def country2capital():  # convert to same form as TreeSet types_of_things
-    return {country: [capital] for country, capital in _country2capital}
+def country2capital(): return {country: [capital] for country, capital in _country2capital}
+def capitals_of_countries(): return {capital: [country] for country, capital in _country2capital}
 
 def countries_of_cities(): return {
     'China': ['Beijing', 'Shanghai', 'Guangzhou'],
@@ -796,9 +801,10 @@ def _item2str(item, vocab=None): #, reverse=False):
     return [f'{item[0]} {item[1]}', f'{item[1]} {item[0]}'] if isinstance(item, tuple) else f'{item}'
 
 def _cxt2str(cxt, vocab=None, prefix='< ', suffix=' >.', sep=' ', item2str=_item2str, rev_item2str=False):
-    def try_wrap(s):
-        return [s] if type(s) == str else s
+    def try_wrap(s): return [s] if type(s) == str else s
     return prefix + sep.join([try_wrap(item2str(item, vocab))[int(rev_item2str)] for item in cxt]) + suffix
+
+def empty_cxt2str(cxt, **kwargs): return ''
 
 @dataclass
 class Ranges:
@@ -807,6 +813,7 @@ class Ranges:
     ans0: tuple = None
     query: tuple = None
     tgt: tuple = None
+    rel: tuple = None
     sep: tuple = None
     ans0s: list = None
     example: tuple = None
@@ -822,12 +829,12 @@ class IOIRanges:   # wab
     example: tuple = None
 
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
-def locate(tokens, substring, return_last=False, return_all=False):
+def locate(whole_string, tokens, substring, return_last=False, return_all=False):
     if substring is None: return None
     substring = substring.lower()
     substring = strip_a(substring)
-    tokens = [t.lower() for t in tokens]
-    whole_string = "".join(t for t in tokens)
+    # tokens = [t.lower() for t in tokens]
+    # whole_string = "".join(t for t in tokens)
     assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
     if substring.strip() in ['->', '?']:
         char_locations = [whole_string.index(substring), whole_string.rindex(substring)]
@@ -875,18 +882,22 @@ def example2ranges(example, tokens, bos_token, trimmed=False):
 
     cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
     if trimmed: return Ranges(bos = locate(tokens, bos_token, return_last=True))
+    tokens = [t.lower() for t in tokens]
+    whole_string = "".join(t for t in tokens)
+    rel_word = 'capital'  # TODO: systematic treatment of rel_word
     ranges = Ranges(
-        bos = locate(tokens, bos_token, return_last=True),
-        ans = locate(tokens, ans, return_last=True),
-        ans0 = locate(tokens, ans0),
-        query = locate(tokens, query, return_last=True),
-        tgt = locate(tokens, tgt),
+        bos = locate(whole_string, tokens, bos_token, return_last=True),
+        ans = locate(whole_string, tokens, ans, return_last=True),
+        ans0 = locate(whole_string, tokens, ans0),
+        query = locate(whole_string, tokens, query, return_last=True),
+        tgt = locate(whole_string, tokens, tgt),
+        rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word in whole_string else None,
         example = (0, len(tokens))
     )
     if candidates is not None:
         max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
         ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
-            [locate(tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
+            [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
     if ranges.tgt is not None and '.' in tokens[ranges.tgt[1]:]:  # TODO: debug
         sep_i = tokens.index('.', ranges.tgt[1])
         ranges.sep = (sep_i, sep_i + 1)
@@ -961,7 +972,8 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_to
     ranges = locate_ranges(examples, example_strs, tokenizer, input_ids[0].tolist(), bos_token)
     # by lxy: when bos is tokenized into multiple tokens, e.g. 'likes' -> ['__lik', 'es'] in LLaMA, use last token's index
     bos_indices = [r.bos[-1] - 1 for r in ranges]  # [r.bos[0] for r in ranges]
-    bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
+    bos_indices, eos_indices, answers, labels = locate_answers(
+        input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
     if s2s:  # for t5 models
         bos_i, eos_i = bos_indices[-1], eos_indices[-1]
         assert eos_i == input_ids.size(1) - 1, f'{eos_i} != {input_ids.size()}[1] - 1'
@@ -972,7 +984,20 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_to
         bos_indices, eos_indices = [bos_i - bos_i], [eos_i - bos_i]
     else:
         labels[:, :bos_indices[k_shot]] = -100  # 只算k_shot个示例后的loss
-    return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers
+        
+    candidates, answer_indices = None, None
+    cxt, query, cands, *_ = examples[0]
+    if isinstance(examples[0], dict):  # ioi task
+        def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()
+        candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]
+        answer_indices = [0 for _ in ranges]
+    elif cands is not None and len(cands[-1]) > 1:  # cxt_len > 1
+        prefix, encode = ('', partial(tokenizer.encode, add_special_tokens=False)) \
+            if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else (' ', partial(tokenizer.encode))
+        candidates = [[encode(prefix + token)[0] for token in cands[-1]]
+                    for cxt, query, cands, *_ in examples]
+        answer_indices = [get_answer_index(e) for e in examples]
+    return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices
 
 def query2wh(vocab, query2str):
     wh = 'who'
@@ -1007,8 +1032,8 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
     if abstract:
         prefix="< "; suffix=" >."; query2str = _str
         if cxt_len == 1:
-            examples = [(cxt, None, None, (None, ans0, ans), *cls)
-                for cxt, query, options, (tgt, ans0, ans), *cls in examples]
+            examples = [(cxt, None, candidates, (None, ans0, ans), *cls)
+                for cxt, query, candidates, (tgt, ans0, ans), *cls in examples]
             prefix=""; suffix=""; query2str = lambda q, _: ''
         sep = choice([', ', ' ']) if isinstance(cxt[0], str) else ' '
         i2s = choice([lambda i: f'( {i[0]}, {i[1]} )', lambda i: f'( {i[0]} {i[1]} )',
@@ -1019,10 +1044,13 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         bos_token, ans2str = abstract_bos_token, _str
     else:
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '' if i == 4 else _str) for i in range(2, 6)]
+        if cxt2str.__name__ == 'empty_cxt2str':
+            examples = [(cxt, query, None, (None, None, ans), *cls)
+                for cxt, query, candidates, (tgt, ans0, ans), *cls in examples]
         query2str = post_compose(query2str, partial(multi_replace, pairs=sampled_synonym_dict()))
     def example2str(vocab, example):
         cxt, query, candidates, (*_, ans), *cls = example
-        strs = [cxt2str(cxt, vocab, rev_item2str=rev_item2str), capitalize(query2str(query, vocab))]
+        strs = [cxt2str(cxt, vocab=vocab, rev_item2str=rev_item2str), capitalize(query2str(query, vocab))]
         if options_position is not None: strs.insert(options_position, options2str([c[-1] for c in candidates]))
         s = ' '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
         _bos_token = bos_token
@@ -1082,11 +1110,15 @@ def verbalize_relation(vocab):
         'types_of_things': (' a kind of', 'one'),
         'capabilities_of_things': (' the thing that can', 'one'),
         'countries_of_cities': (' the city in', 'city'), 
+        'country2capital': (' the capital of', 'city'), 
+        'word2capitalized': (' the capitalized form of', 'word'), 
+        'letter2uppercase': (' the uppercase of', 'letter'), 
+        'do2did': (' the past tense of', 'word'), 
     }
     if _rel_name in ['prev', 'next']:
         temporal_word = {tuple(clock_of_day): 'time', tuple(days_of_week): 'day', tuple(months):'month',
             tuple(seasons): 'season', tuple(years): 'year'}[tuple(vocab._data)]
-    if _rel_name == 'child': rel_str = r2v[data_name][0]
+    if _rel_name == 'child' and data_name in r2v: rel_str = r2v[data_name][0]
     elif _rel_name == 'sibling': rel_str = f' the {r2v[data_name][1]} like'
     elif _rel_name == 'prev': rel_str = f' the {temporal_word} just before'
     elif _rel_name == 'next': rel_str = f' the {temporal_word} just after'
@@ -1106,11 +1138,15 @@ def refine_query2str(task, do_swap_qa=False):
 
 def swap_qa(task):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    if isinstance(gen_fn, partial) and 'query' in gen_fn.keywords:
+        raise InvalidTransException(f"invalid swap_qa with fixed_query = {gen_fn.keywords['query']}")
     def new_vocab_fn(): return vocab_fn()[::-1]  # would cause infinite recursion bug if use same name
-    item2str = cxt2str.keywords['item2str']
-    swapped_item2str = lambda i, v: item2str(i[::-1], v)
-    new_cxt2str = deepcopy(cxt2str)
-    new_cxt2str.keywords['item2str'] = swapped_item2str
+    new_cxt2str = cxt2str
+    if isinstance(cxt2str, partial) and 'item2str' in cxt2str.keywords:
+        item2str = cxt2str.keywords['item2str']
+        swapped_item2str = lambda i, v: item2str(i[::-1], v)
+        new_cxt2str = deepcopy(cxt2str)
+        new_cxt2str.keywords['item2str'] = swapped_item2str
 
     def new_query2str(q, v):
         wh, the = get_wh_and_the(v[1])
@@ -1157,7 +1193,7 @@ def negate(task):
     task = (new_vocab_fn, gen_fn, cxt2str, new_query2str, *a)
     return task
     
-def remove_local_hop(task, do_rm_query, do_g2c):
+def remove_local_hop(task, do_swap_qa, do_rm_query, do_g2c, cxt_len):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
     vocabs = vocab_fn()
     assert vocabs[0].data == vocabs[1].data
@@ -1168,6 +1204,10 @@ def remove_local_hop(task, do_rm_query, do_g2c):
     assert not rel_names[1].startswith('neg_'), rel_names[1]
     if fixed_query:
         pass  # TODO: Is there any rule for fixed_query?
+    elif cxt_len == 1 and not (rel_names[0] == 'equal' and rel_names[1] == 'equal'):
+        pass
+    elif do_swap_qa:
+        raise InvalidTransException(f"invalid rel for rm_local_hop with swap_qa: {rel_names}")
     elif rel_names[0] == 'equal' or rel_names[1] in ['child', 'sibling'] and not rel_names[0].startswith('neg_'):
         raise InvalidTransException("invalid rel for rm_local_hop: " + str(rel_names))
     elif rel_names[1] in ['child', 'sibling'] and len(vocabs[1].child.dom()) == 2 and not do_rm_query:
@@ -1228,24 +1268,38 @@ def has_local_hop(task):
     vocab_fn, *a = task; vocabs = vocab_fn()
     return vocabs[0].data != vocabs[1].data
 
-def transform_task(task, rel0_i=None, rel1_i=None, #replace_rel0=0, replace_rel1=0,
+def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
                 rel0_kwargs=None, rel1_kwargs=None, do_swap_qa=False, do_negate=False,
-                do_rm_query=False, do_g2c=False):
+                do_rm_query=False, do_g2c=False,
+                cxt_len=3, rev_item2str=False, abstract=False):
+    args = {k: v for k, v in locals().items() if k not in ['task', 'e']}
     try:
         if rel0_i is not None: task = choose_rels(task, [rel0_i, rel1_i])
         if task is None: return None
         if rel0_kwargs is not None: task = decorate_rel(task, 0, rel0_kwargs)
         if rel1_kwargs is not None: task = decorate_rel(task, 1, rel1_kwargs)
         task = refine_query2str(task, do_swap_qa=do_swap_qa)
-        if not has_local_hop(task) and do_swap_qa: return None
+        # if not has_local_hop(task) and do_swap_qa:
+        #     raise InvalidTransException("invalid transformation rm_local_hop + swap_qa")
         if do_swap_qa: task = swap_qa(task)
         if do_negate: task = negate(task)
-        if not has_local_hop(task): task = remove_local_hop(task, do_rm_query, do_g2c)
+        if not has_local_hop(task): task = remove_local_hop(task, swap_qa, do_rm_query, do_g2c, cxt_len)
         if do_rm_query: task = remove_query(task)
         if do_g2c: task = g2c(task)
     except InvalidTransException as e:
-        trans_args = {k: v for k, v in locals().items() if k not in ['task', 'e']}
-        print(f'\ntransform_task failed: {e} ({args2str(trans_args)})')
+        print(f'\ntransform_task failed: {e} ({args2str(args)})')
+        return None
+        
+    vocab_fn, gen_fn, *_ = task
+    rels = [vocab.relations[0] for vocab in vocab_fn()]
+    if not has_local_hop(task) and rev_item2str:
+        print(f'\ninvalid args for rm_local_hop and rev_item2str: {args2str(args)}')
+        return None
+    # if cxt_len == 1 and (rels[1].name == 'equal' or rels[0].name != 'equal' or do_negate or do_g2c):
+    #     print(f'\ninvalid args for cxt_len 1: {args2str(args)}')
+    #     return None
+    if rels[1].name == 'sibling' and not do_g2c:
+        print(f'\ninvalid args for sibling: {args2str(args)}')
         return None
     return task
 
@@ -1267,7 +1321,7 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, tokenizer
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
         i += 1
-        assert i < 25, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:]) + \
+        assert i < 35, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:]) + \
             '\n' + str(ind_counts) + '\n' + str(ans_counts)
     # if i > 1: print('In generate: i =', i)
     if cxt_len > 1 and plot:

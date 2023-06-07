@@ -46,7 +46,7 @@ from pptree import Node, print_tree
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, topi_md, \
     equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str
 
-from child_utils_nrk import make_data_tuple, get_answer_index, generate
+from child_utils import make_data_tuple, get_answer_index, generate
 from weight_analysis import get_head_weights
 
 @dataclass

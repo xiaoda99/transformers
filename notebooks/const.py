@@ -1,6 +1,6 @@
 from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass
-# from pattern.en import lexeme
+from pattern.en import lexeme
 # from nltk.corpus import cmudict  # nltk.download('cmudict')
  
 from transformers import AutoTokenizer, GPT2Tokenizer
@@ -103,10 +103,17 @@ def verb_tenses():
         verb_tenses._verb_tenses = [Tenses(*(vt + [vt[0]] * (5 - len(vt)))) for vt in _verb_tenses]
     return verb_tenses._verb_tenses
 
+def do2did():
+    d = {vt.do: [vt.did] for vt in verb_tenses()}
+    d['sing'] = ['sang']; d['leave'] = ['left']
+    return d
+
 def does2did():
     d = {vt.does: [vt.did] for vt in verb_tenses()}
     d['sings'] = ['sang']; d['leaves'] = ['left']
     return d
+
+def pasttenses_of_verbs(): return {did: [does] for does, [did] in does2did().items()}
     
 noun2adj = [  # The adjective form of x is y
     ('rain','rainy'),
