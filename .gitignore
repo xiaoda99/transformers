@@ -180,4 +180,5 @@ notebooks/lxy
 notebooks/lxy_train/data
 notebooks/lxy_train/training_checkpoint
 notebooks/lxy_train/wandb
-
+notebooks/results_logits_lens
+notebooks/*mqy.py

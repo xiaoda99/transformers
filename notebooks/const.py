@@ -113,7 +113,9 @@ def does2did():
     d['sings'] = ['sang']; d['leaves'] = ['left']
     return d
 
-def pasttenses_of_verbs(): return {did: [does] for does, [did] in does2did().items()}
+def pasttenses_of_verbs(): return {did: [do] for do, [did] in do2did().items()}
+
+
     
 noun2adj = [  # The adjective form of x is y
     ('rain','rainy'),

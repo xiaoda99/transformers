@@ -145,8 +145,8 @@ def types_of_things(): return {
     # 'temperature': [],
     # 'age': [],
     # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
-    'electronics': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
-    'ball': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport or ball?
+    'electronic device': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
+    'sport': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport or ball?
     'musical instrument': ['piano', 'violin', 'guitar'],
     # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
@@ -288,9 +288,9 @@ _country2capital = [ #The capital of Germany is Berlin.
     ('Spain', 'Madrid'),
     ('England', 'London'),
     ('Canada', 'Ottawa'),
-    ('India', 'New Delhi'),
+    ('India', 'Delhi'),  # New Delhi
     ('Australia', 'Canberra'),
-    ('Brazil', 'Brasília'),
+    ('Brazil', 'Brasília'), 
     ('Mexico', 'Mexico City'),
     ('South Africa', 'Pretoria'),
     ('Egypt', 'Cairo'),
@@ -831,10 +831,8 @@ class IOIRanges:   # wab
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
 def locate(whole_string, tokens, substring, return_last=False, return_all=False):
     if substring is None: return None
-    substring = substring.lower()
+    substring = substring.lower() 
     substring = strip_a(substring)
-    # tokens = [t.lower() for t in tokens]
-    # whole_string = "".join(t for t in tokens)
     assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
     if substring.strip() in ['->', '?']:
         char_locations = [whole_string.index(substring), whole_string.rindex(substring)]
@@ -866,7 +864,7 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False)
         ranges.append((tok_start, tok_end))
     return ranges
 
-def example2ranges(example, tokens, bos_token, trimmed=False):
+def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=False):
     if 'IO' in example:  # ioi task
         e = example
         ranges = IOIRanges(
@@ -882,14 +880,14 @@ def example2ranges(example, tokens, bos_token, trimmed=False):
 
     cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
     if trimmed: return Ranges(bos = locate(tokens, bos_token, return_last=True))
-    tokens = [t.lower() for t in tokens]
+    rel_word = 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
+    if not case_sensitive: tokens = [t.lower() for t in tokens]
     whole_string = "".join(t for t in tokens)
-    rel_word = 'capital'  # TODO: systematic treatment of rel_word
     ranges = Ranges(
         bos = locate(whole_string, tokens, bos_token, return_last=True),
         ans = locate(whole_string, tokens, ans, return_last=True),
         ans0 = locate(whole_string, tokens, ans0),
-        query = locate(whole_string, tokens, query, return_last=True),
+        query = locate(whole_string, tokens, query, return_last=True if not case_sensitive else False), #mqy
         tgt = locate(whole_string, tokens, tgt),
         rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word in whole_string else None,
         example = (0, len(tokens))
@@ -1044,7 +1042,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         bos_token, ans2str = abstract_bos_token, _str
     else:
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '' if i == 4 else _str) for i in range(2, 6)]
-        if cxt2str.__name__ == 'empty_cxt2str':
+        if isinstance(cxt2str, types.FunctionType) and cxt2str.__name__ == 'empty_cxt2str':
             examples = [(cxt, query, None, (None, None, ans), *cls)
                 for cxt, query, candidates, (tgt, ans0, ans), *cls in examples]
         query2str = post_compose(query2str, partial(multi_replace, pairs=sampled_synonym_dict()))

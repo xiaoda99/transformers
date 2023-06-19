@@ -21,8 +21,8 @@ class TasksDataset(Dataset):
 
         # 设置种子的目的，方便随机选取的测试集可复现，task_key是固定的。
         random.seed(seed)
-        split_threhold = int(len(self.dataset) * split / 100.0)
-        random_keys = random.sample(self.dataset.keys(), len(self.dataset.keys()))
+        split_threhold = int(len(self.dataset) * split / 100.0) 
+        random_keys = random.sample(self.dataset.keys(), len(self.dataset.keys()))  #random.shaffle()?
         # 根据split_threhold切分训练集测试集
         task_abstract_keys = random_keys[:split_threhold] if train_mode == 'train' \
             else random_keys[split_threhold:]
