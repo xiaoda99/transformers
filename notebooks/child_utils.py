@@ -120,32 +120,31 @@ Types of clothes: shirt, pants, dress, coat, shoes
 Types of fruits: apple, grape, pear, banana, orange
 Types of animals: dog, cat, horse, rabbit, pig'''
 def types_of_things(): return {
-    'animal': ['duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig', 
+    'animal': ['duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig',
             'monkey', 'rabbit', 'elephant', 'wolf', 'deer', 'fox', 'gorilla', 'squirrel', 'mouse'], # 'chicken', 'bear', 'zebra', 'giraffe', 'kangaroo', 21-5, 15-8
     'fruit': ['apple', 'banana', 'pear', 'grapes', 'cherries', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberries',
             'blueberries', 'strawberries', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'], # may be food too?
     # 'vegetable': ['spinach', 'broccoli', 'lettuce', 'cabbage', 'tomato'],
     'drink': ['tea', 'coffee', 'beer', 'wine', 'whiskey', 'vodka', 'soda', 'juice', 'cocktail'],  # some as alcohol, 21-5, 15-8
+    # 'drink': ['tea', 'coffee', 'beer', 'wine', 'whiskey', 'soda', 'juice',    'vodka', 'cocktail'],  # bad order
     'food': ['hamburger', 'burger', 'bread', 'meat', 'pizza', 'cake', 'steak', 'spaghetti',
             # 'biscuits', 'spaghetti', 'chips', 'peanuts', 'nuts', 'pork', 'beef', 'mutton'
-            ],  # last three as meat， 21-5， 15-8
+            ],  # last three as meat?~L 21-5?~L 15-8
     'weapon': ['gun', 'handgun', 'shotgun', 'rifle',  'pistol', 'revolver', 'grenade', 'cannon'], #'bomb', 'dagger', 'sword',], # 21-5, 15-8, though latter prefers firearm
-    'color': ['white', 'black', 'red', 'yellow', 'blue', 'green', 'purple', 'pink', 'gray'],  # 15-8
+    # 'color': ['white', 'black', 'red', 'yellow', 'blue', 'green', 'purple', 'pink', 'gray'],  # 15-8
     'insect': ['mosquito', 'beetle', 'bee'], #'spider', 'ant', 'wasp', 'butterfly'],  # , 'fly'
     # 'flower': ['rose', 'tulip', 'lily', 'daisy', 'sunflower'],
-    'vehicle': ['car', 'jeep', 'bus', 'taxi', 'motorcycle'],# 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage', 
+    'vehicle': ['car', 'jeep', 'bus', 'taxi', 'motorcycle'],# 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage',
                 # 'subway', 'van', 'boat'],  # transportation
     # 'furniture': ['sofa', 'couch'], #'desk', 'chair', 'table', 'bed', 'bookshelf'],# 'closet', 'wardrobe'],
     # 'tool': ['hammer', 'spanner', 'awl', 'scissors', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'], #, 'axe' should be weapon?
     'clothing': ['shirt', 'T-shirt', 'jeans', 'jacket', 'pants', 'trousers', 'shoes', 'sweater', 'jersey', 'underwear', 'costume', 'uniform'],#'dress', 'coat', 'socks', 'hat', 'tie', 'skirt', ],
+    # 'clothing': ['shirt', 'T-shirt', 'jeans', 'jacket', 'pants', 'trousers', 'shoes', 'sweater', 'underwear', 'costume', 'uniform',   'jersey'],  # bad order
     # 'appliance': ['microwave', 'fridge', 'washer', 'dryer', 'washing machine'],  #, 'oven'
     # 'fish': [],
-    # 'country': [],
-    # 'language': [],
-    # 'temperature': [],
-    # 'age': [],
     # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
-    'electronic device': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
+    # 'electronic device': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
+    # 'electronic device': ['iPad', 'phone', 'smartphone',    'laptop'],  # bad order
     'sport': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport or ball?
     'musical instrument': ['piano', 'violin', 'guitar'],
     # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
@@ -887,7 +886,7 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         bos = locate(whole_string, tokens, bos_token, return_last=True),
         ans = locate(whole_string, tokens, ans, return_last=True),
         ans0 = locate(whole_string, tokens, ans0),
-        query = locate(whole_string, tokens, query, return_last=True if not case_sensitive else False), #mqy
+        query = locate(whole_string, tokens, query, return_last=True),# if not case_sensitive else False), #mqy
         tgt = locate(whole_string, tokens, tgt),
         rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word in whole_string else None,
         example = (0, len(tokens))
@@ -911,7 +910,7 @@ def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
     assert len(examples) == len(example_strs)
     ranges = []
     use_llama_tokenizer = my_isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer))
-    newline_token = '<0x0A>' if use_llama_tokenizer else '\n' #tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同
+    newline_token = '<0x0A>' if use_llama_tokenizer else '\n' #tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同  <0x0A>llama换行符
     if use_llama_tokenizer:  # add by lxy
         # tokenizer.decode will strip leading '__'
         all_tokens_llama = [tokenizer.convert_ids_to_tokens(id).replace('▁', ' ') for id in input_ids]
@@ -1281,7 +1280,7 @@ def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
         #     raise InvalidTransException("invalid transformation rm_local_hop + swap_qa")
         if do_swap_qa: task = swap_qa(task)
         if do_negate: task = negate(task)
-        if not has_local_hop(task): task = remove_local_hop(task, swap_qa, do_rm_query, do_g2c, cxt_len)
+        if not has_local_hop(task): task = remove_local_hop(task, do_swap_qa, do_rm_query, do_g2c, cxt_len)
         if do_rm_query: task = remove_query(task)
         if do_g2c: task = g2c(task)
     except InvalidTransException as e:
@@ -1293,6 +1292,9 @@ def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
     if not has_local_hop(task) and rev_item2str:
         print(f'\ninvalid args for rm_local_hop and rev_item2str: {args2str(args)}')
         return None
+    if do_rm_query and cxt_len < 3:
+        print(f'\ninvalid args for do_rm_query: cxt_len = {cxt_len}')
+        return None
     # if cxt_len == 1 and (rels[1].name == 'equal' or rels[0].name != 'equal' or do_negate or do_g2c):
     #     print(f'\ninvalid args for cxt_len 1: {args2str(args)}')
     #     return None
@@ -1301,33 +1303,40 @@ def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
         return None
     return task
 
-def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, tokenizer = None, max_length=512, plot=True, verbose=True):
+def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
+            tokenizer=None, max_length=512, plot=True, verbose=True):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
     position_relevant = isinstance(gen_fn, partial) and \
         'cxt_sample_fn' in gen_fn.keywords and 'query' in gen_fn.keywords and \
         gen_fn.keywords['cxt_sample_fn'].__name__ == 'enumerate_sample'
 
-    ans_counts = [('a', nrows)]; ind_counts = [(0, 9), (1, 1)]; i = 0
-    while (not position_relevant and len(ind_counts) > 1 and (len(ind_counts) < cxt_len 
-                                    or ind_counts[0][1] > ind_counts[-1][1] * 3) or
-            len(ans_counts) == 1 or
-            len(ans_counts) > 2 and ans_counts[0][1] > nrows / 4 or
-            len(ans_counts) == 2 and ans_counts[0][1] >= ans_counts[1][1] * 2):
+    # ans_counts = [('a', nrows)]; ind_counts = [(0, 9), (1, 1)]
+    i = 0
+    conditions = [True, ]
+    while any(conditions):
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
         # print('In generate: example =', examples[0])
         ans_counts = Counter([ans for cxt, query, cands, (*_, ans), *cls in examples]).most_common()
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
+        conditions = [
+            not position_relevant and len(ind_counts) > 1 and (len(ind_counts) < cxt_len 
+                                    or ind_counts[0][1] > ind_counts[-1][1] * 3),
+            len(ans_counts) == 1,
+            len(ans_counts) > 2 and ans_counts[0][1] > max(2, nrows / 3),
+            len(ans_counts) == 2 and ans_counts[0][1] >= ans_counts[1][1] * 2,
+        ]
         i += 1
-        assert i < 35, '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:]) + \
-            '\n' + str(ind_counts) + '\n' + str(ans_counts)
-    # if i > 1: print('In generate: i =', i)
+        assert i < 40, str(conditions) + '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:]) + \
+            '\n' + str(ind_counts) + '\n' + str(ans_counts)  #原 i<35，改为了40  nrk
+    if i > 10: print('In generate: i =', i, task2str(task))
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())
         label_probs = F.one_hot(torch.LongTensor(answer_indices))
         _ = plt.figure(figsize=(10, 0.7))
         _ = sns.heatmap(label_probs.T, cbar=False); plt.show()
-    examples, text, bos_token = make_input_str(task, vocabs, examples, rev_item2str=rev_item2str, abstract=abstract, tokenizer = tokenizer)
+    examples, text, bos_token = make_input_str(task, vocabs, examples,
+        rev_item2str=rev_item2str, abstract=abstract, tokenizer=tokenizer)
     if verbose: print(text)
     if my_isinstance(tokenizer, LLAMATokenizer):  # add by lxy  avoid  len(text) > max_length
         if len(tokenizer.tokenize(text)) >= max_length:

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import sys
 from typing import Optional
 import dataclasses
 from dataclasses import dataclass, is_dataclass, asdict
@@ -156,6 +157,16 @@ class Timer(object):
         # self.elapsed = self.elapsed_secs #* 1000   # millisecs
         if self.verbose: print('done', self.elapsed)
             # print('elapsed time: %d s' % self.elapsed)
+
+# https://stackoverflow.com/questions/616645/how-to-duplicate-sys-stdout-to-a-log-file
+class TeeLogger(object):
+    def __init__(self, name, mode):
+        self.file = open(name, mode)
+        self.stdout = sys.stdout
+        sys.stdout = self
+    def write(self, message): self.file.write(message); self.stdout.write(message)  
+    def flush(self): self.file.flush()
+    def __del__(self): sys.stdout = self.stdout; self.file.close()
 
 # https://stackoverflow.com/questions/2461170/tree-implementation-in-python
 # @dataclass

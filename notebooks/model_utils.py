@@ -38,6 +38,7 @@ from transformers.models.gpt_neo.modeling_gpt_neo import GPTNeoSelfAttention, GP
 from transformers.models.gptj.modeling_gptj import GPTJAttention, GPTJBlock, GPTJModel
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention, GPTNeoXLayer, GPTNeoXModel, GPTNeoXForCausalLM
 from transformers.models.xglm.modeling_xglm import XGLMForCausalLM, XGLMAttention, XGLMDecoderLayer
+from transformers.models.llama.modeling_llama import LlamaForCausalLM, LlamaAttention, LlamaDecoderLayer, LlamaModel
 
 sys.path.insert(0, '/nas/xd/projects/pptree')
 from pptree import Node, print_tree
@@ -80,7 +81,7 @@ class AttrData:
     topi: int = None
     layer: int = None
     head: int = None
-    H: int = 64  # 64 for gpt-neox, 16 for gpt-j
+    H: int = None
     label_type: str = None
     attn_pattern: str = None
     attribute_k: bool = False
@@ -147,6 +148,12 @@ def unify(model):
         model.transformer.h = model.transformer.layers
         model.transformer.ln_f = model.transformer.final_layer_norm
         model.transformer.drop = nn.Dropout(0)
+    elif my_isinstance(model, LlamaForCausalLM):
+        model.transformer = model.model
+        model.transformer.wte = model.transformer.embed_tokens
+        model.transformer.h = model.transformer.layers
+        model.transformer.ln_f = model.transformer.norm
+        model.transformer.drop = nn.Dropout(0)
 
     for i, block in enumerate(model.transformer.h):
         if my_isinstance(block, XGLMDecoderLayer):
@@ -159,6 +166,10 @@ def unify(model):
             block.ln_2 = block.ln_1
         elif my_isinstance(block, GPTNeoXLayer):
             block.attn = block.attention
+            block.ln_1 = block.input_layernorm
+            block.ln_2 = block.post_attention_layernorm
+        elif my_isinstance(block, LlamaDecoderLayer):
+            block.attn = block.self_attn
             block.ln_1 = block.input_layernorm
             block.ln_2 = block.post_attention_layernorm
         self = block.attn
@@ -200,6 +211,22 @@ def unify(model):
                     proj.weight = nn.Parameter(rearrange(w, 'n d e -> (n d) e'))
                     proj.bias = nn.Parameter(rearrange(b, 'n d -> (n d)'))
                     setattr(self, proj_name, proj)
+        elif my_isinstance(self, LlamaAttention):
+            device = self.q_proj.weight.device
+            max_positions = model.config.max_position_embeddings
+            self.register_buffer(
+                "bias",
+                torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
+                    1, 1, max_positions, max_positions
+                ).to(device),
+                persistent=False,
+            )
+            self.register_buffer("masked_bias", torch.tensor(-1e9).to(device), persistent=False)
+
+            self.attn_dropout = nn.Dropout(0)
+            self.resid_dropout = nn.Dropout(0)
+            for old_name, new_name in [('hidden_size', 'embed_dim'), ('o_proj', 'out_proj')]:
+                setattr(self, new_name, getattr(self, old_name))
 
 def name_with_device(name, device):
     return name + '_' + str(device).replace(':', '')  # '_cuda0' or '_cpu'
@@ -256,11 +283,13 @@ def switch_model_to(model, device):
 def scaled_ln(ln, x, scaled=True):
     if not scaled: return ln(x)
     self = ln
-    mean = x.mean(dim=-1, keepdim=True)
+    mean = x.mean(dim=-1, keepdim=True) if hasattr(self, 'bias') else 0. # LlamaRMSNorm
     var = ((x - mean).to(dtype=torch.float32) ** 2).mean(dim=-1, keepdim=True)  # to prevent **2 overflow in fp16
-    std = (var + self.eps).sqrt().to(dtype=x.dtype)
+    if not hasattr(self, 'eps'): self.eps = self.variance_epsilon  # LlamaRMSNorm
+    std = (var + self.eps).sqrt()#.to(dtype=x.dtype)
     std = std[-1:].detach()  # use the std of the last original (unscaled) example in the batch
-    y = (x - mean) * self.weight / std + self.bias
+    y = ((x - mean) / std).to(dtype=x.dtype) * self.weight
+    if hasattr(self, 'bias'): y = y + self.bias
     return y
 
 def scaled_ln_wrapper(ln): return lambda x: scaled_ln(ln, x)
@@ -290,7 +319,7 @@ def embed_forward(transformer, inputs, output_embeds=True):
     input_ids = inputs if isinstance(inputs, torch.Tensor) else inputs.input_ids
     hidden_states = inputs_embeds = self.wte(input_ids)
     position_embeds = None
-    if not my_isinstance(transformer, (GPTJModel, GPTNeoXModel)):
+    if not my_isinstance(transformer, (GPTJModel, GPTNeoXModel, LlamaModel)):
         input_shape = input_ids.size()
         position_ids = torch.arange(0, input_shape[-1], dtype=torch.long, device=input_ids.device)
         position_ids = position_ids.unsqueeze(0).view(-1, input_shape[-1])
@@ -351,7 +380,10 @@ def apply_rotary_pos_emb(query_rot, key_rot, offset=0, rotary_emb=None):
     sincos_fn, apply_fn = (fixed_pos_embedding, apply_rotary_pos_emb_every_two) \
         if rotary_emb is None else (rotary_emb, apply_rotary_pos_emb_half)  # gpt-neox
     sincos = sincos_fn(key_rot, seq_len=key_rot.size(2))  # (bnjd')[2]->j
-    if rotary_emb is not None: sincos = sincos[::-1]  # cossin->sincos
+    if rotary_emb is not None:
+        cos, sin = sincos
+        # GPTNeoXRotaryEmbedding already moves to device but LlamaRotaryEmbedding doesn't, so move here 
+        sincos = (sin.to(query_rot.device), cos.to(query_rot.device))
     key_rot = apply_fn(key_rot, sincos, offset=offset)
     query_rot = apply_fn(query_rot, sincos, offset=offset)
     return query_rot, key_rot
@@ -398,7 +430,8 @@ def _attn(self, query, key, value, attention_mask=None):
     if attention_mask is not None: attn_scores = attn_scores + attention_mask
     if value is None: return None, attn_scores
 
-    attn_weights = nn.functional.softmax(attn_scores, dim=-1)
+    attn_weights = nn.functional.softmax(attn_scores, dim=-1, dtype=torch.float32).to(query.dtype) \
+        if my_isinstance(self, LlamaAttention) else nn.functional.softmax(attn_scores, dim=-1)
 
     # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
     attn_weights = attn_weights.type(value.dtype)
@@ -449,63 +482,41 @@ def trim_heads(self, kept_heads, proj_names=None, new_weight=False, device='cpu'
         if str(device) != 'cpu': setattr(self, proj_name_dev, proj)
     self.num_heads = len(kept_heads)
 
-def compose_heads(model, attn_mod, composed_heads):
-    k = len(composed_heads)
-    # wqs, wks = zip(*[get_head_weights(model, *qk_head, transpose=False)[:2]
-    #                 if isinstance(qk_head, tuple) else (None, None)
-    #                 for qk_head, _ in composed_heads])
-    # wvs, wos = zip(*[get_head_weights(model, *ov_head, transpose=False)[2:]
-    #                 for _, ov_head in composed_heads])
-    wqs, wks, wvs, wos = [], [], [], []
-    for qk_head, ov_head in composed_heads:
-        wq, wk = get_head_weights(model, *qk_head, transpose=False)[:2] \
-            if isinstance(qk_head, tuple) else (None, None)
-        wv, wo = get_head_weights(model, *ov_head, transpose=False)[2:]
-        wqs.append(wq); wks.append(wk); wvs.append(wv); wos.append(wo)
-    for proj_name, ws in zip(['q', 'k', 'v', 'out'], [wqs, wks, wvs, wos]):
-        assert all(w is None for w in ws) or not any(w is None for w in ws)  # wqs or wks
-        if all(w is None for w in ws):
+def compose_head(model, attn_mod, composed_head):
+    qk_head, ov_head = composed_head
+    wq, wk = get_head_weights(model, *qk_head, transpose=False)[:2] \
+        if isinstance(qk_head, tuple) else (None, None)
+    wv, wo = get_head_weights(model, *ov_head, transpose=False)[2:] \
+        if isinstance(ov_head, tuple) else (None, None)
+    
+    for proj_name, w in zip(['q', 'k', 'v', 'out'], [wq, wk, wv, wo]):
+        if w is None:
             proj = None  # use attn_pattern as qk
         else:
-            size, cat_dim = (((ws[0].size(1), k * ws[0].size(0)), 0)  # qkv: e(kd)
-                if proj_name != 'out' else ((k * ws[0].size(1), ws[0].size(0)), 1))  # out: (kd)e
-            proj = nn.Linear(*size, bias=False)
-            proj.weight = nn.Parameter(torch.cat(ws, dim=cat_dim))  # qkv: k*[de]->(kd)e, out: k*[ed]->e(kd)
-        setattr(attn_mod, f'composed_{proj_name}_proj', proj)
-
-def compose_all_heads(model):
-    for i, block in enumerate(model.transformer.h):
-        self = block.attn
-        if getattr(self, 'composed_heads', None) is not None:
-            compose_heads(model, self, self.composed_heads)
+            proj = nn.Linear(*w.size(), bias=False)
+            proj.weight = nn.Parameter(w)
+        setattr(attn_mod, f'{proj_name}_proj', proj)
+    attn_mod.num_heads = 1
 
 def remove_composed_heads(attn_mod):
     try_delattr(attn_mod, 'composed_heads')
-    for proj_name in ['q', 'k', 'v', 'out']:
-        try_delattr(attn_mod, f'composed_{proj_name}_proj')
+    # for proj_name in ['q', 'k', 'v', 'out']:
+    #     try_delattr(attn_mod, f'composed_{proj_name}_proj')
 
 def get_all_composed_heads(model):
-    r = []
-    for i, block in enumerate(model.transformer.h):
-        composed_heads = getattr(block.attn, 'composed_heads', None)
-        if composed_heads: r.append((i, composed_heads))
-    return r
+    return [(i, block.attn.composed_heads) for i, block in enumerate(model.transformer.h)
+        if getattr(block.attn, 'composed_heads', None) is not None]
 
 def composed_heads2str(model):
+    if not hasattr(model, 'transformer'): return ''  # for ununified models, e.g. llama
     all_composed_heads = join_lists([composed_heads for l, composed_heads in get_all_composed_heads(model)])
     d = defaultdict(list)
     for qk_head, ov_head in all_composed_heads: d[qk_head].append(ov_head)
     
-    def head2str(head): return f'{head[0]}-{head[1]}' if type(head) != str else head
+    def head2str(head): return f'{head[0]}-{head[1]}' if type(head) != str else abbreviate_attn_pattern(head)
     s = '_'.join(head2str(qk_head) + ':' + ','.join(head2str(h) for h in ov_heads) for qk_head, ov_heads in d.items())
     if s != '': s = '_' + s
     return s
-
-def use_composed_heads(attn_mod):
-    backup_heads(attn_mod)
-    for proj_name in ['q', 'k', 'v', 'out']:
-        setattr(attn_mod, f'{proj_name}_proj', getattr(attn_mod, f'composed_{proj_name}_proj'))
-    attn_mod.num_heads = len(attn_mod.composed_heads)
 
 def scale_to(tensor, target):
     assert tensor.size() == target.size(), f'{tensor.size()} != {target.size()}'
@@ -513,7 +524,7 @@ def scale_to(tensor, target):
     assert torch.allclose(tensor.norm(dim=-1), target.norm(dim=-1))  # debug
     return tensor
 
-def maybe_composed_attn_forward(attn_fwd_outputs, block, hq, hk, hv, by_head=None,
+def maybe_composed_attn_forward(attn_fwd_outputs, model, block, hq, hk, hv, by_head=None,
                                 ranges=None, reuse_attn_weights=True, **kwargs):
     self = block.attn
     composed_heads = getattr(self, 'composed_heads', None)
@@ -522,62 +533,43 @@ def maybe_composed_attn_forward(attn_fwd_outputs, block, hq, hk, hv, by_head=Non
         block, hq, hk, hv, by_head=by_head, **kwargs)
     
     if composed_heads:
-        try:
-            use_composed_heads(self)
-            if all(ov_head[0] == block.layer for _, ov_head in composed_heads):
-                assert all(isinstance(qk_head, str) or qk_head[0] < block.layer for qk_head, _ in composed_heads), \
-                    f'layer {block.layer}, {composed_heads}'
-                is_relating_head = False  # predicting head
-            else:
-                assert all(qk_head[0] == block.layer for qk_head, _ in composed_heads), \
-                    f'layer {block.layer}, {composed_heads}'
-                is_relating_head = True
+        backup_heads(self)
+        head_output_sum0 = head_output.sum(1)
+        for (qk_head, ov_head), range_i in zip(composed_heads, self.ranges_i):
+            try:
+                compose_head(model, self, (qk_head, ov_head))
+                assert block.layer in [qk_head[0], ov_head[0]], \
+                    f'{block.layer} not in {[qk_head[0], ov_head[0]]}'
+                is_relating_head = qk_head[0] == block.layer
 
-            attn_size = aw.size()[-2:]
-            all_attentions, *_ = zip(*attn_fwd_outputs)
-            def get_aw(qk_head):
-                if isinstance(qk_head, str): # qk_head as attn_pattern
-                    return attn_pattern2labels(ranges, qk_head, attn_size)[0]
-                else:
-                    l, h = qk_head; return all_attentions[l][0, h]
-            aw2 = (torch.stack([get_aw(qk_head) for qk_head, _ in composed_heads]).unsqueeze(0)  # m*[ij]->mij->1mij)
-                    if not is_relating_head and reuse_attn_weights else None)
+                attn_size = aw.size()[-2:]
+                all_attentions, *_ = zip(*attn_fwd_outputs)
+                aw2 = None
+                if not is_relating_head and reuse_attn_weights:
+                    aw2 = attn_pattern2labels(ranges, qk_head, attn_size)[0] \
+                        if isinstance(qk_head, str) else all_attentions[qk_head[0]][0, qk_head[1]]
+                    aw2 = rearrange(aw2, 'i j -> 1 1 i j')  # bmij
 
-            _, aw2, value2, attn_out2, head_input2, head_output2 = attn_forward(
-                block, hq, hk, hv, by_head=by_head, attn_weights=aw2)
-            head_output_sum0 = head_output.sum(1)
-            for i, ((qk_head, ov_head), range_i) in enumerate(zip(composed_heads, self.ranges_i)):
-                lov, hov = ov_head
+                _, aw2, value2, attn_out2, head_input2, head_output2 = attn_forward(
+                    block, hq, hk, hv, by_head=by_head, attn_weights=aw2)
+
                 assert range_i.endswith('->*')
                 if isinstance(qk_head, str):
-                    assert qk_head.split('->')[0] == range_i.split('->')[0], f'{qk_head}.q != {range_i}.q'
-                else:
-                    lqk, hqk = qk_head
+                    assert qk_head.split('->')[0] == range_i.split('->')[0], \
+                        f'{qk_head}.q != {range_i}.q'
                 range_i = attn_pattern2labels(ranges, range_i, attn_size)[0][:, 0] != 0  # ij-i
-                h = hqk if is_relating_head else hov
-                if not is_relating_head: aw[:, h, range_i] = aw2[:, i, range_i]  # bnij->brj = bmij->brj
+                h = qk_head[1] if is_relating_head else ov_head[1]
+                i = 0
+                aw[:, h, range_i] = aw2[:, i, range_i]  # bnij->brj = bmij->brj
                 head_output[:, h, range_i] = head_output[:, h, range_i] * int(is_relating_head) + \
                     head_output2[:, i, range_i]  # bnie->bre = bmie->bre
+                if value is not None:
+                    pass # TODO: deal with value which is also used in sum_forward for attribution
                 if attn_out is not None:
                     attn_out[:, h, range_i] = attn_out[:, h, range_i] * int(is_relating_head) + \
                         attn_out2[:, i, range_i]  # bnid->bre = bmid->brd
-
-            # attn_output = head_output.sum(1)  # bnie->bie  # assume no out_proj.b
-            attn_output = attn_output + head_output.sum(1) - head_output_sum0  # bnie->bie
-            if False:  # predicting heads
-                old = head_output[:, [h for _, (l, h) in composed_heads]]  # bmie
-                attn_output = attn_output + (scale_to(head_output2, old) - old).sum(1) # bmie->bie
-                # old_logits, new_logits = [], []  # debug
-                # for i, (_, (layer, head)) in enumerate(composed_heads):  # ov part
-                #     assert layer == block.layer
-                #     old, new = head_output[:, head], head_output2[:, i]  # bnie->bie or bmie->bie
-                #     attn_output = attn_output - old + scale_to(new, old) # magic happens here
-                #     # debug
-                #     old_logits.append(model.lm_head(model.transformer.ln_f(old)))
-                #     new_logits.append(model.lm_head(model.transformer.ln_f(new)))
-            # head_output = torch.cat([head_output, head_output2], dim=1)  # bnie,bmie->b(n+m)ie
-            # aw = torch.cat([aw, aw2], dim=1)  # bnij,bmij->b(n+m)ij
-        finally: restore_heads(self)
+            finally: restore_heads(self)
+        attn_output = attn_output + head_output.sum(1) - head_output_sum0  # bnie->bie
     return attn_output, aw, value, attn_out, head_input, head_output
 
 def attn_forward(block, hq, hk, hv, by_head=None,
@@ -603,18 +595,24 @@ def attn_forward(block, hq, hk, hv, by_head=None,
                 assert hq.size()[1:] == key.size()[1:], f'{hq.size()} != {key.size()}'
                 query = hq
         if hv is not None: value = _split_heads(self.v_proj(hv), self.num_heads, self.head_dim)
-    rotary = my_isinstance(self, (GPTJAttention, GPTNeoXAttention))
+    rotary = my_isinstance(self, (GPTJAttention, GPTNeoXAttention, LlamaAttention))
     if rotary and query is not None and key is not None:
-        k_rot = key[:, :, :, : self.rotary_dim]
-        k_pass = key[:, :, :, self.rotary_dim :]
-        q_rot = query[:, :, :, : self.rotary_dim]
-        q_pass = query[:, :, :, self.rotary_dim :]
+        if hasattr(self, 'rotary_dim'):
+            k_rot = key[:, :, :, : self.rotary_dim]
+            q_rot = query[:, :, :, : self.rotary_dim]
+            k_pass = key[:, :, :, self.rotary_dim :]
+            q_pass = query[:, :, :, self.rotary_dim :]
+        else:  # LlamaAttention
+            k_rot, q_rot = key, query
 
-        rotary_emb=self.rotary_emb if my_isinstance(self, GPTNeoXAttention) else None
+        rotary_emb=self.rotary_emb if my_isinstance(self, (GPTNeoXAttention, LlamaAttention)) else None
         q_rot, k_rot = apply_rotary_pos_emb(q_rot, k_rot, rotary_emb=rotary_emb)
 
-        key = torch.cat([k_rot, k_pass], dim=-1)
-        query = torch.cat([q_rot, q_pass], dim=-1)
+        if hasattr(self, 'rotary_dim'):
+            key = torch.cat([k_rot, k_pass], dim=-1)
+            query = torch.cat([q_rot, q_pass], dim=-1)
+        else:
+            key, query = k_rot, q_rot
     attn_out, attn_weights = _attn(self, query, key, value, attention_mask) \
         if attn_weights is None else (attn_weights.to(value.device) @ value, attn_weights)  # XD
     if value is None: return None, attn_weights, None, None, None, None
@@ -698,7 +696,7 @@ def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, res
             clone_module_to(block, name, hidden_states.device, remove_on_redo=False, switch=True)
     try:
         hidden_states = scaled_ln(block.ln_2, hidden_states, scaled=scaled)
-        if layer is None: return block.mlp(hidden_states, output_intermediate=output_intermediate)
+        if layer is None: return block.mlp(hidden_states)#, output_intermediate=output_intermediate)
         hidden_states = hidden_states * int(residual)*0 + block.mlp(hidden_states)
         logits, loss = lm_head_forward(model, hidden_states, logits_mask=logits_mask, labels=labels, loss_reduction=loss_reduction, scaled=scaled) \
             if labels is not None else (None, None)
@@ -783,7 +781,7 @@ def lm_head_forward(model, hidden_states, logits_mask=None, labels=None, loss_re
     # Keep the logits and loss computation in fp32 to improve accuracy, same as attn_logits
     hidden_states = hidden_states.to(model.lm_head.weight.dtype)
     logits = model.lm_head(hidden_states)
-    if logits_mask is not None: logits = logits + logits_mask.to(logits.device, dtype=logits.dtype) * (1e4 if logits.dtype == torch.float16 else 1e9)
+    if logits_mask is not None: logits = logits + logits_mask.to(logits.device, dtype=logits.dtype) #* (1e4 if logits.dtype == torch.float16 else 1e9)
     loss = compute_loss(logits, labels, reduction=loss_reduction) if labels is not None else None
     if compact:
         logits0 = logits.new(logits.size(0), valid_flags.size(1), logits.size(2)).zero_()
@@ -921,9 +919,25 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, rang
         if from_layer is not None and i < from_layer: continue
         if i == detach_layer: hidden_states = hidden_states.detach()
         if output_hidden_states: all_hidden_states += (to(hidden_states, output_device),)
+        hidden_states = hidden_states.to(b.ln_1.weight.device) # switch device on PP stage boundaries
+        # input_ids = inputs if isinstance(inputs, torch.Tensor) else inputs.input_ids
+        # device = input_ids.device
+        # batch_size, seq_length = input_ids.size()
+        # position_ids = torch.arange(seq_length, dtype=torch.long, device=device)
+        # position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+        # attention_mask = torch.ones(
+        #     (batch_size, seq_length), dtype=torch.bool, device=inputs_embeds.device
+        # )
+        # attention_mask = model.transformer._prepare_decoder_attention_mask(
+        #     attention_mask, (batch_size, seq_length), inputs_embeds, 0
+        # )
+        # hidden_states = b(hidden_states, attention_mask=attention_mask, position_ids=position_ids)[0]
         h = b.ln_1(hidden_states)
-        attn_output, *attn_fwd_output = maybe_composed_attn_forward(attn_fwd_outputs, b, h, h, h, by_head=by_head,
-                            head_mask=head_mask[i], attn_weights=attn_weights[i], ranges=ranges)
+        
+        # attn_output, aw, _ = b.attn(h, attention_mask=attention_mask, position_ids=position_ids, output_attentions=True)
+        # attn_fwd_output = (aw, None, None, None, None)
+        attn_output, *attn_fwd_output = maybe_composed_attn_forward(attn_fwd_outputs, model, b, h, h, h,
+            by_head=by_head, head_mask=head_mask[i], attn_weights=attn_weights[i], ranges=ranges)  #TypeError: maybe_composed_attn_forward() missing 1 required positional argument: 'hv',因此在参数中加了个model nrk
         attn_fwd_output = [to(o, output_device) for o in attn_fwd_output]
         attn_fwd_outputs.append(attn_fwd_output)
         
@@ -939,7 +953,7 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, rang
             attn_output = torch.einsum('bnie,ni->bie', head_output, multiplier)
         parallel_attn_mlp = my_isinstance(b, (GPTJBlock, GPTNeoXLayer))
         if not parallel_attn_mlp: hidden_states = hidden_states + attn_output
-        mlp_output, _ = mlp_forward(b, hidden_states, output_intermediate=True)
+        mlp_output = mlp_forward(b, hidden_states, output_intermediate=False)
         if mlp_mask[i] is not None: mlp_output = einsum('bie,bi->bie', mlp_output, mlp_mask[i])
         # intermediates += (to(intermediate, output_device),)
         hidden_states = (hidden_states + mlp_output) if not parallel_attn_mlp else \
@@ -1123,7 +1137,7 @@ def get_prob_dist(d, topk=5, digits=3):
     return {k: round(math.exp(v), digits) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]}
 
 def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices,
-        logits=None, labels=None, mask_logits=False,
+        logits=None, labels=None, mask_logits=False, logits_bias=None,
         k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True):
     # if k_shot == 0: mask_logits = True  # ioi task
     if isinstance(mask_logits, types.FunctionType): logits = mask_logits(logits); mask_logits = False
@@ -1152,14 +1166,22 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
                 logits_ = logits[0, bos_i + j]; dist = logits_.softmax(-1)  # mqy
                 labels_mask[:, bos_i + j] = logits_.argmax() == ans_id
                 if candidates is not None and j == 0:
-                    logits_mask[:, bos_i] = -1; logits_mask[:, bos_i, candidates[i]] = 0
-                    masked_logits_ = logits_ + logits_mask[0, bos_i] * (1e4 if logits.dtype == torch.float16 else 1e9)
-                    if mask_logits: logits_ = masked_logits_; dist = logits_.softmax(-1)
-                    # amend labels_mask with masked_logits which is used in attribution by default
-                    labels_mask[:, bos_i + j] = masked_logits_.argmax() == ans_id
+                    if logits_bias is not None:  # logits_bias promotes all candidates of the task. Better than logits_mask?
+                        logits_ = logits_ + logits_bias.to(logits_.device)
+                        dist = logits_.softmax(-1)
+                        # logits_bias x 3 (approaching logits_mask) to include more labels
+                        labels_mask[:, bos_i + j] = (logits_ + (logits_bias * 2).to(logits_.device)).argmax() == ans_id
+                        logits_mask[:, bos_i + j] = logits_bias
+                    else:  # logits_mask promotes candidates of the current example
+                        # logits_mask[:, bos_i] = -1; logits_mask[:, bos_i, candidates[i]] = 0
+                        logits_mask[:, bos_i, candidates[i]] = 10.
+                        masked_logits_ = logits_ + logits_mask[0, bos_i] #* (1e4 if logits.dtype == torch.float16 else 1e9)
+                        if mask_logits: logits_ = masked_logits_; dist = logits_.softmax(-1)
+                        # amend labels_mask with masked_logits which is used in attribution by default
+                        labels_mask[:, bos_i + j] = masked_logits_.argmax() == ans_id
                     logits_str = ' '.join(('*' if cand == ans_id else '') +
-                        f'{tokenizer.convert_ids_to_tokens(cand)}:{logits[0, bos_i, cand].item():.3f}'
-                        for cand in candidates[i])
+                        f'{tokenizer.convert_ids_to_tokens(cand)}:{logits_[cand].item():.3f}'
+                        for cand in set(candidates[i]).union({logits_.argmax().item()}))
                     candidate_probs.append([dist[cand].item() for cand in candidates[i]])
                 ans_prob = round(dist[ans_id].item(), 3)
                 top1_correct = (dist.argmax() == ans_id).item()
@@ -1199,7 +1221,7 @@ def trim_outputs(outputs):
 def is_trimmed_outputs(outputs): return outputs.mlp_outputs == ()
 
 def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_token=None, #'Ċ',
-            custom_forward=True, by_head=None, trim=False, verbose=True, outputs = None):
+            logits_bias=None, custom_forward=True, by_head=None, trim=False, verbose=True, outputs = None):
     if by_head is None: by_head = ['value', 'attn_out']
     input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
         text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
@@ -1220,9 +1242,9 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
                 if isinstance(v, torch.Tensor) and v.device != torch.device('cpu'):
                     setattr(o, name, v.to('cpu').float())
 
-    logits = o.logits.float() # add lxy  
+    logits = o.logits.float() # add lxy
     loss, top1_corrects, answer_probs, candidate_probs, logits_mask, labels_mask = show_predictions(
-        tokenizer, *args, logits=logits, labels=labels, loss_reduction='mean',
+        tokenizer, *args, logits=logits, logits_bias=logits_bias, labels=labels, loss_reduction='mean',
         k_shot=k_shot, topk=3, verbose=verbose)
     # logits_mask is used when rel1 is equal relation and cxt_len > 1 (checked in make_data_tuple)
     cxt, query, cands, *_ = examples[0]
@@ -1297,8 +1319,9 @@ def getLLAMAOutputs(texts, tokenizer, layers, only_logits = True):
 def result2dict(result):
     return {k: v for k, v in result.__dict__.items() if k in ['mean_loss', 'mean_acc', 'answer_probs', 'texts']}
     
-def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size, ioi_dataset=None, by_head=None,
-            trim=False, custom_forward=True, verbose=True, result=None, save_label = False, test_acc = False, **gen_args):
+def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size,
+            logits_bias=None, ioi_dataset=None, by_head=None, trim=False,custom_forward=True,
+            verbose=True, result=None, save_label = False, test_acc = False, **gen_args):
     if result is None:
         if ioi_dataset is not None:
             indices_groups = np.arange(batch_size * nrows).reshape(batch_size, nrows)
@@ -1329,9 +1352,10 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
             task_dict['input_ids'] = [input_id.tolist() for input_id in input_ids]
             return task_dict
             # return result
-        with Timer('In generate_and_predict_batch: predict'):
+        if True: # with Timer('In generate_and_predict_batch: predict'):
             result.data_tuples, result.eval_results = map(list, zip(*[predict(model, tokenizer, text, examples,
-                k_shot=k_shot, bos_token=bos_tokens, by_head=by_head, trim=trim, custom_forward=custom_forward, verbose=verbose,
+                k_shot=k_shot, bos_token=bos_tokens, logits_bias=logits_bias, by_head=by_head,
+                trim=trim, custom_forward=custom_forward, verbose=verbose,
                 outputs= batch_outputs[i] if my_isinstance(tokenizer, LLAMATokenizer) else None)
                 for i, (examples, text, bos_tokens) in enumerate(zip(all_examples, texts, all_bos_tokens))
                 if True or any(s in text[24:] for s in ['dangerous'])]))
@@ -1339,7 +1363,7 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
         result.mean_loss, result.mean_acc = np.array(loss).mean(), np.array(join_lists(acc)).mean()
         result.answer_probs = np.array(answer_probs).mean(0)
         print(result.mean_loss, result.mean_acc, result.answer_probs[k_shot:].mean())
-        plt.plot(result.answer_probs); plt.show()
+        # plt.plot(result.answer_probs); plt.show()
     if test_acc:
         result.texts = texts[:1]
         return result2dict(result)
@@ -1356,7 +1380,7 @@ def show_predictions_by_data_tuples(model, tokenizer, data_tuples, k_shot, to_la
                 hs = hs + mlp_forward(b, hs)[0]
             hs = model.transformer.ln_f(hs)
             logits = model.lm_head(hs)
-            logits = logits + o.logits_mask * (1e4 if logits.dtype == torch.float16 else 1e9)
+            logits = logits + o.logits_mask #* (1e4 if logits.dtype == torch.float16 else 1e9)
         else:
             logits = o.logits.float()
         loss, top1_corrects, *_ = show_predictions(
@@ -1418,6 +1442,8 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=F
             for s in get_slice(r, k): attn_labels[get_slice(r, q), s] = 1
         elif '<s>' in k:
             attn_labels[get_slice(r, q), 0] = 1
+        elif k == 'null':
+            attn_labels[get_slice(r, q), :] = 0  # equivalent to pass
         else:
             attn_labels[get_slice(r, q), get_slice(r, k)] = 1
     if k == '~<s>':
@@ -1425,49 +1451,11 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=F
         attn_labels = -attn_labels  # -1,0,0,...
         # attn_labels = 1 - 2 * attn_labels  # -1,1,1,...
     attn_labels = attn_labels.tril()
-    if any(s in k for s in ['ans0s', 'candidates', '<s>', 'example']): normalize = False  # used as attn_mask
-    if normalize: attn_labels = attn_labels / (attn_labels.sum(1, keepdim=True) + 1e-9)
+    if any(s in k for s in ['ans0s', 'candidates', '<s>', 'example']):
+        normalize = False  # used as attn_mask
+    if normalize:
+        attn_labels = attn_labels / (attn_labels.sum(1, keepdim=True) + 1e-9)
     return attn_labels, [get_slice(r, q) for r in ranges_q]
-
-# def mask_select(a, mask=None):  # a: attn_output0, bnid, mask: bi
-#     bsz = a.size(0)
-#     # mask = mask[None, :, :].expand(num_heads, -1, -1) # bi->nbi
-#     a = rearrange(a, 'b n i d -> b i n d')[mask]  # bind[bi]->(bk)nd
-#     a = rearrange(a, '(b k) n d -> b n k d', b=bsz)
-#     return a
-
-# def mask_expand(a, mask=None):  # a: head_output, bnke, mask: bi
-#     out = torch.zeros(a.size(0), mask.size(1), a.size(1), a.size(3))  # bine
-#     out[mask] = rearrange(a, 'b n k e -> (b k) n e')
-#     return rearrange(out, 'b i n e -> b n i e')
-
-# def head_select(a, heads=None):  # a: cat value, blnid
-#     return torch.stack([a[:, l, h] for l, h in heads], dim=1)  # [blnid->bid]*k = bkid
-
-# def head_expand(a, heads=None, L=None, H=None): # a: head_input, bkie
-#     out = torch.zeros(a.size(0), L, H, a.size(-2), a.size(-1))  # blnie
-#     for i, (l, h) in enumerate(heads): out[:, l, h] = a[:, i]
-#     return out
-
-# def get_head_io(head_io, w_o, num_heads=None): # head_input/output
-#     w_o = rearrange(w_o, 'e (n d) -> n d e', n=num_heads)
-#     return head_io @ w_o.to(head_io.device)
-
-# def postprocess_output(o, select_fn, expand_fn):
-#     if isinstance(o, tuple):
-#         f, o, w = o
-#         return expand_fn(f(select_fn(o), w))
-#     assert isinstance(o, torch.Tensor), str(type(o))
-#     return o
-
-# def postprocess_head_output(head_output, mask):  # head_output: 1nid
-#     select_fn, expand_fn = partial(mask_select, mask=mask), partial(mask_expand, mask=mask)
-#     return postprocess_output(head_output, select_fn, expand_fn)
-
-# def postprocess_head_inputs(head_inputs, heads):  # head_inputs: 1lnid
-#     select_fn = partial(head_select, heads=heads)
-#     expand_fn = partial(head_expand, heads=heads, L=head_inputs.size(1), H=head_inputs.size(2))
-#     return postprocess_output(head_inputs, select_fn, expand_fn)
 
 cat = torch.cat
 
@@ -1842,8 +1830,8 @@ def get_sensitivity(data_tuple, l, h, attn_pattern, node_key, **kwargs):
     if q != 'bos' and q[-1] not in [']', '+', '-']: q = q + ']'  # make q single token
     k = '*' if 'bos' in q and 'ans' in k and 'ans0' not in k else 'example'
     attn_labels, _ = attn_pattern2labels(ranges, f'{q}->{k}', aw.size(), **kwargs)
-    assert (attn_labels.sum(1) != 0).sum().item() == len(ranges) - kwargs['k_shot'], \
-        f"{attn_pattern}, {(attn_labels.sum(1) != 0).sum().item()} != {len(ranges) - kwargs['k_shot']}"  # q is single-token
+    if (attn_labels.sum(1) != 0).sum().item() != len(ranges) - kwargs['k_shot']:  # mqy q is not single-token
+       print(f"In get_sensitivity: {attn_pattern}, {(attn_labels.sum(1) != 0).sum().item()} != {len(ranges) - kwargs['k_shot']}")  # q is single-token
     b = attn_labels != 0
     _aa = aa * (aa > 0)
     return ((aw[b] + 1e-5).log() * _aa[b]).sum() / _aa[b].sum()
@@ -2020,8 +2008,10 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.4): # use fixed k_shot
     if is_predicting_head and d.attn_pattern.startswith('bos->query'): label_types += ['labels']  # mqy TODO
     return label_types
 
-def get_icl_score(ap_scores, k_shot=3): # use fixed k_shot
-    _ap_score = ap_scores[min(3, k_shot):].mean()
+def get_icl_score(ap_scores, k_shot=3):
+    # k_shot = min(3, k_shot)
+    if k_shot > 1: k_shot = 3  # use fixed k_shot
+    _ap_score = ap_scores[k_shot:].mean()
     return ((_ap_score - ap_scores[0]) / _ap_score).item()
 
 def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score=0.3, k_shot=None,
@@ -2124,9 +2114,9 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
 def filter_fn(p, c):
     if c.layer == 0 or c.head == c.H: return False
     pap, ap = abbreviate_attn_pattern(p.attn_pattern or ''), abbreviate_attn_pattern(c.attn_pattern)
-    return (p.step == -1  and c.ap_score > 0.3 and c.top_score > 0.5-0.15 and c.icl_score > 0.4 and ap.startswith('B->A0') or
-        p.step == 0 and (c.icl_score > 0.4 and ap.startswith('B->Q') or ap.startswith('B->A]^')) or
-        p.step == 1 and pap == 'B->Q' and ap.endswith('^')
+    return (p.step == -1 and c.ap_score > 0.14 and c.top_score > 0.3 and c.icl_score > 0.1 or # and ap.startswith('B->A0') or
+        p.step == 0 and (ap.startswith('B->Q') or ap.startswith('B->A]^')) or # c.ap_score > 0.2 and c.top_score > 0.5 and c.icl_score > 0.4 or 
+        p.step == 1 and pap.startswith('B->Q') and ap.startswith('B->A')
     )
         # p.step == 0 and pap.startswith('B->A0') and (ap.startswith('B->A0') and c.ap_score > 0.4 or ap == 'B->B' and c.ap_score > 0.6 or ap in ['B->Q', 'B->A]']) or \
     # return  p.step < 1 or (p.step == 1 and ap in ['B->s2'] ) or (p.step == 2 and ap in ['s2->s1+','s2->s1'])  # ioi task
@@ -2562,7 +2552,7 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         print('scaled_logprobs =', ys)
         if isinstance(logits, (list, tuple)): logits = sum(logits)
         if logits.size(-1) == model.lm_head.out_features:  # lm_logits
-            # logits = logits + o.logits_mask * (1e4 if logits.dtype == torch.float16 else 1e9)
+            # logits = logits + o.logits_mask #* (1e4 if logits.dtype == torch.float16 else 1e9)
             ap_scores, *_ = show_predictions(tokenizer, *args, logits=logits[-1:], labels=labels, k_shot=k_shot, topk=4, sep='\t')
         elif logits.size(-1) == input_ids.size(1): # attn_logits, bij
             attn_pattern = node2path(node)[-1].data.attn_pattern or 'bos->ans0'

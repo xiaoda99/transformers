@@ -1,23 +1,23 @@
 {
   "train_batch_size": "auto",
   "fp16": {
-    "enabled": true,
-    "min_loss_scale": 1,
-    "opt_level": "O2"
+    "enabled": true,     //是否启用fp16训练
+    "min_loss_scale": 1,  //最小动态损失比例值
+    "opt_level": "O2"      //这个感觉有问题，这个是amp的参数，amp和fp16应该是不兼容的https://www.deepspeed.ai/docs/config-json/
   },
   "zero_optimization": {
-    "stage": 3,
+    "stage": 3,               //阶段0、1、2和3分别指禁用、优化器状态分区、优化器+梯度状态分区和优化器+梯度+参数分区。
     "offload_param": {
       "device": "cpu"
     },
-    "offload_optimizer": {
+    "offload_optimizer": {      //启用将优化器状态卸载到 CPU 或 NVMe，并将优化器计算卸载到 CPU。这可以释放 GPU 内存以用于更大的模型或批量大小。适用于 ZeRO 第 1、2、3 阶段
       "device": "cpu"
     },
-    "allgather_partitions": true,
-    "allgather_bucket_size": 5e8,
-    "contiguous_gradients": true
+    "allgather_partitions": true,      //在每个步骤结束时从所有 GPU 收集更新的参数
+    "allgather_bucket_size": 5e8,       //一次聚集的元素数量。限制大模型大小的全聚集所需的内存，默认值5e8
+    "contiguous_gradients": true      //在生成梯度时将其复制到连续的缓冲区。避免反向传播期间出现内存碎片。	
   },
-  "optimizer": {
+  "optimizer": {    
     "type": "AdamW",
     "params": {
       "lr": 1e-05,

@@ -12,7 +12,7 @@ from notebooks.lxy_train.code.task_dataset import TasksDataset
 import math
 import transformers
 from transformers.deepspeed import deepspeed_init
-from transformers.trainer_utils import get_last_checkpoint, is_main_process
+from transformers.trainer_utils import get_last_checkpoint, is_main_process  #is_main_process不是应用于TPU训练吗
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -27,8 +27,11 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    # load arguments
-    parser = HfArgumentParser(
+    # load arguments  
+    # 类ModelArguments中包含的是关于模型的属性，如model_name，config_name，tokenizer_name等，类在run.py文件中定义；
+    # 类DataTrainingArguments中包含的是关于微调数据的属性，如task_name，data_dir等，类在transformers/data/datasets/glue.py文件中定义；
+    # TrainingArguments中包含的是关于微调过程的参数，如batch_size，learning_rate等参数，类在transformers/training_args.py中定义。
+    parser = HfArgumentParser(   
         (ModelArguments, DataTrainingArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses(
         )
@@ -36,11 +39,11 @@ def main():
 
     # Detecting last checkpoint.
     last_checkpoint = None
-    if os.path.isdir(
-            training_args.output_dir
+    if os.path.isdir(                   #os.path.isdir()用于判断对象是否为一个目录。 
+            training_args.output_dir    #os.path.isfile()用于判断对象是否为一个文件。
     ) and training_args.do_train and not training_args.overwrite_output_dir:
         last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(
+        if last_checkpoint is None and len(os.listdir(  #os.listdir()用于返回一个由文件名和目录名组成的列表，需要注意的是它接收的参数需要是一个绝对的路径。
                 training_args.output_dir)) > 0:
             raise ValueError(
                 f"Output directory ({training_args.output_dir}) already exists and is not empty. "
@@ -101,7 +104,7 @@ def main():
 
     if data_args.block_size is None:
         logger.info("Setting `block_size` 1024 since it was not set")
-        tokenizer.model_max_length = 1024
+        tokenizer.model_max_length = 1024   #这一步没用
     else:
         logger.info("Setting `block_size` to %d", data_args.block_size)
         tokenizer.model_max_length = data_args.block_size
@@ -144,41 +147,42 @@ def main():
         eval_task_file = data_args.eval_task_file
     )
 
-    def compute_metrics1(eval_preds):
-        pred_ids = torch.tensor(eval_preds.predictions[:, :-1])
-        labels_ids = torch.tensor(eval_preds.label_ids[:, 1:])
-        assert labels_ids.size() == pred_ids.size(), f'{labels_ids.size()} != {pred_ids.size()}'
+    # def compute_metrics1(eval_preds):
+    #     pred_ids = torch.tensor(eval_preds.predictions[:, :-1])
+    #     labels_ids = torch.tensor(eval_preds.label_ids[:, 1:])
+    #     assert labels_ids.size() == pred_ids.size(), f'{labels_ids.size()} != {pred_ids.size()}'
         
-        label_mask = (labels_ids != -100)
+    #     label_mask = (labels_ids != -100)   
 
-        accuracy = torch.einsum('bi->b', (pred_ids == labels_ids ) * label_mask) \
-            / torch.einsum('bi->b', label_mask)
+    #     accuracy = torch.einsum('bi->b', (pred_ids == labels_ids ) * label_mask) \
+    #         / torch.einsum('bi->b', label_mask)
         
-        return {#'example_acc': accuracy,
-                #'task_acc':accuracy.view(-1, 16).mean(-1).tolist(),
-                'all_acc': accuracy.mean()}
+    #     return {#'example_acc': accuracy,
+    #             #'task_acc':accuracy.view(-1, 16).mean(-1).tolist(),
+    #             'all_acc': accuracy.mean()}
+    
     # Set up the metric
     # 评估在这里计算准确率
     def compute_metrics(eval_preds):
         # pred_ids 是 logits经过argmax后的结果 维度【batch, seq_len】
         pred_ids = eval_preds.predictions[:, :-1]
-        labels_ids = eval_preds.label_ids[:, 1:]
+        labels_ids = eval_preds.label_ids[:, 1:]      #在这里偏移？
         # 保持维度一致。
         assert labels_ids.shape == pred_ids.shape, f'{labels_ids.shape} != {pred_ids.shape}'
         # 将label不是-100的地方mask掉，不计算准确率。
-        label_mask = (labels_ids != -100)
+        label_mask = (labels_ids != -100)    #tensor([False, False,  True, False, False,  True])
         # 计算总的准确率。
-        accuracy = ((pred_ids == labels_ids ) * label_mask).sum(-1) / label_mask.sum(-1)
+        accuracy = ((pred_ids == labels_ids ) * label_mask).sum(-1) / label_mask.sum(-1)  
        
-        return {#'example_acc': accuracy.tolist(), #每个样本的准确率
+        return {#'example_acc': accuracy.tolist(), #每个样本的准确率，保留3/4位小数
                 'task_acc':np.around(accuracy.reshape((-1, 16)).mean(-1), 3), # 想法是每个task准确率，但是结果不对。
                 'all_acc': np.around(accuracy.mean(),4)}
 
     # Create a preprocessing function to extract out the proper logits from the model output
-    def preprocess_logits_for_metrics(logits, labels):
+    def preprocess_logits_for_metrics(logits, labels):   #logits转换为各位置概率最高的值
         if isinstance(logits, tuple):
             logits = logits[0]
-        return logits.argmax(dim=-1)
+        return logits.argmax(dim=-1)    
 
     # 设置是否评估几个集合，这里默认两个都进行评估。
     #merge_dataset = {'train_eval_dataset': train_eval_dataset, 'eval_dataset': eval_dataset}
@@ -191,7 +195,7 @@ def main():
         eval_dataset=merge_dataset,
         compute_metrics=compute_metrics,
         data_collator=default_data_collator,
-        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,  #返回修改后的logits，这里对logits做了softmax
     )
 
     # 模型训练
@@ -207,7 +211,7 @@ def main():
         trainer.save_model()
         
         metrics = train_result.metrics
-        trainer.log_metrics("train", metrics)
+        trainer.log_metrics("train", metrics)  #查看内存分配
         # perplexity = math.exp(metrics["eval_loss"])
         # metrics["perplexity"] = perplexity
         trainer.save_metrics("train", metrics)
@@ -218,7 +222,7 @@ def main():
         for eval_dataset_name, eval_dataset in merge_dataset.items():
             metrics = trainer.evaluate(
                 eval_dataset=eval_dataset,
-                metric_key_prefix=f"eval_{eval_dataset_name}",
+                metric_key_prefix=f"eval_{eval_dataset_name}",   #重命名
             )
             if is_main_process(training_args.local_rank):
                 print("eval", metrics)

@@ -7,7 +7,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 # --overwrite_output_dir \
 #--overwrite_output_dir \
 deepspeed   train_model_tasks.py \
-    --output_dir "eval_task_0601" \
+    --output_dir "eval_task_0529" \
     --do_eval \
     --evaluation_strategy "steps" \
     --eval_steps 2 \
@@ -35,4 +35,4 @@ deepspeed   train_model_tasks.py \
     --tokenizer_name EleutherAI/gpt-j-6B \
     --eval_task_file /nas/xd/projects/transformers/notebooks/lxy_train/eval_task_file.json \
     --overwrite_output_dir \
-    | tee eval0601.log
+    | tee eval0529.log

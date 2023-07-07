@@ -180,5 +180,10 @@ notebooks/lxy
 notebooks/lxy_train/data
 notebooks/lxy_train/training_checkpoint
 notebooks/lxy_train/wandb
+notebooks/nrk_train/data
+notebooks/nrk_train/training_checkpoint
+notebooks/nrk_train/wandb
+notebooks/nrk_train/code/train_tasks_0701_28_2
+notebooks/nrk_train/code/eval_tasks_0701_28_2
 notebooks/results_logits_lens
 notebooks/*mqy.py

@@ -1,13 +1,13 @@
 #!/bin/bash
 # export CUDA_VISIBLE_DEVICES=5,6 && deepspeed --num_gpus=2 train_gptj_summarize.py
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,2,3,8
 # deepspeed train_gptj_summarize.py
 # deepspeed --num_gpus=2 
 #--overwrite_output_dir    --do_train \     # --load_best_model_at_end \     --half_precision_backend \     --gradient_checkpointing \ --do_train \ 
 # --overwrite_output_dir \
 #--overwrite_output_dir \
 deepspeed   train_model_tasks.py \
-    --output_dir "train_tasks_0529" \
+    --output_dir "train_tasks_0702" \
     --do_train \
     --do_eval \
     --evaluation_strategy "steps" \
@@ -26,8 +26,8 @@ deepspeed   train_model_tasks.py \
     --save_strategy "steps" \
     --save_steps 100 \
     --fp16 \
-    --deepspeed /nas/xd/projects/transformers/notebooks/lxy_train/ds_config_gptj.json \
-    --train_file /nas/xd/projects/transformers/notebooks/lxy_train/task_datasets.json \
+    --deepspeed /nas/xd/projects/transformers/notebooks/lxy_train/code/ds_config_gptj.json \
+    --train_file /nas/xd/projects/transformers/notebooks/lxy_train/data/task_datasets.json \
     --block_size 1024 \
     --max_input_length 256 \
     --validation_split_percentage 95 \
