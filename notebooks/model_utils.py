@@ -19,7 +19,7 @@ import pickle
 import gzip
 import seaborn as sns
 import matplotlib.pyplot as plt
-from pt_model_recorder import BatchShareMemRecorder
+#from pt_model_recorder import BatchShareMemRecorder
 # from sklearn.manifold import TSNE, MDS
 # from sklearn.decomposition import PCA
 # from sklearn.cluster import KMeans
@@ -227,6 +227,23 @@ def unify(model):
             self.resid_dropout = nn.Dropout(0)
             for old_name, new_name in [('hidden_size', 'embed_dim'), ('o_proj', 'out_proj')]:
                 setattr(self, new_name, getattr(self, old_name))
+
+def get_device_map(model_name='transformer', emb_name='wte', layer_name='h', n_layers=60,
+                   ln_name='ln_f', head_name='lm_head', devices=[0, 1]):
+    if len(devices) == 1: return {model_name: devices[0], head_name: devices[0]}
+    dm = {f'{model_name}.{emb_name}': devices[0]}
+    if len(devices) == 2:
+        for i in range(n_layers // 2): dm[f'{model_name}.{layer_name}.{i}'] = devices[0]
+        for i in range(n_layers // 2, n_layers): dm[f'{model_name}.{layer_name}.{i}'] = devices[1]
+        dm[f'{model_name}.{ln_name}'] = devices[1]
+        dm[f'{head_name}'] = devices[1]
+    elif len(devices) == 3:
+        for i in range(n_layers // 3): dm[f'{model_name}.{layer_name}.{i}'] = devices[0]
+        for i in range(n_layers // 3, n_layers // 3 * 2): dm[f'{model_name}.{layer_name}.{i}'] = devices[1]
+        for i in range(n_layers // 3 * 2, n_layers): dm[f'{model_name}.{layer_name}.{i}'] = devices[2]
+        dm[f'{model_name}.{ln_name}'] = devices[2]
+        dm[f'{head_name}'] = devices[2]
+    return dm
 
 def name_with_device(name, device):
     return name + '_' + str(device).replace(':', '')  # '_cuda0' or '_cpu'
@@ -1340,6 +1357,7 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
     if batch_size == 1: return result
 
     if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):
+        assert not my_isinstance(tokenizer, LLAMATokenizer)
         batch_outputs = getLLAMAOutputs(texts, tokenizer, gen_args.get('llama_size', '7B'), False) \
             if my_isinstance(tokenizer, LLAMATokenizer) else () # add by lxy
         # add lxy get labels to construct dataset
@@ -1981,7 +1999,7 @@ def point_wise(attn_pattern):
     src, dst = attn_pattern.split('->')
     return src == dst
 
-def get_label_types(parent, d, k_shot=3, icl_score_thld=0.4): # use fixed k_shot
+def get_label_types(parent, d, k_shot=3, icl_score_thld=0.4): # use fixed k_shot #mqy default icl score: 0.4
     def get_normalized_attn_labels(data):
         return 'attn_labels' + ('/ans0s' if data.attn_pattern.startswith('bos->ans0') else '/example')
     normalized_attn_labels = get_normalized_attn_labels(d)
@@ -1999,7 +2017,8 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.4): # use fixed k_shot
         activating_attn_labels = f'attn_labels:{parse_attn_pattern(d.attn_pattern)[0]}->~<s>,{min(3, k_shot)}'
         head_label_types = get_root(parent).data.head_label_types
         head_label_type = (d.layer, d.head, activating_attn_labels)
-        if head_label_type not in head_label_types:
+        #if head_label_type not in head_label_types:
+        if True:  # mqy test recurrent B->A0
             label_types += [activating_attn_labels]
             head_label_types.add(head_label_type)
         if not is_predicting_head and not is_recurrent_head and not point_wise(d.attn_pattern):
@@ -2114,9 +2133,17 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
 def filter_fn(p, c):
     if c.layer == 0 or c.head == c.H: return False
     pap, ap = abbreviate_attn_pattern(p.attn_pattern or ''), abbreviate_attn_pattern(c.attn_pattern)
-    return (p.step == -1 and c.ap_score > 0.14 and c.top_score > 0.3 and c.icl_score > 0.1 or # and ap.startswith('B->A0') or
-        p.step == 0 and (ap.startswith('B->Q') or ap.startswith('B->A]^')) or # c.ap_score > 0.2 and c.top_score > 0.5 and c.icl_score > 0.4 or 
-        p.step == 1 and pap.startswith('B->Q') and ap.startswith('B->A')
+    #return (p.step == -1 and c.ap_score > 0.15 and c.top_score > 0.4 and c.icl_score > 0.05 or # and ap.startswith('B->A0') or
+    #    p.step == 0 and c.top_score > 0.5 or #and (ap.startswith('B->Q') or ap.startswith('B->A')) or # c.ap_score > 0.2 and c.top_score > 0.5 and c.icl_score > 0.4 or 
+    #    p.step == 1 and ((ap.startswith('B->Q') and c.top_score>0.15) or ap.startswith('B->A]') or ap.startswith('Q->A0')) or
+    #    p.step == 2 and ap.startswith('B->A]') 
+    #)
+
+    # child filter fn
+    return (p.step == -1 and c.ap_score > 0.14 and c.top_score > 0.5 and c.icl_score > 0.05 or # and ap.startswith('B->A0') or
+        p.step == 0 and c.top_score > 0.9 or #and (ap.startswith('B->Q') or ap.startswith('B->A')) or # c.ap_score > 0.2 and c.top_score > 0.5 and c.icl_score > 0.4 or 
+        p.step == 1 and ((ap.startswith('B->Q') and c.top_score>0.55) or ap.startswith('B->A]') or ap.startswith('Q->A0')) or
+        p.step == 2 and (ap.startswith('A]->Q]') or ap.startswith('A]->A0]') or ap.startswith('Q->T'))
     )
         # p.step == 0 and pap.startswith('B->A0') and (ap.startswith('B->A0') and c.ap_score > 0.4 or ap == 'B->B' and c.ap_score > 0.6 or ap in ['B->Q', 'B->A]']) or \
     # return  p.step < 1 or (p.step == 1 and ap in ['B->s2'] ) or (p.step == 2 and ap in ['s2->s1+','s2->s1'])  # ioi task
@@ -2189,11 +2216,11 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
 def attribute_tree_on(data_tuples, model, node, max_step, device='cpu', **kwargs):
     if node is None: node = add_node(None, label_type='labels')
     try:
-        if device != 'cpu': switch_model_to(model, device)
+        if device is not None and device != 'cpu': switch_model_to(model, device)
         with Timer('attribute_tree'):
             attribute_tree(data_tuples, model, node, max_step, **kwargs)
     finally:
-        if device != 'cpu': switch_model_to(model, 'cpu')
+        if device is not None and device != 'cpu': switch_model_to(model, 'cpu')
     return node
 
 def node2key(node):

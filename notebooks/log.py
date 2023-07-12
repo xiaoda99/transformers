@@ -1,3 +1,4 @@
+import os
 import logging
 import sys
 
@@ -18,8 +19,9 @@ def _get_logger():
                                                   datefmt='%Y-%m-%d %H:%M:%S'))
     log.addHandler(console_handle)
 
-
-    file_handler = logging.FileHandler('/nas/xd/projects/transformers/notebooks/lxy/log/output.log')
+    log_path = 'lxy/log/output.log'
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    file_handler = logging.FileHandler(log_path)
     file_handler.setLevel(level=logging.INFO)
     formatter = logging.Formatter('[%(levelname)s][%(asctime)s][%(filename)s:%(lineno)d] - %(message)s',
                                                   datefmt='%Y-%m-%d %H:%M:%S')

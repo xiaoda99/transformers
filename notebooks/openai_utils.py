@@ -6,7 +6,7 @@ from log import logger
 import random
 stack = []
 # 注意千万不能在这里测试使用key直接测试，导致封号！！！！
-with open("/nas/xd/projects/openai_keys_lxy.txt", "r") as f:
+with open("/nas/xd/projects/openai_keys.txt", "r") as f:
     for line in f.readlines():
         stack.append(line.strip().split()[0])
 

@@ -1,13 +1,19 @@
+import os
 from random import choice, choices, shuffle, sample, randint, random, seed
 from dataclasses import dataclass
-from pattern.en import lexeme
+# from pattern.en import lexeme
 # from nltk.corpus import cmudict  # nltk.download('cmudict')
  
 from transformers import AutoTokenizer, GPT2Tokenizer
 from common_utils import Timer
 
-cache_dir = '/nas/xd/.cache/torch/transformers/'
-with Timer('In const.py: Loading tokenizer'): tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-j-6B', local_files_only=True, cache_dir=cache_dir)
+cache_dir = None
+for home_dir in ['/nas', 'raid', '/home']:
+    _cache_dir = f'{home_dir}/xd/.cache/torch/transformers/'
+    if os.path.exists(_cache_dir): cache_dir = _cache_dir; break
+
+with Timer('In const.py: Loading tokenizer'):
+    tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-j-6B', local_files_only=True, cache_dir=cache_dir)
 
 # from https://eslyes.com/namesdict/popular_names.htm
 boys = [
@@ -96,6 +102,7 @@ class Tenses:
     done: str = None
 
 def verb_tenses():
+    from pattern.en import lexeme
     if not hasattr(verb_tenses, '_verb_tenses'):
         verbs = [v for v, _ in verb_form]
         try: _verb_tenses = [lexeme(v) for v in verbs]

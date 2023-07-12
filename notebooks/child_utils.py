@@ -4,7 +4,9 @@ import os
 import json
 import csv
 import types
-from collections import defaultdict, OrderedDict, Counter, Iterable
+from collections import defaultdict, OrderedDict, Counter
+try: from collections import Iterable
+except Exception: from collections.abc import Iterable  # for Python >= 3.10
 from functools import partial, wraps
 import string
 from random import choice, choices, shuffle, sample, randint, random, seed
@@ -1432,6 +1434,7 @@ inverse_fns = {
 inverse_fns.keys()
 
 
+"""
 from type import * 
 
 class Task(object):
@@ -1604,13 +1607,13 @@ def guessConstantStrings(task):
                          "stringConstants": task.stringConstants})
 
 def loadPBETasks(directory="PBE_Strings_Track"):
-    """
+    '''
     Processes sygus benchmarks into task objects
     For these benchmarks, all of the constant strings are given to us.
     In a sense this is cheating
     Returns (tasksWithoutCheating, tasksWithCheating).
     NB: Results in paper are done without "cheating"
-    """
+    '''
     import os
     from sexpdata import loads, Symbol
 
@@ -1674,13 +1677,13 @@ def loadPBETasks(directory="PBE_Strings_Track"):
     return tasks, cheatingTasks
 
 def retrieveJSONTasks(filename, features=False):
-    """
+    '''
     For JSON of the form:
         {"name": str,
          "type": {"input" : bool|int|list-of-bool|list-of-int,
                   "output": bool|int|list-of-bool|list-of-int},
          "examples": [{"i": data, "o": data}]}
-    """
+    '''
     with open(filename, "r") as f:
         loaded = json.load(f)
     TP = {
@@ -1698,7 +1701,6 @@ def retrieveJSONTasks(filename, features=False):
         cache=False,
     ) for item in loaded]
 
-'''
 vocab = list(string.ascii_uppercase) #+ ['_'] * 16
 # vocab = list(string.digits)[1:]
 query_vocab = list(string.ascii_uppercase)
@@ -1838,4 +1840,4 @@ example, ans_fn = gen_example(nrows=nrows, ncols=ncols,
                               **configs)
 print(example)
 texts['tmp'] = '\n' + example[:-1]
-'''
+"""
