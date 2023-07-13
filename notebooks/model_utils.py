@@ -40,7 +40,7 @@ from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention, GPT
 from transformers.models.xglm.modeling_xglm import XGLMForCausalLM, XGLMAttention, XGLMDecoderLayer
 from transformers.models.llama.modeling_llama import LlamaForCausalLM, LlamaAttention, LlamaDecoderLayer, LlamaModel
 
-sys.path.insert(0, '/nas/xd/projects/pptree')
+sys.path.insert(0, './pptree')
 from pptree import Node, print_tree
 
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, topi_md, \
@@ -135,6 +135,11 @@ def fill_list(e, length, i, default_e=None): # fill e to ith position of a list 
 def default_get_hqkv(h): return h, h, h  # h is used for query, key and value
 def get_hqkv_k(h, h0): return h0, h, h0  # h is only used for key
 
+name2mapping = {
+    'vicuna-33b-v1.3': dict(model_name='model', emb_name='embed_tokens', layer_name='layers', ln_f_name='norm', n_layers=60),
+    'gpt-j-6B': dict(n_layers=28),
+    'gpt-neox': dict(model_name='gpt_neox', emb_name='embed_in', layer_name='layers', ln_f_name='final_layer_norm', head_name='embed_out', n_layers=44),
+}
 
 def unify(model):
     if my_isinstance(model, XGLMForCausalLM):

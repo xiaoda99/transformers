@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from transformers import AutoTokenizer, GPT2Tokenizer
 from common_utils import Timer
 
-cache_dir = None
-for home_dir in ['/nas', 'raid', '/home']:
-    _cache_dir = f'{home_dir}/xd/.cache/torch/transformers/'
-    if os.path.exists(_cache_dir): cache_dir = _cache_dir; break
-
+ # cache_dir = None
+ # for home_dir in ['/nas', 'raid', '/home']:
+ #     _cache_dir = f'{home_dir}/xd/.cache/torch/transformers/'
+ #     if os.path.exists(_cache_dir): cache_dir = _cache_dir; break
+cache_dir = f'/nas/xd/.cache/torch/transformers/'  # use symlink to unify to /nas on different machines
 with Timer('In const.py: Loading tokenizer'):
     tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-j-6B', local_files_only=True, cache_dir=cache_dir)
 
