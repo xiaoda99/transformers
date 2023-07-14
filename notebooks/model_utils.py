@@ -19,7 +19,7 @@ import pickle
 import gzip
 import seaborn as sns
 import matplotlib.pyplot as plt
-#from pt_model_recorder import BatchShareMemRecorder
+# from pt_model_recorder import BatchShareMemRecorder
 # from sklearn.manifold import TSNE, MDS
 # from sklearn.decomposition import PCA
 # from sklearn.cluster import KMeans
@@ -87,7 +87,8 @@ class AttrData:
     attribute_k: bool = False
     attr: Attributions = None  # for children
     ap_scores: dict = field(default_factory=dict)  # for root
-    head_label_types: set = field(default_factory=set)  # for root
+    # head_label_types: set = field(default_factory=set)  # for root
+    attributed_heads: set = field(default_factory=set)  # for root
     attr_ap_scores: dict = None  # for children
     ap_score: float = None  # for self
     attr_ap_score: float = None  # for self
@@ -446,7 +447,7 @@ def _attn(self, query, key, value, attention_mask=None):
     # self.masked_bias can not be used because it will turn to -inf when casting model to fp16
     # attn_scores = torch.where(causal_mask, attn_scores, self.masked_bias.to(attn_scores.dtype))
     # adapted from GPTJAttention._attn which uses torch.finfo(attn_scores.dtype).min
-    mask_value = -1e9 if attn_scores.dtype == torch.float32 else torch.finfo(attn_scores.dtype).min
+    mask_value = -1e9 if attn_scores.dtype == torch.float32 else -1e4 # torch.finfo(attn_scores.dtype).min
     mask_value = torch.tensor(mask_value, dtype=attn_scores.dtype).to(attn_scores.device)
     attn_scores = torch.where(causal_mask.to(attn_scores.device), attn_scores, mask_value)
     if attention_mask is not None: attn_scores = attn_scores + attention_mask
@@ -2013,21 +2014,21 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.4): # use fixed k_shot
             n.data.label_type == ('labels' if is_root(n.parent) else None)
             for n in node2path(parent))
     is_recurrent_head = not is_root(parent) and parent.data.label_type == get_normalized_attn_labels(parent.data) and \
-        d.attn_pattern == parent.data.attn_pattern  # e.g. bos->ans0 head below bos->ans0 head
-    if is_predicting_head or is_recurrent_head: label_types = [normalized_attn_labels]
-    elif is_root(parent) and point_wise(d.attn_pattern): label_types = ['labels']  # e.g. bos->bos at step 0
-    else: label_types = [None]
+        not point_wise(d.attn_pattern) and d.attn_pattern == parent.data.attn_pattern  # e.g. bos->ans0 head below bos->ans0 head
     icl_score = d.icl_score or 0
-    if icl_score > icl_score_thld or is_predicting_head and d.attn_pattern.startswith('bos->query'):  # mqy TODO
+    # if is_predicting_head or is_recurrent_head: label_types = [normalized_attn_labels]
+    if is_root(parent) and point_wise(d.attn_pattern):
+        label_types = ['labels']  # e.g. bos->bos at step 0
+    elif icl_score > icl_score_thld or is_predicting_head or is_recurrent_head:
+        label_types = ['attn_labels', normalized_attn_labels] if not point_wise(d.attn_pattern) else []
         activating_attn_labels = f'attn_labels:{parse_attn_pattern(d.attn_pattern)[0]}->~<s>,{min(3, k_shot)}'
-        head_label_types = get_root(parent).data.head_label_types
-        head_label_type = (d.layer, d.head, activating_attn_labels)
-        #if head_label_type not in head_label_types:
-        if True:  # mqy test recurrent B->A0
+        # head_label_types = get_root(parent).data.head_label_types
+        # head_label_type = (d.layer, d.head, activating_attn_labels)
+        if True: # head_label_type not in head_label_types: # mqy test recurrent B->A0
             label_types += [activating_attn_labels]
-            head_label_types.add(head_label_type)
-        if not is_predicting_head and not is_recurrent_head and not point_wise(d.attn_pattern):
-            label_types += [normalized_attn_labels, 'attn_labels']
+            # if head_label_type not in head_label_types: head_label_types.add(head_label_type) 
+    else:
+        label_types = [None]
     # if is_predicting_head: label_types += ['attn_labels:attribute_k']
     if is_predicting_head and d.attn_pattern.startswith('bos->query'): label_types += ['labels']  # mqy TODO
     return label_types
@@ -2053,6 +2054,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
 
     top_data = []
     for i, (layer, head, score) in enumerate(zip(layers, heads, scores)):
+        if score < threshold_score: continue
         d = AttrData(step=pd.step + 1, topi=i, layer=layer, head=head, H=H, top_score=score)
         d._attn_pattern, d._attr_ap_score = 'unk', 0.  # used for sorting
         if head < H:
@@ -2083,7 +2085,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
 
     if True: #pd.step < 1 or pd.step == 1 and pd.attn_pattern in ['bos->tgt', 'bos->query']:
         for d in top_data:
-            if d.top_score < threshold_score: continue
+            # if d.top_score < threshold_score: continue
             label_types = get_label_types(parent, d, k_shot=k_shot)
             for label_type in label_types:
                 _d = deepcopy(d)
@@ -2153,22 +2155,20 @@ def filter_fn(p, c):
         # p.step == 0 and pap.startswith('B->A0') and (ap.startswith('B->A0') and c.ap_score > 0.4 or ap == 'B->B' and c.ap_score > 0.6 or ap in ['B->Q', 'B->A]']) or \
     # return  p.step < 1 or (p.step == 1 and ap in ['B->s2'] ) or (p.step == 2 and ap in ['s2->s1+','s2->s1'])  # ioi task
 
-# def filter_fn(p, c):
-#     if c.layer == 0 or c.head == c.H: return False
-#     pap, ap = abbreviate_attn_pattern(p.attn_pattern or ''), abbreviate_attn_pattern(c.attn_pattern)
-#     return p.step == -1 and ap.startswith('B->A0') and c.ap_score > 0.3 and c.top_score > 0.5 or \
-#         p.step == 0 and pap.startswith('B->A0') and (ap.startswith('B->A0') and c.ap_score > 0.4 or ap == 'B->B' and c.ap_score > 0.6 or ap in ['B->Q', 'B->A]']) or \
-#         p.step == 1 and pap == 'B->Q' and ap == 'Q->T'
-
-def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=0.3,
+def attribute_tree(data_tuples, model, node, max_step, filter_fn, topk=10, threshold_score=0.3,
                 k_shot=None, attribute_k=False, mix=True, device=None, verbose=True):
     blocks = model.transformer.h
     L, H = len(blocks), blocks[0].attn.num_heads
     device = device or model.lm_head.weight.device
     d = node.data; node_key = node2key(node)
     *_, o =  data_tuples[0]
-    _topk = round(topk * (d.layer if not isinstance(d.layer, Iterable) else max(d.layer)) / L)
-    if len(node.children) == 0: # d.attr is None:
+    _topk = topk # round(topk * (d.layer if not isinstance(d.layer, Iterable) else max(d.layer)) / L)
+    
+    attributed_heads = get_root(node).data.attributed_heads
+    attributed_head = (str(d.layer), str(d.head), d.attn_pattern, d.label_type, d.attribute_k)
+    if attributed_head in attributed_heads:
+        print('In attribute_tree: already attributed, skip', attributed_head)
+    if len(node.children) == 0 and attributed_head not in attributed_heads:
         with Timer(f'In attribute_tree: attribute_step {node.name}, topk={_topk}'):
             d.attr = mr(attribute_step)(data_tuples, model, node)
         d.top_heads = list(zip(*topk_md(get_head_mlp_attr(d), _topk)[:2]))
@@ -2200,6 +2200,8 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
         expand_node(data_tuples, node, topk=_topk, threshold_score=threshold_score,
             k_shot=k_shot, attribute_k=attribute_k, add_dummy_nodes=True, verbose=verbose)
 
+        if d.label_type is not None: attributed_heads.add(attributed_head)
+
     if d.step == max_step: return
     children = [c for c in node.children if not c.data.dummy and not c.data.mixed and filter_fn(d, c.data)]
     if mix:
@@ -2215,15 +2217,15 @@ def attribute_tree(data_tuples, model, node, max_step, topk=10, threshold_score=
         children = _children
 
     for c in children:
-        attribute_tree(data_tuples, model, c, max_step, topk=topk, threshold_score=threshold_score,
+        attribute_tree(data_tuples, model, c, max_step, filter_fn, topk=topk, threshold_score=threshold_score,
             k_shot=k_shot, attribute_k=attribute_k, mix=mix, device=device, verbose=verbose)
 
-def attribute_tree_on(data_tuples, model, node, max_step, device='cpu', **kwargs):
+def attribute_tree_on(data_tuples, model, node, max_step, filter_fn, device='cpu', **kwargs):
     if node is None: node = add_node(None, label_type='labels')
     try:
         if device is not None and device != 'cpu': switch_model_to(model, device)
         with Timer('attribute_tree'):
-            attribute_tree(data_tuples, model, node, max_step, **kwargs)
+            attribute_tree(data_tuples, model, node, max_step, filter_fn, **kwargs)
     finally:
         if device is not None and device != 'cpu': switch_model_to(model, 'cpu')
     return node
