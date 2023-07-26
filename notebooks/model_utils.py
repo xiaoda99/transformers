@@ -32,7 +32,7 @@ import einops
 from einops import rearrange
 
 from LLAMATokenizer import LLAMATokenizer
-from transformers import LlamaTokenizer
+from transformers import LlamaTokenizer, GPT2Tokenizer
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 from transformers.models.gpt_neo.modeling_gpt_neo import GPTNeoSelfAttention, GPTNeoBlock
 from transformers.models.gptj.modeling_gptj import GPTJAttention, GPTJBlock, GPTJModel
@@ -60,6 +60,7 @@ class Outputs:
     head_outputs: tuple = ()
     intermediates: tuple = ()
     mlp_outputs: tuple = ()
+    ln_states: tuple = ()
     hidden_states: tuple = ()
     attentions: tuple = ()
     logits: torch.FloatTensor = None
@@ -234,6 +235,14 @@ def unify(model):
             for old_name, new_name in [('hidden_size', 'embed_dim'), ('o_proj', 'out_proj')]:
                 setattr(self, new_name, getattr(self, old_name))
 
+def unify_tokenizer(tokenizer):
+    if isinstance(tokenizer, LlamaTokenizer):
+        tokenizer.newline_token = '<0x0A>'
+        tokenizer.newword_prefix = '▁'
+    elif isinstance(tokenizer, GPT2Tokenizer):
+        tokenizer.newline_token = 'Ċ'
+        tokenizer.newwrod_prefix = 'Ġ'
+
 def get_device_map(model_name='transformer', emb_name='wte', layer_name='h', n_layers=60,
                    ln_name='ln_f', head_name='lm_head', devices=[0, 1]):
     if len(devices) == 1: return {model_name: devices[0], head_name: devices[0]}
@@ -303,17 +312,26 @@ def switch_model_to(model, device):
     switch_module_to(model.transformer, 'ln_f', device)
     switch_module_to(model, 'lm_head', device)
 
-def scaled_ln(ln, x, scaled=True):
-    if not scaled: return ln(x)
+def scaled_ln(ln, x, mean=None, std=None, scaled=True):
+    # if not scaled: return ln(x)
     self = ln
-    mean = x.mean(dim=-1, keepdim=True) if hasattr(self, 'bias') else 0. # LlamaRMSNorm
-    var = ((x - mean).to(dtype=torch.float32) ** 2).mean(dim=-1, keepdim=True)  # to prevent **2 overflow in fp16
-    if not hasattr(self, 'eps'): self.eps = self.variance_epsilon  # LlamaRMSNorm
-    std = (var + self.eps).sqrt()#.to(dtype=x.dtype)
-    std = std[-1:].detach()  # use the std of the last original (unscaled) example in the batch
+    state = {}
+    if mean is None:
+        if hasattr(self, 'bias'):
+            mean = x.mean(dim=-1, keepdim=True)
+            state['mean'] = mean
+            # if scaled: mean = mean[-1:].detach()  # # use the mean of the last original (unscaled) example in the batch or not?
+        else:
+            mean = 0. # LlamaRMSNorm
+    if std is None:
+        var = ((x - mean).to(dtype=torch.float32) ** 2).mean(dim=-1, keepdim=True)  # to prevent **2 overflow in fp16
+        if not hasattr(self, 'eps'): self.eps = self.variance_epsilon  # LlamaRMSNorm
+        std = (var + self.eps).sqrt()#.to(dtype=x.dtype)
+        state['std'] = std
+        if scaled: std = std[-1:].detach()  # use the std of the last original (unscaled) example in the batch
     y = ((x - mean) / std).to(dtype=x.dtype) * self.weight
     if hasattr(self, 'bias'): y = y + self.bias
-    return y
+    return y#, state
 
 def scaled_ln_wrapper(ln): return lambda x: scaled_ln(ln, x)
 
@@ -793,7 +811,8 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
     hidden_states = (hidden_states,) if hidden_states is not None else ()
     return Outputs(hidden_states=hidden_states, logits=logits, loss=loss)
 
-def lm_head_forward(model, hidden_states, logits_mask=None, labels=None, loss_reduction=None, compact=False, scaled=False):
+def lm_head_forward(model, hidden_states, logits_mask=None, labels=None, loss_reduction=None,
+                return_logit_diff=False, compact=False, scaled=False):
     if compact and labels is not None:
         if labels.size(0) != hidden_states.size(0): labels = einops.repeat(labels, '1 i -> b i', b=hidden_states.size(0))
         valid_flags = labels != -100
@@ -804,8 +823,21 @@ def lm_head_forward(model, hidden_states, logits_mask=None, labels=None, loss_re
     # Keep the logits and loss computation in fp32 to improve accuracy, same as attn_logits
     hidden_states = hidden_states.to(model.lm_head.weight.dtype)
     logits = model.lm_head(hidden_states)
-    if logits_mask is not None: logits = logits + logits_mask.to(logits.device, dtype=logits.dtype) #* (1e4 if logits.dtype == torch.float16 else 1e9)
-    loss = compute_loss(logits, labels, reduction=loss_reduction) if labels is not None else None
+    if logits_mask is not None:
+        logits = logits + logits_mask.to(logits.device, dtype=logits.dtype) #* (1e4 if logits.dtype == torch.float16 else 1e9)
+    else:
+        logits_mask = torch.zeros_like(logits)
+    loss = None
+    if labels is not None:
+        if return_logit_diff:
+            b = labels != -100
+            _logits, _labels = logits[b], labels[b]  # same as compact
+            _logits_mask = (logits_mask == 0)[b]
+            _logits_mean = (_logits * _logits_mask).sum(1) / _logits_mask.sum(1)  # bi->b
+            _logits = _logits - _logits_mean.unsqueeze(1)  # bi - b->b1 = bi
+            loss = _logits[torch.arange(_logits.size(0)), _labels]  # bi->b, per_example loss
+        else:
+            loss = compute_loss(logits, labels, reduction=loss_reduction)
     if compact:
         logits0 = logits.new(logits.size(0), valid_flags.size(1), logits.size(2)).zero_()
         logits0[valid_flags] = rearrange(logits, 'b i v -> (b i) v')
@@ -920,6 +952,8 @@ def to(a, device):
     if isinstance(a, torch.Tensor):
         dtype = torch.float32 if str(device) == 'cpu' else torch.float16
         return a.to(device, dtype=dtype)
+    elif isinstance(a, dict):
+        return {k: to(v, device) for k, v in a.items()}
     return a  # may be None
 
 def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, ranges=None, attribute_layer=None, 
@@ -936,7 +970,7 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, rang
     (hidden_states, inputs_embeds, position_embeds) = embed_forward(self, inputs) \
         if from_layer is None else (hidden_states, None, None)
     inputs_embeds = inputs_embeds.to(output_device)
-    all_hidden_states, intermediates, attn_outputs, mlp_outputs = (), (), (), ()
+    all_hidden_states, intermediates, attn_outputs, mlp_outputs, ln_states = (), (), (), (), ()
     attn_fwd_outputs = []
     for i, b in enumerate(self.h):
         if from_layer is not None and i < from_layer: continue
@@ -956,11 +990,12 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, rang
         # )
         # hidden_states = b(hidden_states, attention_mask=attention_mask, position_ids=position_ids)[0]
         h = b.ln_1(hidden_states)
+        # h, ln1_state = scaled_ln(b.ln_1, hidden_states, scaled=False)
         
         # attn_output, aw, _ = b.attn(h, attention_mask=attention_mask, position_ids=position_ids, output_attentions=True)
         # attn_fwd_output = (aw, None, None, None, None)
         attn_output, *attn_fwd_output = maybe_composed_attn_forward(attn_fwd_outputs, model, b, h, h, h,
-            by_head=by_head, head_mask=head_mask[i], attn_weights=attn_weights[i], ranges=ranges)  #TypeError: maybe_composed_attn_forward() missing 1 required positional argument: 'hv',因此在参数中加了个model nrk
+            by_head=by_head, head_mask=head_mask[i], attn_weights=attn_weights[i], ranges=ranges)
         attn_fwd_output = [to(o, output_device) for o in attn_fwd_output]
         attn_fwd_outputs.append(attn_fwd_output)
         
@@ -983,9 +1018,12 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, rang
             (attn_output + mlp_output + hidden_states)  # order matters!
         attn_output = to(attn_output, output_device); attn_outputs += (attn_output,)
         mlp_output = to(mlp_output, output_device); mlp_outputs += (mlp_output,)
+        # ln_states += ((to(ln1_state, output_device), to(ln2_state, output_device)),)
     all_attentions, values, attn_outs, head_inputs, head_outputs = zip(*attn_fwd_outputs)
     if output_hidden_states: all_hidden_states += (to(hidden_states, output_device),)
     hidden_states = self.ln_f(hidden_states)
+    # hidden_states, lnf_state = scaled_ln(self.ln_f, hidden_states, scaled=False)
+    # ln_states += (to(lnf_state, output_device),)
     if output_hidden_states: all_hidden_states += (to(hidden_states, output_device),)
 
     logits = model.lm_head(hidden_states)
@@ -997,7 +1035,7 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, rang
         inputs_embeds=inputs_embeds, position_embeds=position_embeds,
         attn_outputs=attn_outputs, values=maybe_none(values), attn_outs=maybe_none(attn_outs),
         head_inputs=maybe_none(head_inputs), head_outputs=maybe_none(head_outputs), 
-        intermediates=intermediates, mlp_outputs=mlp_outputs,
+        intermediates=intermediates, mlp_outputs=mlp_outputs, #ln_states=ln_states,
         hidden_states=all_hidden_states, attentions=all_attentions, 
         logits=logits, loss=loss,
     )
@@ -1196,8 +1234,8 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
                         labels_mask[:, bos_i + j] = (logits_ + (logits_bias * 2).to(logits_.device)).argmax() == ans_id
                         logits_mask[:, bos_i + j] = logits_bias
                     else:  # logits_mask promotes candidates of the current example
-                        # logits_mask[:, bos_i] = -1; logits_mask[:, bos_i, candidates[i]] = 0
-                        logits_mask[:, bos_i, candidates[i]] = 10.
+                        logits_mask[:, bos_i] = -1e4; logits_mask[:, bos_i, candidates[i]] = 0
+                        # logits_mask[:, bos_i, candidates[i]] = 1e3
                         masked_logits_ = logits_ + logits_mask[0, bos_i] #* (1e4 if logits.dtype == torch.float16 else 1e9)
                         if mask_logits: logits_ = masked_logits_; dist = logits_.softmax(-1)
                         # amend labels_mask with masked_logits which is used in attribution by default
@@ -1219,7 +1257,7 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
         loss = (ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls))
     else:
         loss = compute_loss(logits, labels, reduction=loss_reduction)
-        loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100].tolist()  # 'none'
+        loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100]#.tolist()  # 'none'
         
     if verbose:
         print(loss, np.array(top1_corrects[k_shot_len:]).mean())
@@ -1272,6 +1310,7 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
     # logits_mask is used when rel1 is equal relation and cxt_len > 1 (checked in make_data_tuple)
     cxt, query, cands, *_ = examples[0]
     if cands is not None and cands[-2] == cands[-1] and logits_mask is not None: # rel1 is copy
+        # print('In predict: set logits_mask')
         o.logits_mask = logits_mask
     # once evaluation completes, revise labels to use only correctly predicted labels for subsequent attribution
     if labels_mask is not None:
@@ -1499,6 +1538,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     blocks = model.transformer.h; H = blocks[0].attn.num_heads
     o = outputs
     assert len(o.mlp_outputs) > 0 or len(o.hidden_states) > 2  # latter for forward_only
+    has_mask = any(m is not None for m in [embed_mask, mlp_mask, head_mask, neuron_mask, attn_weights])
     if output_layer is None: _l = len(o.mlp_outputs) or len(o.hidden_states) - 2
     else: _l = max(output_layer) if isinstance(output_layer, Iterable) else output_layer
     l_ = from_layer
@@ -1513,7 +1553,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     if on_gpu: mu = mem_usage(device)
 
     if forward_only:
-        output = einsum('bie,b->bie', o.hidden_states[_l], mlp_mask.mean(1))  # 1ie,(bl->b)->bie
+        output = to(einsum('bie,b->bie', o.hidden_states[_l], mlp_mask.mean(1)), device)  # 1ie,(bl->b)->bie
         if labels is not None: logits, loss = lm_head_forward(model, output, **kwargs)
         return Outputs(hidden_states=(output,), logits=logits, loss=loss)
 
@@ -1576,7 +1616,12 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         if blocks[l_].attn.out_proj.bias is not None:
             bias = rearrange([blocks[i].attn.out_proj.bias for i in range(l_, _l)], 'l e -> l 1 e')
             attn_outputs = attn_outputs + einsum(f'l1e->{kept_dim}1e', bias)
-    if l_ > 0:
+    else:  # for logit attribution
+        attn_outputs = torch.cat([einsum('bnid,nde->bnie', to(o.attn_outs[i], device),
+            rearrange(blocks[i].attn.out_proj.weight, 'e (n d) -> n d e', n=H))  # wo
+            for i in range(l_, _l)], dim=0)  # [1nie]*l->lnie
+        
+    if has_mask and l_ > 0:
         prev_attn_outputs = einsum(f'lie,bi->b{kept_dim}ie',
             to(cat(o.attn_outputs[: l_]), device), embed_mask.clone().detach())
         attn_outputs = combine_fn([prev_attn_outputs, attn_outputs])
@@ -1584,15 +1629,20 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
     if mlp_mask is not None:
         mlp_outputs = einsum(f'lie,bl->b{kept_dim}ie',
             to(cat(o.mlp_outputs[: _l]), device), mlp_mask[:, : _l])
-    if reshape:  # for head amplication, obsolete
-        assert reduce_fn == torch.cat
-        L = (torch.einsum('bli->l', mlp_mask) > 0).sum().item() \
-            if mlp_mask is not None and truncate_layers else len(outputs.mlp_outputs)
-        attn_outputs = rearrange(head_outputs[:, :L], '1 l n i e -> l n i e')
-        mlp_outputs = rearrange(mlp_outputs[:, :L], '1 l i e -> l 1 i e')
-        padded_embed_output = embed_output.new(*((L,) + embed_output.size())).zero_() # l1ie
-        padded_embed_output[0] = embed_output
-        output = torch.cat([attn_outputs, mlp_outputs, padded_embed_output], dim=1) # lnie,l1ie,l1ie->l(n+2)ie
+    else:  # for logit attribution
+        mlp_outputs = to(cat(o.mlp_outputs[l_: _l]), device)  # [1ie]*l->lie
+
+    if not has_mask: # or reshape:  # for logit attribution or head amplication
+        reduce_fn = torch.cat
+        # L = (torch.einsum('bli->l', mlp_mask) > 0).sum().item() \
+        #     if mlp_mask is not None and truncate_layers else len(outputs.mlp_outputs)
+        # attn_outputs = rearrange(head_outputs[:, :L], '1 l n i e -> l n i e')
+        mlp_outputs = rearrange(mlp_outputs, 'l i e -> l 1 i e')
+        # padded_embed_output = embed_output.new(*((L,) + embed_output.size())).zero_() # l1ie
+        # padded_embed_output[0] = embed_output
+        # output = torch.cat([attn_outputs, mlp_outputs, padded_embed_output], dim=1) # lnie,l1ie,l1ie->l(n+2)ie
+        output = torch.cat([attn_outputs, mlp_outputs], dim=1) # lnie,l1ie->l(n+1)ie
+        output = rearrange(output, 'l n i e -> (l n) i e')
     elif output_layer is not None:  # default
         assert reduce_fn == sum
         if isinstance(output_layer, Iterable):
@@ -1601,7 +1651,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
                                 mlp_outputs[:, : l].sum(1),  # blie->bie
                                 ]) for l in output_layer]
         else:
-            output = reduce_fn([embed_output, attn_outputs, mlp_outputs])
+            output = reduce_fn([embed_output, attn_outputs, mlp_outputs])  # bie
     else:  # for compatibility
         if reduce_fn == sum:
             attn_outputs = torch.einsum('blnie->bie', head_outputs)
@@ -1710,13 +1760,14 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, forward_on
         ['attn_weights', 'head_mask', 'neuron_mask', 'mlp_mask', 'embed_mask']})
     return attr, hidden_states0, hidden_states, ys, logits
 
-def attribute2(forward_fn, model, x, post_forward_fn):
+def logit_attribute(forward_fn, model, post_forward_fn):
     if isinstance(post_forward_fn, (list, tuple)):
         post_forward_fn = compose_forward_fns(post_forward_fn, scaled=False)
     with torch.no_grad():
-        o = forward_fn(model, **x)
+        o = forward_fn(model)
         y, logits = post_forward_fn(model, o)
-    assert y.ndim == 1
+    assert y.ndim == 1  # (l(n+1))
+    return y
     L, H = len(model.transformer.h), model.transformer.h[0].attn.num_heads
     # assert (y.size(0) - 1) % (H + 1) == 0
     # to_layer = (y.size(0) - 1) // (H + 1) # by solving equation b = 1 + ln + l
@@ -1737,7 +1788,7 @@ def attributions_to(attr, device='cpu'):
     return attr
 
 def attribute_step(data_tuple, model, node, attribute_k=False, 
-                staged=True, attr_heads=None, device=None):
+                staged=True, attr_heads=None, do_logit_attribution=False, device=None):
     L, H = len(model.transformer.h), model.transformer.h[0].attn.num_heads
     output_layer = node.data.layer
     to_layer = max(output_layer) if isinstance(output_layer, Iterable) else output_layer
@@ -1770,7 +1821,23 @@ def attribute_step(data_tuple, model, node, attribute_k=False,
             OrderedDict((lh, attr.attn[i]) for i, lh in enumerate(attr_heads))
             # attr.attn: kij. Keep only topk attn_attr to save memory
     del attr.attn  # avoid being reduced by reduce_objects
-    return attr
+    if not do_logit_attribution or attr_heads is not None: return attr
+
+    to_layer = min(output_layer) if isinstance(output_layer, Iterable) else output_layer
+    attrs = []
+    for l in range(from_layer, to_layer):  # compute layer-wise to save GPU mem
+        fwd_fn = partial(sum_forward, outputs=o, labels=labels,
+                    from_layer=l, output_layer=l + 1, device=device)
+        attrs.append(attribute(fwd_fn, model, fns))
+    attrs = torch.cat(attrs).view(to_layer - from_layer, -1)  # l(n+1)
+    assert attrs.size(1) == H + 1, str(attrs.size())
+    logit_attr = Attributions(head=attrs[:, :H],  # ln
+                            mlp=attrs[:, H])  # l
+    logit_attr = attributions_to(logit_attr)
+    if from_layer > 0:
+        logit_attr.head = torch.cat([torch.zeros(from_layer, H), logit_attr.head])
+        logit_attr.mlp = torch.cat([torch.zeros(from_layer), logit_attr.mlp])
+    return attr, logit_attr
 
 def get_x(key, outputs, attr_heads=None, to_layer=None, device=torch.device('cpu')):
     L = len(outputs.hidden_states)
@@ -2013,18 +2080,18 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.4): # use fixed k_shot
         all(point_wise(n.data.attn_pattern) and 
             n.data.label_type == ('labels' if is_root(n.parent) else None)
             for n in node2path(parent))
-    is_recurrent_head = not is_root(parent) and parent.data.label_type == get_normalized_attn_labels(parent.data) and \
+    is_recurrent_head = not is_root(parent) and parent.data.label_type in ['attn_labels', get_normalized_attn_labels(parent.data)] and \
         not point_wise(d.attn_pattern) and d.attn_pattern == parent.data.attn_pattern  # e.g. bos->ans0 head below bos->ans0 head
     icl_score = d.icl_score or 0
     # if is_predicting_head or is_recurrent_head: label_types = [normalized_attn_labels]
     if is_root(parent) and point_wise(d.attn_pattern):
         label_types = ['labels']  # e.g. bos->bos at step 0
     elif icl_score > icl_score_thld or is_predicting_head or is_recurrent_head:
-        label_types = ['attn_labels', normalized_attn_labels] if not point_wise(d.attn_pattern) else []
+        label_types = ['attn_labels', normalized_attn_labels][:1] if not point_wise(d.attn_pattern) else [None]
         activating_attn_labels = f'attn_labels:{parse_attn_pattern(d.attn_pattern)[0]}->~<s>,{min(3, k_shot)}'
         # head_label_types = get_root(parent).data.head_label_types
         # head_label_type = (d.layer, d.head, activating_attn_labels)
-        if True: # head_label_type not in head_label_types: # mqy test recurrent B->A0
+        if point_wise(d.attn_pattern): # head_label_type not in head_label_types: # mqy test recurrent B->A0
             label_types += [activating_attn_labels]
             # if head_label_type not in head_label_types: head_label_types.add(head_label_type) 
     else:
@@ -2072,8 +2139,8 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
                 d.icl_score = 0 if is_intermediary(d.attn_pattern) or is_relating(d.attn_pattern) else \
                     get_icl_score(mr(get_head_matching_scores)(data_tuples, d.attn_pattern,
                     layer=layer, head=head, averaged=False, k_shot=0), k_shot=k_shot)
-                d.sensitivity = mr(get_sensitivity)(data_tuples, layer, head,
-                    d.attn_pattern, node2key(parent), k_shot=k_shot).item()
+                # d.sensitivity = mr(get_sensitivity)(data_tuples, layer, head,
+                #     d.attn_pattern, node2key(parent), k_shot=k_shot).item()
         else:  # mlp
             # x->x, convenient for get_possible_attn_patterns and point_wise
             d.attn_pattern, d.ap_score = pd.all_attn_patterns[-1], 1.
@@ -2562,8 +2629,10 @@ def plot_attn(data_tuple, tokenizer, l, h, attn_pattern=None, k_shot=0):
 
 def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
                 k_shot=0, attribute_k=False, plot_attr=True):
+    device = model.lm_head.weight.device
     text, input_ids, labels, ranges, *args, o = data_tuple
-    tokens = [t.replace('Ġ', '').replace('Ċ', '-'*12)
+    labels = labels.to(device)
+    tokens = [t.replace(tokenizer.newword_prefix, ' ').replace(tokenizer.newline_token, '-'*12)
         for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
     aw_size = o.attentions[0][0, 0].size()  # l*[bnij]->ij
     ystart, ystop = 0, aw_size[0]
@@ -2587,7 +2656,8 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         if isinstance(logits, (list, tuple)): logits = sum(logits)
         if logits.size(-1) == model.lm_head.out_features:  # lm_logits
             # logits = logits + o.logits_mask #* (1e4 if logits.dtype == torch.float16 else 1e9)
-            ap_scores, *_ = show_predictions(tokenizer, *args, logits=logits[-1:], labels=labels, k_shot=k_shot, topk=4, sep='\t')
+            ap_scores, *_ = show_predictions(tokenizer, *args, logits=logits[-1:], labels=labels,
+                k_shot=k_shot, topk=4, loss_reduction='none', sep='\t')
         elif logits.size(-1) == input_ids.size(1): # attn_logits, bij
             attn_pattern = node2path(node)[-1].data.attn_pattern or 'bos->ans0'
             attn_labels, ranges_q = attn_pattern2labels(ranges, attn_pattern, aw_size, k_shot=0)

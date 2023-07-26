@@ -96,10 +96,13 @@ def logits_lens(arg_tuples, model, tokenizer, residual_types=['all', 'attn', 'ml
     print(f'tgt{tgt}')
     def _show_topk_rank(raw_logits, tokenizer, topk=10000, tgt=' Mary', head_idx='all', l_idx=None, token_idx=-1, topk_out=5):
         logits, pred_ids = torch.topk(raw_logits, topk, dim=-1)
-        tgts_idx = torch.tensor(tokenizer.encode(tgt))[:2] if not my_isinstance(tokenizer, LlamaTokenizer) else torch.tensor([tokenizer.convert_tokens_to_ids(tgt)])[0]
+        tgts_idx = torch.tensor([tokenizer.encode(_tgt)[0] for _tgt in tgt]) if not my_isinstance(tokenizer, LlamaTokenizer) else torch.tensor([tokenizer.convert_tokens_to_ids(tgt)])[0]
+        #print('tgt in rank', tgt, tgts_idx,  torch.tensor(tokenizer.encode(tgt)))
+        tgts_idx = tgts_idx.to(pred_ids.device)
         tgt_idx = torch.where(pred_ids[:1,token_idx] == tgts_idx.unsqueeze(1))[1]
         token_logits = raw_logits[0,token_idx]
         logits_diff = logits[0, token_idx, tgt_idx[0]] - logits[0, token_idx, tgt_idx[1]]
+        #print(l_idx, tgt_idx[0])
         rank = float(1/(tgt_idx[0]+1));
         pred_tokens = get_tokens_from_ids(pred_ids[0,token_idx][:topk_out], tokenizer, replace=False)
         lens_key = f'{l_idx}-{residual_type}-{head_idx}'
@@ -115,6 +118,7 @@ def logits_lens(arg_tuples, model, tokenizer, residual_types=['all', 'attn', 'ml
             heatd.append(confid); heat_texts.append(pred_tokens); ylabels.append(lens_key)
 
     def _logits_lens(hid, model):
+        hid = hid.to(model.device).half()
         return model.transformer.ln_f(hid) @ model.lm_head.weight.data.T
     o = outputs; core_logits, ranks, heatd, heat_texts, ylabels = {}, [], [], [],[]; L = len(model.transformer.h)
     _residual_types = ['all', 'attn', 'mlp']
@@ -150,10 +154,13 @@ def logits_lens(arg_tuples, model, tokenizer, residual_types=['all', 'attn', 'ml
     layer_diff2, attn_diff2, mlp_diff2, layer_diff, mlp_diff, attn_diff = map(torch.stack, [layer_diff2, attn_diff2, mlp_diff2, layer_diff, mlp_diff, attn_diff])
     head_diff2 = torch.stack(head_diff2) if head_diff2 else torch.tensor([0]) 
     logits_dict = dict(zip(['layer_diff2', 'attn_diff2', 'mlp_diff2', 'head_diff2', 'layer_ranks', 'head_ranks', 'mlp_ranks', 'attn_ranks', 'layer_diff', 'mlp_diff','attn_diff'],[layer_diff2, attn_diff2, mlp_diff2, head_diff2, layer_ranks, head_ranks, mlp_ranks, attn_ranks, layer_diff, mlp_diff, attn_diff]))
+    for k, v in logits_dict.items():
+        if isinstance(v, torch.Tensor):
+            logits_dict[k] = v.cpu().float()
     if verbose:
         for k, v in logits_dict.items(): print(k, v.shape if isinstance(v, torch.Tensor) else v)
     if heatmap:
-        heatd = torch.stack(heatd) # (L * 3, n) 
+        heatd = torch.stack(heatd).cpu().float() # (L * 3, n) 
         font_size=9; 
         if abs((heatd[:2].max() - heatd[:2].max()) / heatd[:2].max()) < 0.1: heatd[:2] = 0  # filter first emb and attn layer 
         if len(residual_types)==1: residual_idx = _residual_types.index(residual_types[0]); heatd=heatd[residual_idx::3]; heat_texts=heat_texts[residual_idx::3];ylabels=ylabels[residual_idx::3]
@@ -270,3 +277,349 @@ def construct_circuits(data_tuple, model, tokenizer, layers=None, heads=None, fr
             attentions.append(attention)
     html = cv.attention.attention_patterns(tokens=ts, attention=torch.stack(attentions))
     return html
+
+#base_nodes = ['A0]', 'A0+', 'Q]', 'B^', 'A]', 'S',  'S+', 'T', 'T+', 'A0', 'Q-', 'Q', 'Q+', 'B:s', 'B:t']
+#label_nodes, nodes, xs, ys, link_labels, links = [], [], [], [], [], {}
+## set base nodes
+#for layer_idx in range(1):
+#    nodes.extend(base_nodes)
+#    xs.extend(list(range(1,len(base_nodes)+1)))
+#    ys.extend([L]*len(base_nodes))
+#    
+#def scan_top_layer_nodes(parent, mode='top'):
+#    ns = {}
+#    for n in parent.children:
+#        if n.data.dummy: continue
+#        if isinstance(n.data.layer, int) and n.data.layer>57:continue
+#        if n.data.head == n.data.H:
+#            s, t = 'B', 'B'
+#            ap = 'mlp'
+#            continue
+#        else:
+#            ap = abbreviate_attn_pattern(n.data.attn_pattern)
+#            s, t = ap.split('->')
+#        l = n.data.layer if not isinstance(n.data.layer,list) else max(n.data.layer)
+#        t = t.replace('^', '')
+#        if mode == 'aggregate':
+#            for _s in [s]:
+#                if _s not in ns:
+#                    ns[_s] = [l]
+#                elif l not in ns[s]:
+#                    ns[_s].append(l)
+#        elif mode == 'top':
+#            if ns.get(s, 0)<l:  ns[s] = l
+##         if ns.get(t, L)>l:  ns[t] = l
+#    return ns
+#
+#def add_nodes(ns, nodes, xs, ys):
+#    for s, l in ns.items():
+#        key = f'{s}:{l}'
+#        if key not in nodes:
+#            if s=='B': s='B:s'
+#            _l = l if not isinstance(l,list) else max(l)
+#            nodes.append(key); xs.append(base_nodes.index(s)+1); ys.append(L-_l)
+#    
+#def plot_node(attr_node, depth=0, depths=[0,1,2,3,4], root_label_key='loss', inter_nodes={}, mode='attn_agg'):
+#    if depth not in depths: return
+#    def _node2key(n):
+#        return node2key(n).split(' > ')[-1].split(' ')[0] #+ '_' + abbreviate_attn_pattern(n.data.attn_pattern)
+##     print('node', node2key(attr_node), len(attr_node.children))
+#    for n in attr_node.children:
+#        if n.data.dummy: continue            
+##         if isinstance(n.data.layer, int) and n.data.layer>57: continue
+#        if n.data.head == n.data.H:
+#            s, t, ap = 'B', 'B', 'mlp'
+#        else:
+#            ap = abbreviate_attn_pattern(n.data.attn_pattern); s, t= ap.split('->')
+#        t = t.replace('^', '')
+#        if s in inter_nodes: s = f'{s}:{inter_nodes[s]}'
+#        if t in inter_nodes: t = f'{t}:{inter_nodes[t]}'
+#        if s == 'B': s= 'B:s'
+#        if t == 'B': t= 'B:s'
+#        si, ti, v = nodes.index(s), nodes.index(t), n.data.top_score
+#        if s!=t and s.startswith('B:') and 'attn' in root_label_key: si = nodes.index(root_label_key)
+#        v_str = f'{v:.2f}' if isinstance(v, float) else str(v)
+##         link_label = f'{n.data.layer}-{n.data.head}_{ap}'#_{v_str}'
+#        link_label = n.name
+#        if v is not None and v <=0.3:
+#            continue
+##         print(node2key(n), ap, n.data.layer, s, t, si, ti, v)
+#        if n.data.label_type is not None and 'attn' in n.data.label_type:
+#            color = 'red' 
+#        elif ap == 'mlp':
+#            color = 'green'
+#        elif s == t or (s=='B:t' and t == 'B:s'):
+#            color = 'yellow'
+#        else:
+#            color = 'grey'
+#        link_k = '_'.join(n.name.split(' ')[:4])
+#        if link_k not in links: 
+#            links[link_k] = (si, ti, v, link_label, color)
+#        if n.children:
+#            node_key = _node2key(n)
+#            label_node_key = root_label_key
+#            if n.data.label_type is not None and 'attn' in n.data.label_type: 
+#                if mode == 'attn_agg':
+#                    label_node_key = ap + '_attn'
+#                    if label_node_key not in nodes:
+#                        # create label node 
+#                        label_nodes.append(label_node_key)
+#                        nodes.append(label_node_key); xs.append(len(base_nodes) + len(label_nodes)); ys.append(L/2)
+#                        nodes.append(f'B-{n.data.layer}');xs.append(len(base_nodes));ys.append(L-n.data.layer if isinstance(n.data.layer, int) else L-max(n.data.layer))
+#                elif mode == 'attn_sep':
+#                    label_node_key = f'{ap}_attn_{n.data.layer}-{n.data.head}-{n.data.label_type}'
+#                    if label_node_key not in nodes:
+#                        # create label node 
+#                        label_nodes.append(label_node_key)
+#                        _l = n.data.layer if isinstance(n.data.layer, int) else max(n.data.layer)
+#                        nodes.append(label_node_key); xs.append(len(base_nodes) + len(label_nodes)); ys.append(L-_l)
+##                         nodes.append(f'B-{n.data.layer}');xs.append(len(base_nodes));ys.append(L-_l)
+#            # create inter-nodes 
+#            inter_nodes = scan_top_layer_nodes(n)
+#            add_nodes(inter_nodes, nodes, xs, ys)
+##             print('label_node_key', label_node_key)
+#            plot_node(n, depth=depth+1, depths=depths, root_label_key=label_node_key, inter_nodes=inter_nodes)
+## #               links.append((si, nodes.index(_node2key(attr_node)), v, l_label,'grey'))
+##                 links.append((nodes.index(_node2key(attr_node)), ti, v, l_label,'grey'))
+#        
+#plot_node(r.root, depths=[0,1,2])
+#links = links.values()
+## links = list(set(links)) # filter same links
+#links = [l for l in links if l[0]!=l[1]]  # filter B->B  
+#for i, n in enumerate(nodes): links.append((i,i,0.1,'null', 'grey')) # add base node links
+## update node label
+#labels = [f'{n}' for n,h,l in zip(nodes,xs,ys)]
+#customdata = []
+#for i, n in enumerate(nodes):
+#    texts = [f'0root-{n}']
+#    for link in links: 
+#        if i == link[0]:
+#            texts.append(f'{link[3]}')
+#    texts.sort()
+#    customdata.append('<br>'.join(texts))
+## rearange nodes and positions    
+#xs = np.array(xs)/(len(base_nodes)+len(label_nodes)) * 0.9
+#ys = np.array(ys)/L - 0.1; ys[base_nodes.index('B:s')] = 0.1
+#def rearange(xs, ys):
+#    for y in set(ys.tolist()):
+#        if y <=0.1 or y>=0.9:continue
+#        idxs = ys == y
+#        xs[idxs] = 0.1 + np.arange(0, len(xs[idxs])) / len(xs[idxs]) * 0.9
+#    return xs, ys
+## xs, ys = rearange(xs, ys)
+## for i, (x, y, n) in enumerate(zip(xs, ys, nodes)): 
+##     print(n, x, y)
+## print('xs', xs.max(), xs)
+## print('ys', ys.max(), ys)
+#print('labels', labels)
+## print('links', links)
+## Create the Sankey diagram
+#fig = go.Figure(data=[go.Sankey(
+#        node=dict(label=labels,x=ys,y=xs,customdata=customdata,hovertemplate='%{customdata}<br>'),
+#        link=dict(
+#            arrowlen=15,
+#            source=[l[0] for l in links],
+#            target=[l[1] for l in links],
+#            value=[l[2] for l in links],
+#            label=[l[3] for l in links],
+#            color=[l[4] for l in links],),
+#        arrangement='freeform',
+#        orientation = "v",)])
+## Customize the layout
+#fig.update_layout(title='Tree Structure (Sankey Diagram)',font=dict(size=12),height=1000,width=1000,)
+#
+
+def treeloop(node, ns=None):
+    if ns is None: ns = []
+    for n in node.children:
+        ns.append(n);treeloop(n, ns=ns)
+    return ns
+    
+def get_slice(r, name):
+    try:
+        if name == '*': b, e = 0, attn_size[0]
+        elif name.startswith('['): b, _ = getattr(r, name[1:]); e = b + 1
+        elif name.endswith(']'): _, e = getattr(r, name[:-1]); b = e - 1
+        elif name.endswith('+'): _, e = getattr(r, name[:-1]); b, e = e, e + 1
+        elif name.endswith('-'): b, _ = getattr(r, name[:-1]); b, e = b - 1, b
+        else: b, e = getattr(r, name)
+    except Exception as e:
+#         print(f'In attn_pattern2labels: name = {name} not in {[k for k, v in r.__dict__.items() if v]}?')
+        raise e
+    return slice(b, e) if not isinstance(b, Iterable) else [slice(_b, _e) for _b, _e in zip(b, e)]
+
+def get_x_symbols(root, ranges):
+    aps = [n.data.attn_pattern for n in treeloop(root)]
+    symbols = []
+    for ap in aps:
+        symbols.extend(ap.split('->'))
+    symbols = list(set(symbols))
+    symbols = [(s,get_slice(ranges, s).start) for s in symbols if not any([_s in s for _s in ['^', ']', 'unk']])]
+    symbols = sorted(symbols, key=lambda x:x[1])
+    symbols = [abbreviate_attn_pattern(s[0]) for s in symbols]
+    symbols = [s+']' for s in symbols] + ['A]'] + symbols
+    return symbols
+
+def compute_lines(root, x_labels, grid_shape, attn_colormap=None, x_interval=10, root_color=None, lines=None, depth=0, selector=[], root_bias=None):
+    sub_interval = 2
+    L, H = grid_shape
+    def cal_idx(s, bias=0):
+        return x_labels.index(s) * x_interval + bias
+    def in_mixed_node(node):
+        return any([(node.data.layer, node.data.head) in list(zip(n.data.layer, n.data.head)) for n in root.children if n.children and isinstance(n.data.layer, list)])
+    #def _has_attn(n):
+    #    return any([ f'{n.data.layer}-{n.data.head} {abbreviate_attn_pattern(n.data.attn_pattern)} attn' in _n.name for _n in root.children])
+    if lines is None: lines = {}
+    if depth >=4: return
+    root_name = 'root' if depth==0 else node2key(root)
+    root_s, root_t = ("B", "B") if depth==0 else abbreviate_attn_pattern(root.data.attn_pattern).split('->')
+    root_t = root_t.replace('^', ']').replace(']]',']')
+    if root_s.endswith(']') and root_t.endswith('+'): root_t += ']'
+    #print('root layer head', root.data.layer, root.data.head, node2key(root))
+    root_layers = [root.data.layer] if not isinstance(root.data.layer, list) else root.data.layer#max(root.data.layer) assume mixed node sorted by layer-head
+    root_heads = [root.data.head] if not isinstance(root.data.head, list) else root.data.head#max(root.data.head)
+    #root_ap = abbreviate_attn_pattern(root.data.attn_pattern)
+    if root_color is None: root_color = 'blue'
+    if root_bias is None: 
+        root_xbias, root_ybias = 0, 0 #depth * sub_interval, depth * sub_interval
+    else:
+        root_xbias, root_ybias = root_bias
+    for n in root.children:
+        if n.data.dummy: continue  
+        #if n.data.top_score is not None and n.data.top_score < 0.5: continue
+        if n.data.head == n.data.H:
+            s, t, ap = 'B', 'B', 'mlp'
+            #continue
+        else:
+            ap = abbreviate_attn_pattern(n.data.attn_pattern); s, t= ap.split('->')
+        t = t.replace('^', ']').replace(']]',']')
+        if s.endswith(']') and t.endswith('+'): t += ']'
+        new_attn_circuit_color = None 
+        ls, hs = (n.data.layer , n.data.head) if isinstance(n.data.layer, list) else ([n.data.layer], [n.data.head]) 
+        for mixed_idx, (l, h) in enumerate(zip(ls, hs)):
+            l_name = node2key(n) 
+            l_name = l_name.replace('attn:B->~<s>', 'attn').replace('attn/example', 'attn').replace('attn/ans0s','attn')# merge attn, example and ~<s>
+#             print('lname', l_name)
+            if not n.children and n.data.label_type is not None and 'attn' in n.data.label_type:
+                l_name += '_attr0'
+            l_name += f'_depth{depth}_{l}-{h}_'+data2str(n.data)
+            if l_name in lines: 
+                print('skip', node2key(n))
+                continue
+            if n.children and n.data.label_type is not None and 'attn' in n.data.label_type:
+                color = 'red'
+                xbias, ybias = root_xbias+sub_interval, root_ybias+sub_interval
+                new_attn_circuit_color = attn_colormap[ap]
+            else:
+                color = root_color 
+                xbias, ybias = (root_xbias, root_ybias)
+                #if ap == 'mlp': xbias += 1 #= x_interval-1
+            x = [cal_idx(s, xbias), cal_idx(t, xbias)]
+            y = [l*H+h-ybias] * len(x)
+            vertical = False
+            width = n.data.top_score if n.data.top_score is not None else 1
+            if n.data.top_score is None: print('top score none', node2key(n))
+            lines[l_name] = [x,y, color, depth, vertical, width]
+            # add vertical lines for nodes without children
+            if not n.children and not in_mixed_node(n) and ap != 'mlp':
+                x = [cal_idx(t, xbias), cal_idx(t, xbias)]
+                y = [l*H+h-ybias, 0] 
+                lines[l_name+'to-symbols'] = [x,y, color, depth, True, width]
+            # add vertical lines
+            for root_layer, root_head in zip(root_layers, root_heads):
+                if n.children and n.data.label_type is not None and 'attn' in n.data.label_type:
+                    continue
+                if ap == 'mlp':continue
+                if depth==0:
+                    x = [cal_idx(root_s), cal_idx(root_t)]
+                    y = [L*H-ybias, l*H+h-ybias]
+                else:
+                    if root.data.label_type is not None and 'attn' in root.data.label_type: # B->A0 attn
+                        if n.children:  #continue 
+                            mixed = len(ls)>1
+                            if not mixed or mixed_idx != len(ls)-1: continue # do not draw vertical line for single attn node who has children
+                            if n.data.label_type is None or 'attn' not in n.data.label_type: continue
+                            color = 'red' # add mixed vertical line eg. A0 -> A0
+                            x = [cal_idx(t, xbias), cal_idx(t, xbias)]
+                            y = [ls[0]*H+hs[0]-ybias, ls[-1]*H+hs[-1]-ybias]
+                        else:
+                            x = [cal_idx(root_s, root_xbias), cal_idx(s,root_xbias)] # B
+                            color = root_color
+                            y = [root_layer*H + root_head - ybias, l*H+h-ybias]
+                    else: # B->Q or B->A]^ or B->B
+                        x = [cal_idx(root_t, xbias), cal_idx(root_t, xbias)] # Q or A]^
+                        color = root_color 
+                        y = [root_layer*H + root_head - ybias, l*H+h-ybias]
+                    if color == 'red':
+                        print(n.data.label_type, x, y, ap, l_name, root_xbias, root_ybias, root_layer, root_head)
+                lines[f'{root_name}>>{l_name}-{root_layer}-{root_head}'] = [x, y, color, depth, True, width]
+        if n.children:
+#             print('has children', n.name)
+            if selector and node2key(n) not in selector: continue
+            _root_color = new_attn_circuit_color if new_attn_circuit_color is not None else root_color
+            compute_lines(n, x_labels, grid_shape, attn_colormap=attn_colormap, root_color=_root_color , x_interval=x_interval, lines=lines, depth=depth+1, selector=selector, root_bias=(xbias, ybias))   
+    return lines
+
+def scan_attn_patterns(node, attn_nodes=None, patterns=None, ap='B->A0'):
+    if patterns is None: return []
+    if attn_nodes is None: attn_nodes = []
+    for n in node.children:
+        if node2key(n).startswith(patterns) and (ap is None or ap == abbreviate_attn_pattern(n.data.attn_pattern)):
+            attn_nodes.append(node2key(n))
+        if n.children:
+            scan_attn_patterns(n, attn_nodes, patterns=patterns, ap=ap)
+    return attn_nodes
+
+# plot circuits
+def plot_attr_circuit(root, grid_shape, ranges, depth=0, patterns=None, selectors=[], selector_ap=None, x_interval=10): # patterns=['28-8 attn'], ap='B->A0'
+#     x_labels = ['A0]', 'A0+', 'Q]', 'B^', 'A]', 'S',  'S+', 'T', 'T+', 'A0', 'Q-', 'Q', 'Q+', 'B']
+    depth_selectors = ['all', 'depth0', 'depth1', 'depth2', 'depth3']
+    selector = scan_attn_patterns(root, patterns=patterns, ap=selector_ap)
+    #print('selector', selector)
+    #text, input_ids, labels, ranges, *_, o = r.data_tuples[0]
+    x_labels = get_x_symbols(root, ranges[0])
+    L, H = grid_shape
+    #L, H = len(model.transformer.h), model.transformer.h[0].attn.num_heads
+    attn_colormap= {'B->A0':'green', 'B->Q':'orange', 'Q->A0':'purple'}
+    lines ={}
+    lines = compute_lines(root, x_labels, (L,H), attn_colormap=attn_colormap, lines=lines, depth=depth, x_interval=x_interval, selector=selector)
+    y_axis_range = [-H, (L+2) * H]; y_tickvals = list(range(0, (L+1)*H, H)); y_ticktext = [f'{int(val/H):02d}L' for val in y_tickvals] 
+    fig = go.Figure()
+#     for i, label in enumerate(x_labels):
+#         fig.add_trace(go.Scatter(x=[i*x_interval], y=[L*H], mode="markers+text", text=[label], textposition="top center"))
+    attn_traces = dict((k,[]) for k in selectors)
+    depth_traces = dict((k,[]) for k in depth_selectors)
+    for idx, (name, line) in enumerate(lines.items()):      
+        x, y, color, depth, vertical, width = line
+        for k in selectors:
+            attn_traces[k].append(name.startswith(k))
+        for k in depth_selectors:
+            selected = True if k == 'all' or f'depth{depth}' <= k else False
+            depth_traces[k].append(selected)
+        if len(x) == 2 and x[0] == x[1] and y[0]==y[1]:
+            color = "yellow" if '-m' in name else 'black'
+            mode = "markers+text"
+            tcolor = 'black'
+        else:
+            tcolor = 'grey' if x[0] == x[1] else 'black'
+            mode = "lines+markers+text"
+        text = '' if color == 'red' or vertical else name.split('_')[-2] 
+        opacity = width 
+        fig.add_trace(go.Scatter(x=x, y=y, opacity=opacity, mode="lines+markers+text", customdata=["",name.split('_')[-2:]], text=["",text], name=name.split(' > ')[-1][:10], textposition="top right",  line=dict(color=color, dash='solid', width=2),textfont=dict(size=12,color=tcolor)))
+#     fig.update_traces(visible=False, selector=dict(name='depth1'))  
+    fig.update_traces(hovertemplate="<br>".join(["%{customdata}","X: %{x}","Y: %{y}"]))
+    fig.update_layout(
+        title="LLM Attribution Circuit Diagram",
+        showlegend=False,height=1000,width=1000,
+        xaxis=dict(range=[-1, len(x_labels)* x_interval + x_interval],zeroline=True,showgrid=True,dtick=x_interval,tickvals=list(range(0, len(x_labels)*x_interval, x_interval)),ticktext=x_labels),
+        yaxis=dict(range=y_axis_range, zeroline=True, showgrid=True,dtick=H,tickvals=y_tickvals, ticktext=y_ticktext),
+        updatemenus=[{'buttons': [{
+                    'args': [{'visible': attn_traces[sk]}],
+                    'label': sk,'method': 'update'}  for sk in selectors],
+                    'type':'buttons', 'direction': 'right','showactive': True,'x': 0.1,'xanchor': 'right','y': -0.02,'yanchor': 'top'},
+                     {'buttons': [{
+                    'args': [{'visible': depth_traces[sk]}],
+                    'label': sk,'method': 'update'}  for sk in depth_selectors],
+                    'type':'buttons', 'direction': 'left','showactive': True,'x': 0.5,'xanchor': 'right','y': -0.06,'yanchor': 'top'}
+                    ])
+    return fig

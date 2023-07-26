@@ -880,7 +880,10 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         return ranges
 
     cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
-    if trimmed: return Ranges(bos = locate(tokens, bos_token, return_last=True))
+    if trimmed:
+        ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
+        ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
+        return ranges
     rel_word = 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
     if not case_sensitive: tokens = [t.lower() for t in tokens]
     whole_string = "".join(t for t in tokens)
@@ -893,6 +896,7 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word in whole_string else None,
         example = (0, len(tokens))
     )
+    ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
     if candidates is not None:
         max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
         ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
