@@ -460,7 +460,7 @@ def get_x_symbols(root, ranges):
     symbols = [s+']' for s in symbols] + ['A]'] + symbols
     return symbols
 
-def compute_lines(root, x_labels, grid_shape, attn_colormap=None, x_interval=10, root_color=None, lines=None, depth=0, selector=[], root_bias=None):
+def compute_lines(root, x_labels, grid_shape, attn_colormap=None, step=0, x_interval=10, cc_ap=None, all_cc_aps=[], lines=None, depth=0, selector=[], root_bias=None):
     sub_interval = 2
     L, H = grid_shape
     def cal_idx(s, bias=0):
@@ -471,15 +471,24 @@ def compute_lines(root, x_labels, grid_shape, attn_colormap=None, x_interval=10,
     #    return any([ f'{n.data.layer}-{n.data.head} {abbreviate_attn_pattern(n.data.attn_pattern)} attn' in _n.name for _n in root.children])
     if lines is None: lines = {}
     if depth >=4: return
+    print('raw_root_ap', f'step{step}', root.data.attn_pattern, root.data.label_type, node2key(root))
     root_name = 'root' if depth==0 else node2key(root)
-    root_s, root_t = ("B", "B") if depth==0 else abbreviate_attn_pattern(root.data.attn_pattern).split('->')
+    raw_root_ap = 'B->B' if depth==0 else abbreviate_attn_pattern(root.data.attn_pattern)
+    root_s, root_t = raw_root_ap.split('->')
+    #root_s, root_t = ("B", "B") if depth==0 else raw_root_ap.split('->')
     root_t = root_t.replace('^', ']').replace(']]',']')
     if root_s.endswith(']') and root_t.endswith('+'): root_t += ']'
     #print('root layer head', root.data.layer, root.data.head, node2key(root))
-    root_layers = [root.data.layer] if not isinstance(root.data.layer, list) else root.data.layer#max(root.data.layer) assume mixed node sorted by layer-head
-    root_heads = [root.data.head] if not isinstance(root.data.head, list) else root.data.head#max(root.data.head)
-    #root_ap = abbreviate_attn_pattern(root.data.attn_pattern)
-    if root_color is None: root_color = 'blue'
+    root_layers = [root.data.layer] if not isinstance(root.data.layer, list) else root.data.layer
+    root_heads = [root.data.head] if not isinstance(root.data.head, list) else root.data.head
+    if cc_ap is None:  # parent circuits attn pattern
+        #if step ==0 and ((raw_root_ap is None) or 'attn' not in raw_root_ap): # raw root or 59-4 B->B
+        if step ==0 and 'attn' not in str(root.data.label_type): # raw root or 59-4 B->B
+            cc_ap ='root' 
+        else:
+            cc_ap = raw_root_ap 
+    #if step == 0 and abbreviate_attn_pattern(root.data.attn_pattern) : cc_ap
+    cc_color = attn_colormap[cc_ap] 
     if root_bias is None: 
         root_xbias, root_ybias = 0, 0 #depth * sub_interval, depth * sub_interval
     else:
@@ -488,13 +497,12 @@ def compute_lines(root, x_labels, grid_shape, attn_colormap=None, x_interval=10,
         if n.data.dummy: continue  
         #if n.data.top_score is not None and n.data.top_score < 0.5: continue
         if n.data.head == n.data.H:
-            s, t, ap = 'B', 'B', 'mlp'
-            #continue
+            s, t, ap = root_s, root_s, 'mlp'
         else:
             ap = abbreviate_attn_pattern(n.data.attn_pattern); s, t= ap.split('->')
         t = t.replace('^', ']').replace(']]',']')
         if s.endswith(']') and t.endswith('+'): t += ']'
-        new_attn_circuit_color = None 
+        new_cc_ap = None 
         ls, hs = (n.data.layer , n.data.head) if isinstance(n.data.layer, list) else ([n.data.layer], [n.data.head]) 
         for mixed_idx, (l, h) in enumerate(zip(ls, hs)):
             l_name = node2key(n) 
@@ -509,9 +517,9 @@ def compute_lines(root, x_labels, grid_shape, attn_colormap=None, x_interval=10,
             if n.children and n.data.label_type is not None and 'attn' in n.data.label_type:
                 color = 'red'
                 xbias, ybias = root_xbias+sub_interval, root_ybias+sub_interval
-                new_attn_circuit_color = attn_colormap[ap]
+                new_cc_ap = ap
             else:
-                color = root_color 
+                color = cc_color 
                 xbias, ybias = (root_xbias, root_ybias)
                 #if ap == 'mlp': xbias += 1 #= x_interval-1
             x = [cal_idx(s, xbias), cal_idx(t, xbias)]
@@ -519,12 +527,12 @@ def compute_lines(root, x_labels, grid_shape, attn_colormap=None, x_interval=10,
             vertical = False
             width = n.data.top_score if n.data.top_score is not None else 1
             if n.data.top_score is None: print('top score none', node2key(n))
-            lines[l_name] = [x,y, color, depth, vertical, width]
+            lines[l_name] = [x,y, color, depth, vertical, width, cc_ap]
             # add vertical lines for nodes without children
             if not n.children and not in_mixed_node(n) and ap != 'mlp':
                 x = [cal_idx(t, xbias), cal_idx(t, xbias)]
                 y = [l*H+h-ybias, 0] 
-                lines[l_name+'to-symbols'] = [x,y, color, depth, True, width]
+                lines[l_name+'-to-bottom'] = [x,y, color, depth, True, width, cc_ap]
             # add vertical lines
             for root_layer, root_head in zip(root_layers, root_heads):
                 if n.children and n.data.label_type is not None and 'attn' in n.data.label_type:
@@ -544,20 +552,24 @@ def compute_lines(root, x_labels, grid_shape, attn_colormap=None, x_interval=10,
                             y = [ls[0]*H+hs[0]-ybias, ls[-1]*H+hs[-1]-ybias]
                         else:
                             x = [cal_idx(root_s, root_xbias), cal_idx(s,root_xbias)] # B
-                            color = root_color
+                            color = cc_color
                             y = [root_layer*H + root_head - ybias, l*H+h-ybias]
                     else: # B->Q or B->A]^ or B->B
                         x = [cal_idx(root_t, xbias), cal_idx(root_t, xbias)] # Q or A]^
-                        color = root_color 
+                        color = cc_color 
                         y = [root_layer*H + root_head - ybias, l*H+h-ybias]
-                    if color == 'red':
-                        print(n.data.label_type, x, y, ap, l_name, root_xbias, root_ybias, root_layer, root_head)
-                lines[f'{root_name}>>{l_name}-{root_layer}-{root_head}'] = [x, y, color, depth, True, width]
+                    #if color == 'red':
+                    #    print(n.data.label_type, x, y, ap, l_name, root_xbias, root_ybias, root_layer, root_head)
+                lines[f'{root_name}>>{l_name}-{root_layer}-{root_head}'] = [x, y, color, depth, True, width, cc_ap]
         if n.children:
 #             print('has children', n.name)
             if selector and node2key(n) not in selector: continue
-            _root_color = new_attn_circuit_color if new_attn_circuit_color is not None else root_color
-            compute_lines(n, x_labels, grid_shape, attn_colormap=attn_colormap, root_color=_root_color , x_interval=x_interval, lines=lines, depth=depth+1, selector=selector, root_bias=(xbias, ybias))   
+            _cc_ap = new_cc_ap or cc_ap
+            if new_cc_ap is not None and _cc_ap in all_cc_aps: 
+                print('skip because of recurrent cc_ap', _cc_ap, node2key(n))
+                #continue
+            if _cc_ap not in all_cc_aps: all_cc_aps.append(_cc_ap)
+            compute_lines(n, x_labels, grid_shape, step=step+1, attn_colormap=attn_colormap, cc_ap=_cc_ap, x_interval=x_interval, lines=lines, depth=depth+1, selector=selector, root_bias=(xbias, ybias))   
     return lines
 
 def scan_attn_patterns(node, attn_nodes=None, patterns=None, ap='B->A0'):
@@ -571,41 +583,52 @@ def scan_attn_patterns(node, attn_nodes=None, patterns=None, ap='B->A0'):
     return attn_nodes
 
 # plot circuits
-def plot_attr_circuit(root, grid_shape, ranges, depth=0, patterns=None, selectors=[], selector_ap=None, x_interval=10): # patterns=['28-8 attn'], ap='B->A0'
+def plot_attr_circuit(root, grid_shape, ranges, depth=0, attn_colormap=None,patterns=None, selectors=[], selector_ap=None, x_interval=10): # patterns=['28-8 attn'], ap='B->A0'
 #     x_labels = ['A0]', 'A0+', 'Q]', 'B^', 'A]', 'S',  'S+', 'T', 'T+', 'A0', 'Q-', 'Q', 'Q+', 'B']
-    depth_selectors = ['all', 'depth0', 'depth1', 'depth2', 'depth3']
+    depth_selectors = ['all', 'depth0', 'depth1', 'depth2', 'depth3', 'depth4']
     selector = scan_attn_patterns(root, patterns=patterns, ap=selector_ap)
     #print('selector', selector)
     #text, input_ids, labels, ranges, *_, o = r.data_tuples[0]
     x_labels = get_x_symbols(root, ranges[0])
     L, H = grid_shape
     #L, H = len(model.transformer.h), model.transformer.h[0].attn.num_heads
-    attn_colormap= {'B->A0':'green', 'B->Q':'orange', 'Q->A0':'purple'}
+    if attn_colormap is None: attn_colormap= {'root': 'blue', 'B->A0':'green', 'B->Q':'orange', 'Q->A0':'purple'}
     lines ={}
-    lines = compute_lines(root, x_labels, (L,H), attn_colormap=attn_colormap, lines=lines, depth=depth, x_interval=x_interval, selector=selector)
+    lines = compute_lines(root, x_labels, (L,H), step=0, attn_colormap=attn_colormap, lines=lines, depth=depth, x_interval=x_interval, selector=selector)
     y_axis_range = [-H, (L+2) * H]; y_tickvals = list(range(0, (L+1)*H, H)); y_ticktext = [f'{int(val/H):02d}L' for val in y_tickvals] 
     fig = go.Figure()
 #     for i, label in enumerate(x_labels):
 #         fig.add_trace(go.Scatter(x=[i*x_interval], y=[L*H], mode="markers+text", text=[label], textposition="top center"))
     attn_traces = dict((k,[]) for k in selectors)
     depth_traces = dict((k,[]) for k in depth_selectors)
+    circuits_traces = dict((k,[]) for k in attn_colormap)
+    points = {}
     for idx, (name, line) in enumerate(lines.items()):      
-        x, y, color, depth, vertical, width = line
+        x, y, color, depth, vertical, width, cc_ap = line
         for k in selectors:
             attn_traces[k].append(name.startswith(k))
         for k in depth_selectors:
             selected = True if k == 'all' or f'depth{depth}' <= k else False
             depth_traces[k].append(selected)
+        for k in circuits_traces:
+            circuits_traces[k].append(k==cc_ap)
         if len(x) == 2 and x[0] == x[1] and y[0]==y[1]:
-            color = "yellow" if '-m' in name else 'black'
-            mode = "markers+text"
-            tcolor = 'black'
+            color = "black" if '-m' in name else 'red'
+            mode = "markers+text"; tcolor = 'black'; marker_size = 8;symbol = 'square'
         else:
             tcolor = 'grey' if x[0] == x[1] else 'black'
-            mode = "lines+markers+text"
-        text = '' if color == 'red' or vertical else name.split('_')[-2] 
+            mode = 'lines+markers' if vertical else "lines+markers+text"
+            marker_size = 4; symbol = 'circle'
+        #text = '' if color == 'red' or vertical else name.split('_')[-2] 
+        text = '' if vertical else name.split('_')[-2] 
+        #hover_text = name#.split('_')[-2:]
+        hover_text = name.split(' > ')[-1]
         opacity = width 
-        fig.add_trace(go.Scatter(x=x, y=y, opacity=opacity, mode="lines+markers+text", customdata=["",name.split('_')[-2:]], text=["",text], name=name.split(' > ')[-1][:10], textposition="top right",  line=dict(color=color, dash='solid', width=2),textfont=dict(size=12,color=tcolor)))
+        for _x, _y in zip(x, y):
+            points[(_x, _y)] = points.get((_x, _y), '') + '<br>'+hover_text
+        customdata = ['<br>'.join(sorted(list(set(points[(_x, _y)].split('<br>'))))) for _x, _y in zip(x, y)] # filter repetive node text
+        #customdata = ["", hover_text]
+        fig.add_trace(go.Scatter(x=x, y=y, opacity=opacity, mode="lines+markers+text", customdata=customdata, text=['',text], name=name.split(' > ')[-1][:10], textposition="top right",  line=dict(color=color, dash='solid', width=2),textfont=dict(size=12,color=tcolor), marker=dict(size=marker_size, symbol=symbol)))
 #     fig.update_traces(visible=False, selector=dict(name='depth1'))  
     fig.update_traces(hovertemplate="<br>".join(["%{customdata}","X: %{x}","Y: %{y}"]))
     fig.update_layout(
@@ -613,10 +636,8 @@ def plot_attr_circuit(root, grid_shape, ranges, depth=0, patterns=None, selector
         showlegend=False,height=1000,width=1000,
         xaxis=dict(range=[-1, len(x_labels)* x_interval + x_interval],zeroline=True,showgrid=True,dtick=x_interval,tickvals=list(range(0, len(x_labels)*x_interval, x_interval)),ticktext=x_labels),
         yaxis=dict(range=y_axis_range, zeroline=True, showgrid=True,dtick=H,tickvals=y_tickvals, ticktext=y_ticktext),
-        updatemenus=[{'buttons': [{
-                    'args': [{'visible': attn_traces[sk]}],
-                    'label': sk,'method': 'update'}  for sk in selectors],
-                    'type':'buttons', 'direction': 'right','showactive': True,'x': 0.1,'xanchor': 'right','y': -0.02,'yanchor': 'top'},
+        updatemenus=[{'buttons': [{'args': [{'visible': attn_traces[sk]}],'label': sk,'method': 'update'}  for sk in selectors]+[{'args': [{'visible': circuits_traces[sk]}],'label': sk,'method': 'update'}  for sk in circuits_traces],
+                    'type':'buttons', 'direction': 'right','showactive': True,'x': 0.5,'xanchor': 'right','y': -0.02,'yanchor': 'top'},
                      {'buttons': [{
                     'args': [{'visible': depth_traces[sk]}],
                     'label': sk,'method': 'update'}  for sk in depth_selectors],
