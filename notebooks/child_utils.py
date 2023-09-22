@@ -45,6 +45,7 @@ digit2ordinal = OrderedDict(zip(digits, ordinals))
 # lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
 full_vocab = uppercase + digits
 
+def uppercase_letters(): return uppercase
 
 def types_of_characters(): return {
     'uppercase': uppercase,
@@ -698,7 +699,7 @@ def swap(l, dst, src=0):
     return l
 
 def distractive_sample(cxt_len, rel, ans_i=0):
-    query = choice(rel.dom())
+    query = choice(rel.dom()) 
     siblings = rel.sibling.f(query) if rel.name == 'neg_equal' and hasattr(rel, 'sibling') else []
     ans = choice(list_diff(rel.f(query), siblings))
     distractors = list_diff(rel.codom(), rel.f(query) + ([query] if rel.name == 'sibling' else []))
@@ -715,7 +716,7 @@ def distractive_sample(cxt_len, rel, ans_i=0):
     if rel.y_f: candidates[1] = [rel.y_f(c) for c in candidates[1]]
     return tuple([swap(l, ans_i) for l in candidates])
 
-def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):
+def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   # example_gen_fn
     rels = [s.relations for s in vocabs]
     candidates = OrderedDict()
     fixed_query = query is not None
@@ -817,6 +818,8 @@ class Ranges:
     rel: tuple = None
     sep: tuple = None
     ans0s: list = None
+    ntgts: list = None
+    nans0s: list = None
     example: tuple = None
 
 @dataclass
@@ -828,6 +831,24 @@ class IOIRanges:   # wab
     s2: tuple = None
     ans0s: list = None
     example: tuple = None
+
+@dataclass
+class mathlogicRanges:
+    bos: tuple = None
+    ans: tuple = None
+    ans0: tuple = None
+    ans1: tuple = None
+    query0: tuple = None
+    query1: tuple = None
+    tgt0: tuple = None
+    tgt1: tuple = None
+    rel: tuple = None
+    sep: tuple = None
+    ans0s: list = None
+    ntgts: list = None
+    nans0s: list = None
+    example: tuple = None
+
 
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
 def locate(whole_string, tokens, substring, return_last=False, return_all=False):
@@ -884,16 +905,19 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
         ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
         return ranges
-    rel_word = 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
     if not case_sensitive: tokens = [t.lower() for t in tokens]
     whole_string = "".join(t for t in tokens)
+    rel_word = None # 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
+    if ' capital ' in whole_string: rel_word = 'capital'
+    elif ' not ' in whole_string: rel_word = 'not'
+    
     ranges = Ranges(
         bos = locate(whole_string, tokens, bos_token, return_last=True),
         ans = locate(whole_string, tokens, ans, return_last=True),
         ans0 = locate(whole_string, tokens, ans0),
         query = locate(whole_string, tokens, query, return_last=True),# if not case_sensitive else False), #mqy
         tgt = locate(whole_string, tokens, tgt),
-        rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word in whole_string else None,
+        rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word is not None and rel_word in whole_string else None,
         example = (0, len(tokens))
     )
     ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
@@ -901,9 +925,14 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
         ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
             [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
+        ranges.nans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
+            [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2] if a0 != ans0], dedup=True)))))
+        ranges.ntgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(    
+            [locate(whole_string, tokens, t, return_all=True) for t in candidates[1] if t != tgt], dedup=True)))))
     if ranges.tgt is not None and '.' in tokens[ranges.tgt[1]:]:  # TODO: debug
         sep_i = tokens.index('.', ranges.tgt[1])
         ranges.sep = (sep_i, sep_i + 1)
+    if ' not ' in whole_string: rel_word = 'not'
     return ranges
 
 def move_ranges(r, offset): 
@@ -987,7 +1016,7 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_to
         bos_indices, eos_indices = [bos_i - bos_i], [eos_i - bos_i]
     else:
         labels[:, :bos_indices[k_shot]] = -100  # 只算k_shot个示例后的loss
-        
+
     candidates, answer_indices = None, None
     cxt, query, cands, *_ = examples[0]
     if isinstance(examples[0], dict):  # ioi task
@@ -1067,6 +1096,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
 
 def get_answer_index(example):
     cxt, query, cands, (*_, ans), *cls = example
+    if len(cxt) == 1: return 0  # for cxt_len==1 + ~has_local_hop + g2c
     return cands[-1].index(ans)
 
 class InvalidTransException(Exception): pass
@@ -1256,8 +1286,22 @@ def remove_query(task):
 def _g2c(g_fn, cls_labels=['True', 'False']):
     def wrapped(*args,**kwargs):
         cxt, query, candidates, (*a, ans0, ans) = g_fn(*args,**kwargs)
-        (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
-            (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
+        vocabs = args[0]
+        has_local_hop = vocabs[0].data != vocabs[1].data
+        rel1 = vocabs[1].relations[0]
+        if random() < 0.5:
+            label = cls_labels[0]
+            _ans0, _ans = ans0, ans
+        else:
+            label = cls_labels[1]
+            if not has_local_hop and len(cxt) == 1:
+                _ans = choice(list_diff(rel1.dom(), [ans]))
+                _ans0 = choice(rel1.f(_ans))
+            else:
+                _ans0, _ans = choice([(c0, c) for q, *_, c0, c in zip(*candidates)
+                                    if c != ans and (query is None or q != query)])
+        # (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
+        #     (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
         return cxt, query, candidates, (*a, _ans0, _ans), label
     wrapped.__name__ = f'g2c[{fn2str(g_fn)}]'
     return wrapped

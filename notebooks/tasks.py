@@ -91,26 +91,26 @@ tasks2 = [
 
 # for task, replace_rel0, replace_rel1, do_swap_qa, do_negate, do_rm_local_hop, do_rm_query, rev_item2str in product(
 #     tasks[:], [0, 1],   [0, 1, 2],   [False,True],[False,True],[False,True],[False,True],[False,True]):
-tasks = [
-    (lambda: [TreeSet(genders_of_persons).use('equal'), TreeSet(types_of_things).use('child')], MlM_gen,
-     partial(_cxt2str, item2str=lambda i, _: [f"{i[0]} has {wrap_noun(i[1])}", f"The {i[1]} is {i[0]}'s"]), lambda q, _: f'{q}', " likes"
-    ), # t: 21-5, 15-8, 19. p: 16-7, 18-5, [3-12, 13-7]. p+: 16-7, 16-0. 13-7:induction head qk, thing->type ov
-    (lambda: [TreeSet(genders_of_persons).use('equal'), TreeSet(countries_of_cities).use('child')], MlM_gen,
-     partial(_cxt2str, item2str=lambda i, _: [f'{i[0]} likes {i[1]}', f'{i[1]} attracts {i[0]}']), lambda q, _: f'{q} wants to go', ' to'
-    ), # t: 19-12 >> 16-10 = 12-7
-    (lambda: [TreeSet(genders_of_persons).use('equal'), TreeSet(capabilities_of_things).use('child')], MlM_gen,
-     partial(_cxt2str, item2str=lambda i, _: [f"{i[0]} has {wrap_noun(i[1])}", f"The {i[1]} is {i[0]}'s"]), lambda q, _: f'{q}', ' can'
-    ),  # t: 13-15, not very strong
-    # (lambda: [EqSet(persons).use('equal'), TreeSet(does2did).use('equal')], MlM_gen,
-    #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} {i[1]}'), lambda q, _: f'{q}', ' usually'
-    # ),
-    # (lambda: [EqSet(persons).use('equal'), TreeSet(does2did).use('parent')], MlM_gen,
-    #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} {i[1]}'), lambda q, _: f'{q}', ' usually'
-    # ), # t: copy ov 16-7 + mlp. best performance among all tasks by all models. abstract > verbose
-    # (lambda: [EqSet(persons).use('equal'), TreeSet(en2fr).use('parent')], MlM_gen,
-    #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} a {i[1]}'), lambda q, _: f'{q}', "'s"
-    # ), # t: good translate ov 16-15, 21-14!
-]
+#tasks = [
+#    (lambda: [TreeSet(genders_of_persons).use('equal'), TreeSet(types_of_things).use('child')], MlM_gen,
+#     partial(_cxt2str, item2str=lambda i, _: [f"{i[0]} has {wrap_noun(i[1])}", f"The {i[1]} is {i[0]}'s"]), lambda q, _: f'{q}', " likes"
+#    ), # t: 21-5, 15-8, 19. p: 16-7, 18-5, [3-12, 13-7]. p+: 16-7, 16-0. 13-7:induction head qk, thing->type ov
+#    (lambda: [TreeSet(genders_of_persons).use('equal'), TreeSet(countries_of_cities).use('child')], MlM_gen,
+#     partial(_cxt2str, item2str=lambda i, _: [f'{i[0]} likes {i[1]}', f'{i[1]} attracts {i[0]}']), lambda q, _: f'{q} wants to go', ' to'
+#    ), # t: 19-12 >> 16-10 = 12-7
+#    (lambda: [TreeSet(genders_of_persons).use('equal'), TreeSet(capabilities_of_things).use('child')], MlM_gen,
+#     partial(_cxt2str, item2str=lambda i, _: [f"{i[0]} has {wrap_noun(i[1])}", f"The {i[1]} is {i[0]}'s"]), lambda q, _: f'{q}', ' can'
+#    ),  # t: 13-15, not very strong
+#    # (lambda: [EqSet(persons).use('equal'), TreeSet(does2did).use('equal')], MlM_gen,
+#    #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} {i[1]}'), lambda q, _: f'{q}', ' usually'
+#    # ),
+#    # (lambda: [EqSet(persons).use('equal'), TreeSet(does2did).use('parent')], MlM_gen,
+#    #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} {i[1]}'), lambda q, _: f'{q}', ' usually'
+#    # ), # t: copy ov 16-7 + mlp. best performance among all tasks by all models. abstract > verbose
+#    # (lambda: [EqSet(persons).use('equal'), TreeSet(en2fr).use('parent')], MlM_gen,
+#    #  partial(_cxt2str, sep='. ', item2str=lambda i, _: f'{i[0]} a {i[1]}'), lambda q, _: f'{q}', "'s"
+#    # ), # t: good translate ov 16-15, 21-14!
+#] # mqy, overwrite tasks variable in jupyter notebook when reload tasks module
 
 neg_tasks = [
     (lambda: [EqSet(persons).use('equal'), TreeSet(types_of_things).use('equal')], MlM_gen,

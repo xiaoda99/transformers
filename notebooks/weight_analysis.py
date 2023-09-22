@@ -15,7 +15,6 @@ import torch.nn.functional as F
 import einops
 from einops import rearrange
 
-# from model_utils import get_matched_head_attr
 from common_utils import iterable, show_topk, topk_md
 
 
@@ -51,6 +50,7 @@ def plot_eigv(w, start_i=0, end_i=None, alpha=0.1, plot=True):
     x, y = w[:, 0], w[:, 1]
     eigv_positivity = x.sum() / (x**2 + y**2).sqrt().sum()
     eigv_reality = x.abs().sum() / (x**2 + y**2).sqrt().sum()
+    mag = (x**2 + y**2).sqrt()
     if plot:
         if start_i is None: start_i = 0
         if end_i is None: end_i = len(w)
@@ -60,6 +60,12 @@ def plot_eigv(w, start_i=0, end_i=None, alpha=0.1, plot=True):
         start_i = 1
         plt.gca().set_aspect('equal', adjustable='box')
         plt.plot(x[start_i: end_i], y[start_i: end_i], '.', alpha=alpha); plt.show()
+        start_i = 0
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.plot(x[start_i: end_i]/mag, y[start_i: end_i]/mag, '.', alpha=alpha); plt.show()
+        start_i = 0
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.plot(x[start_i: end_i]/mag * mag.log(), y[start_i: end_i]/mag* mag.log(), '.', alpha=alpha); plt.show() # https://transformer-circuits.pub/2021/framework/index.html#copying-matrix
     return eigv_positivity.item(), eigv_reality.item()
 
 def filter_eigv(w, v, q, verbose=True):
@@ -322,8 +328,8 @@ def get_conductivity(eigv_positivity012, l1, h1, plot=False, figsize=(5, 2)):
     if plot: plt.figure(figsize=figsize); plt.hist(x, 20); _ = plt.title(f'{l1}-{h1}'); plt.show()
     return np.abs(np.array(x)).mean()
 
-def get_positional_score(model, qlen=128, offset=-1, substract_null_attn=True):
-    attentions = forward(model, torch.randint(100, 25000, size=(1, qlen))).attentions
+def get_positional_score(model, forward_fn, qlen=128, offset=-1, substract_null_attn=True):
+    attentions = forward_fn(model, torch.randint(100, 25000, size=(1, qlen)).to(model.device)).attentions
     attentions = torch.cat(attentions)  # l*1nij->lnij
     null_attn = attentions[:, :, abs(offset):, 0].clone()  # l n i-1
     if substract_null_attn: null_attn[:, :, 0] = 0
@@ -467,3 +473,50 @@ def analyze_head_chains(model, head2scores, chain_len=None, plot=True):
             plt.annotate(head_chain_to_str(head_chain), (xs[i], ys[i]))
         plt.show()
     return head_chain_results
+
+def get_transformations(model, f, e=None, qk=None, out=False, compose=False): # f: (N, 4096) --> (N, 4096)
+    blocks = model.transformer.h;ln_f = model.transformer.ln_f;wu = model.lm_head.weight.data
+    if qk:
+        A, B = e @ wq, e @ wk
+        m = A @ B.T
+        return m 
+    if e is None: e = model.transformer.wte.weight.data
+    e1 = e + mlp_forward(blocks[0], e)[0] #if e is not None else we + mlp_forward(b, es[-1])[0]
+    if compose:
+        e_out = e1 +0
+        for _f in f:
+            e_out = _f(e_out)
+    else:
+        e_out = f(e1)         # transform
+    e_ln = ln_f(e_out)
+    if out:return e_ln @ wu.T, e_out
+    return e_ln @ wu.T
+    
+def get_head_qk(model, layer=0,head=0,weight=False):
+    blocks = model.transformer.h;we = model.transformer.wte.weight.data; e1=we + mlp_forward(blocks[0], we)[0]
+    wq, wk, wv, wo = get_head_weights(model, layer, head, transpose=True)
+    e = blocks[layer].ln_1(e1)
+    A, B = e @ wq, e @ wk
+    m = A @ B.T
+    if weight:
+        return blocks[layer].ln_1, wq @ wk.T
+    return m 
+
+def mlp_ov_fn(model, layer=0, act_vec=None, norm=False):
+    blocks = model.transformer.h
+    def fn(e):
+        e = blocks[layer].ln_1(e) 
+        w2, b2 = blocks[layer].mlp.fc_out.weight.data, blocks[layer].mlp.fc_out.bias.data
+        act_vec_normed = act_vec if not norm else act_vec / act_vec.norm(dim=1) * e.norm(dim=1).mean()
+        ov = (w2 @ act_vec_normed.T).T + b2.unsqueeze(0)
+        return e + ov
+    return fn
+
+def head_ov_fn(model, layer=0, head=0, weight=False):
+    blocks = model.transformer.h
+    wq, wk, wv, wo = get_head_weights(model, layer, head, transpose=True)
+    def fn(e):
+        e = blocks[layer].ln_1(e)
+        return e @ wv @ wo      
+    if weight: return blocks[layer].ln_1, wv @ wo
+    return fn

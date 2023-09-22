@@ -44,7 +44,7 @@ sys.path.insert(0, './pptree')
 from pptree import Node, print_tree
 
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, topi_md, \
-    equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str
+    equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str, Printer
 
 from child_utils import make_data_tuple, get_answer_index, generate
 from weight_analysis import get_head_weights
@@ -245,19 +245,19 @@ def unify_tokenizer(tokenizer):
         tokenizer.newwrod_prefix = 'Ġ'
 
 def get_device_map(model_name='transformer', emb_name='wte', layer_name='h', n_layers=60,
-                   ln_name='ln_f', head_name='lm_head', devices=[0, 1]):
+                   ln_f_name='ln_f', head_name='lm_head', devices=[0, 1]):
     if len(devices) == 1: return {model_name: devices[0], head_name: devices[0]}
     dm = {f'{model_name}.{emb_name}': devices[0]}
     if len(devices) == 2:
         for i in range(n_layers // 2): dm[f'{model_name}.{layer_name}.{i}'] = devices[0]
         for i in range(n_layers // 2, n_layers): dm[f'{model_name}.{layer_name}.{i}'] = devices[1]
-        dm[f'{model_name}.{ln_name}'] = devices[1]
+        dm[f'{model_name}.{ln_f_name}'] = devices[1]
         dm[f'{head_name}'] = devices[1]
     elif len(devices) == 3:
         for i in range(n_layers // 3): dm[f'{model_name}.{layer_name}.{i}'] = devices[0]
         for i in range(n_layers // 3, n_layers // 3 * 2): dm[f'{model_name}.{layer_name}.{i}'] = devices[1]
         for i in range(n_layers // 3 * 2, n_layers): dm[f'{model_name}.{layer_name}.{i}'] = devices[2]
-        dm[f'{model_name}.{ln_name}'] = devices[2]
+        dm[f'{model_name}.{ln_f_name}'] = devices[2]
         dm[f'{head_name}'] = devices[2]
     return dm
 
@@ -1379,12 +1379,21 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
             indices_groups = np.arange(batch_size * nrows).reshape(batch_size, nrows)
             texts, all_examples, all_bos_tokens = [], [], []
             for indices in indices_groups:
-                texts.append('\n'.join(ioi_dataset.sentences[i] for i in indices) + '\n')
+                # texts.append('\n'.join(ioi_dataset.sentences[i] for i in indices) + '\n')#wab
+                texts.append(''.join(ioi_dataset.sentences[i] for i in indices))#wab
                 all_examples.append([{k: ioi_dataset.word_idx[k][i] for k in ioi_dataset.word_idx} for i in indices])
                 all_bos_tokens.append(None)
         else:
             all_examples, texts, all_bos_tokens = zip(*[generate(task, nrows=nrows, tokenizer=tokenizer,
                 plot=False, verbose=False, **gen_args) for i in range(batch_size)])
+        
+        #texts = [text.replace('The boy', 'He').replace('The girl', 'She') for text in texts] # mqy test another text format
+        #for e in all_examples:
+        #    for item in e:
+        #        item[1] = item[1].replace('boy', 'he').replace('girl', 'she')
+        #        item[2] = tuple([t.replace('boy', 'he').replace('girl', 'she') for t in item[2][0]] + list(item[2][1:])) 
+        #texts = [text.replace(' not', '') for text in texts] # mqy test another text format
+
         result = Result(task=task, gen_args=gen_args, all_examples=all_examples, texts=texts, all_bos_tokens=all_bos_tokens)
     else:
         all_examples, texts, all_bos_tokens = result.all_examples, result.texts, result.all_bos_tokens
@@ -1412,11 +1421,12 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
                 outputs= batch_outputs[i] if my_isinstance(tokenizer, LLAMATokenizer) else None)
                 for i, (examples, text, bos_tokens) in enumerate(zip(all_examples, texts, all_bos_tokens))
                 if True or any(s in text[24:] for s in ['dangerous'])]))
+                #if i in [0, 4, 6, 17, 21, 32, 37, 38, 39, 45, 47, 55, 57]])) # mqy improve gender task acc temporarily
         loss, acc, answer_probs, *_ = zip(*result.eval_results)
         result.mean_loss, result.mean_acc = np.array(loss).mean(), np.array(join_lists(acc)).mean()
         result.answer_probs = np.array(answer_probs).mean(0)
         print(result.mean_loss, result.mean_acc, result.answer_probs[k_shot:].mean())
-        # plt.plot(result.answer_probs); plt.show()
+        plt.plot(result.answer_probs); plt.show()
     if test_acc:
         result.texts = texts[:1]
         return result2dict(result)
@@ -1452,10 +1462,12 @@ def data_tuples_g(mt, result, k_shot, slice_obj):
             bos_token=bos_tokens, verbose=False)[0]
 
 def abbreviate_attn_pattern(attn_pattern):
-    return attn_pattern.replace('bos', 'B').replace('query', 'Q').replace('tgt', 'T').replace('ans', 'A').replace('sep', 'S').replace('rel', 'R')
+    return attn_pattern.replace('bos', 'B').replace('query', 'Q').replace('tgt', 'T').\
+        replace('ans', 'A').replace('sep', 'S').replace('rel', 'R')
 
 def restore_attn_pattern(attn_pattern):
-    return attn_pattern.replace('B', 'bos').replace('Q', 'query').replace('T', 'tgt').replace('A', 'ans').replace('S', 'sep').replace('R', 'rel')
+    return attn_pattern.replace('B', 'bos').replace('Q', 'query').replace('T', 'tgt').\
+        replace('A', 'ans').replace('S', 'sep').replace('R', 'rel')
 
 def is_intermediary(attn_pattern):
     # return attn_pattern.endswith('^')
@@ -1465,14 +1477,34 @@ def is_intermediary(attn_pattern):
 def is_relating(attn_pattern):
     return attn_pattern.startswith('ans]->') or attn_pattern.startswith('ans->')
 
+def strip_range_label(label): 
+    for s in ['[', ']', '+', '-', '^']: label = label.replace(s, '')
+    return label
+
+def range_contains(range0, range1):
+    return range0[0] <= range1[0] and range1[1] <= range0[1]
+
+def get_range(range, label):
+    if hasattr(range, label): return getattr(range, label)
+    _range = getattr(range, strip_range_label(label))
+    if _range is None: return None # mqy
+    # assert not label.endswith('^'), label
+    b, e = _range
+    if label.startswith('['): return b, b + 1
+    elif label.endswith(']'): return e - 1, e
+    elif label.endswith('+'): return e, e + 1
+    elif label.endswith('-'): return b - 1, b
+    elif label.endswith('^'): return b, e
+    else: assert False, label
+
 def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=False, normalize=False):
     attn_pattern = restore_attn_pattern(attn_pattern)
     q, k = attn_pattern.split('->')  # e.g. 'bos->ans0'
     cross_example = k.endswith('^'); k = k.replace('^', '')
     ranges_q = ranges[k_shot:] if attribute_k or not is_relating(attn_pattern) \
         else ranges[: len(ranges) - k_shot]
-    if k == 'ans0s' and getattr(ranges_q[0], k) is None:
-        k = 'example'  # tasks with cxt_len=1 has no 'ans0s'. Fall back to 'example'
+    if k in ['ans0s', 'ntgts'] and getattr(ranges_q[0], k) is None:
+        k = 'example'  # tasks with cxt_len=1 has no 'ans0s' or 'ntgts'. Fall back to 'example'
     attn_labels = torch.zeros(*attn_size)
     def get_slice(r, name):
         try:
@@ -1491,8 +1523,21 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=F
             for rk in ranges: attn_labels[get_slice(r, q), get_slice(rk, k)] = 1
             if attn_pattern == 'bos->bos^':  # only to prev bos, not to self
                 attn_labels = attn_labels * (1 - torch.eye(attn_labels.size(0)))
-        elif k in ['ans0s', 'candidates']:
-            for s in get_slice(r, k): attn_labels[get_slice(r, q), s] = 1
+        elif any(s in k for s in ['ans0s', 'ntgts']): # 'candidates']:
+            rqs, rks = get_slice(r, q), get_slice(r, k)
+            if not isinstance(rqs, Iterable): rqs = [rqs]
+            if not isinstance(rks, Iterable): rks = [rks]
+            raw_k_len = len(rks)
+            assert len(rqs) == len(rks) or len(rks)==1 or len(rqs) == 1
+            rqs, rks = rqs * int(max(len(rqs), len(rks)) / len(rqs)), rks * int(max(len(rqs), len(rks)) / len(rks))  # broadcast
+            for _rq, _rk in zip(rqs, rks):
+                attn_labels[_rq, _rk] = 1 / raw_k_len
+            #normalize = True # normalize when one q -> multi k 
+            #for s in get_slice(r, k):
+            #    attn_labels[get_slice(r, q), s] = 1
+                #rq = get_slice(r, q)
+                #for _rq, _s in product(rq, s): # mqy ans0s ->ans0s
+                #    attn_labels[_rq, _s] = 1
         elif '<s>' in k:
             attn_labels[get_slice(r, q), 0] = 1
         elif k == 'null':
@@ -1504,7 +1549,7 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=F
         attn_labels = -attn_labels  # -1,0,0,...
         # attn_labels = 1 - 2 * attn_labels  # -1,1,1,...
     attn_labels = attn_labels.tril()
-    if any(s in k for s in ['ans0s', 'candidates', '<s>', 'example']):
+    if any(s in k for s in ['ans0s', '<s>', 'example']): # 'candidates', 
         normalize = False  # used as attn_mask
     if normalize:
         attn_labels = attn_labels / (attn_labels.sum(1, keepdim=True) + 1e-9)
@@ -1740,6 +1785,7 @@ def attribute(forward_fn, model, x, post_forward_fn=[], num_points=7, forward_on
                                 (y, 'y'), (logits, 'logits')]:
                 if isinstance(tensor, torch.Tensor): check_abnormal_tensor(tensor, name)
             if forward_only: continue
+            #grad_ = torch.autograd.grad((-y).flatten().unbind(), list(scaled_x.values())) # mqy test reverse attribution ///
             grad_ = torch.autograd.grad(y.flatten().unbind(), list(scaled_x.values()))
             for j, key in enumerate(grad_keys):
                 grad[key] = grad[key] + grad_[j].sum(dim=0, keepdim=True)
@@ -1879,7 +1925,7 @@ def get_ap_scores(aw, attn_labels, ranges_q):
         scores = (aw[..., b, :] * attn_labels[b, :]).sum(-1)  # ...kj,kj->...kj->...k
     else:
         scores = (aw * attn_labels).sum(-1)  # ...ij,ij->...ij->...i
-        scores = torch.cat([scores[..., rq_slice].max(-1, keepdim=True).values
+        scores = torch.cat([scores[..., rq_slice].max(-1, keepdim=True).values if not isinstance(rq_slice, Iterable) else torch.cat([scores[..., _rq_slice].max(-1, keepdim=True).values for _rq_slice in rq_slice], dim=-1).mean(-1, keepdim=True)
             for rq_slice in ranges_q], dim=-1)  # k*[...1]->...k
     return scores#, scores.mean(-1)  # ...k->..., e.g. lnk->ln
 
@@ -2006,13 +2052,13 @@ def _add_node(parent, data, verbose=True):
     return node
 
 def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_type=None, attn_pattern=None, 
-            step=None, dummy=False, mixed=False, force=False, verbose=True, **kwargs):
+            H=None, step=None, dummy=False, mixed=False, force=False, verbose=True, **kwargs):
     if parent is None:
         si = -1; node = Node(f' {label_type}' if label_type != 'labels' else '')
         node.data = AttrData(step=si, layer=layer, label_type=label_type)
         return node
 
-    L, H = parent.data.attr.head.size()
+    if H is None: L, H = parent.data.attr.head.size()
     if parent.data.attr is None and not force:
         print('parent has not been attributed yet, replace it instead of adding to it.')
         _id = id(parent); parent = parent.parent
@@ -2037,9 +2083,14 @@ attn_patterns_by_step = {
         'bos->sep+',  # 13-11
         'bos->sep-',
         'bos->query-', # 10-11?
+        'bos->tgt+',
+        'bos->tgt',
         ],
     1: ['ans]->ans0]', 'ans]->ans0+', 'query->tgt','query->tgt+', 'query->ans0', 'tgt->ans0',
-        'ans]->query]', 'ans]->query+', 'sep->ans0', 'sep+->ans0', 'sep-->ans0'],
+        'ans]->query', 'ans]->query+', 'sep->ans0', 'sep+->ans0', 'sep-->ans0',
+        'ans0+->ans0', 'sep+->sep', 'query->ans]^','ans]->bos^', 'query->sep+', 'rel->query',
+        'query->ntgts', 'query->ntgts+', 'query->ans0+', 'query->nans0s', 'query->nans0s+', 'query->query-', 'query->sep+', 'query-->ans]',
+        'sep+->ans+^', 'sep+->ans]^', 'tgt+->ntgts+', 'tgt+->ntgts', 'ans]->ntgts+','ans]->nans0s'], # mqy add 'ans0+->ans0', 'sep+->sep', 'query->ans]^','query->sep+', 'rel->query'
     2: ['ans0->tgt', 'ans0->tgt+'], 3: ['tgt+->tgt']
 }
 
@@ -2055,6 +2106,17 @@ def parse_attn_pattern(attn_pattern):
     for s in ['[', ']', '+', '-', '^']: src, tgt = src.replace(s, ''), tgt.replace(s, '')
     return src, tgt
 
+def is_prominent_range(ranges, label):
+    if get_range(ranges[0], label) is None: return False
+    if label in ['sep', 'sep-']:
+        for field in fields(ranges[0]):
+            label0 = field.name
+            if label0 not in ['tgt', 'ans0']: continue
+            if all(range_contains(get_range(r, label0), get_range(r, label)) for r in ranges) or \
+                all(range_contains(get_range(r, label0 + '+'), get_range(r, label)) for r in ranges):
+                return False
+    return True
+
 def get_possible_attn_patterns(parent, ranges):
     d = parent.data
     if parent.parent is None: src = 'bos'  # root
@@ -2062,13 +2124,13 @@ def get_possible_attn_patterns(parent, ranges):
         src = d.attn_pattern.split('->')[0]
     else: src = d.attn_pattern.split('->')[1].split(':')[0].replace('^', '')
     return [ap for ap in all_attn_patterns if ap.startswith(src + '->') and
-        getattr(ranges[0], parse_attn_pattern(ap)[1], None) is not None] + [f'{src}->{src}']
+        is_prominent_range(ranges, ap.split('->')[1])] + [f'{src}->{src}'] #if not any(s in src for s in ['ans0s', 'ntgts']) else []) # mqy
 
 def point_wise(attn_pattern):
     src, dst = attn_pattern.split('->')
     return src == dst
 
-def get_label_types(parent, d, k_shot=3, icl_score_thld=0.4): # use fixed k_shot #mqy default icl score: 0.4
+def get_label_types(parent, d, k_shot=3, icl_score_thld=0.3): # use fixed k_shot #mqy default icl score: 0.4
     def get_normalized_attn_labels(data):
         return 'attn_labels' + ('/ans0s' if data.attn_pattern.startswith('bos->ans0') else '/example')
     normalized_attn_labels = get_normalized_attn_labels(d)
@@ -2082,26 +2144,27 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.4): # use fixed k_shot
     # if is_predicting_head or is_recurrent_head: label_types = [normalized_attn_labels]
     if is_root(parent) and point_wise(d.attn_pattern):
         label_types = ['labels']  # e.g. bos->bos at step 0
-    elif icl_score > icl_score_thld or is_predicting_head or is_recurrent_head:
+    elif icl_score > icl_score_thld or is_predicting_head or is_recurrent_head or d.attn_pattern in ['ans]->query']: #or d.ap_score >0.99: #mqy
         label_types = ['attn_labels', normalized_attn_labels][:1] if not point_wise(d.attn_pattern) else [None]
         activating_attn_labels = f'attn_labels:{parse_attn_pattern(d.attn_pattern)[0]}->~<s>,{min(3, k_shot)}'
         # head_label_types = get_root(parent).data.head_label_types
         # head_label_type = (d.layer, d.head, activating_attn_labels)
-        if point_wise(d.attn_pattern) or icl_score > icl_score_thld:
+        if point_wise(d.attn_pattern): # or icl_score > icl_score_thld:
             label_types += [activating_attn_labels]
             # if head_label_type not in head_label_types: head_label_types.add(head_label_type) 
         if not is_predicting_head and not is_recurrent_head: label_types += [None]
     else:
         label_types = [None]
     # if is_predicting_head: label_types += ['attn_labels:attribute_k']
+    if d.attn_pattern in ['ans]->query', 'query->tgt+', 'query->ans0']:label_types += ['attn_labels:attribute_k'] # mqy add k attribution
     if is_predicting_head and d.attn_pattern.startswith('bos->query'): label_types += ['labels']  # mqy TODO
     return label_types
 
 def get_icl_score(ap_scores, k_shot=3):
     # k_shot = min(3, k_shot)
     if k_shot > 1: k_shot = 3  # use fixed k_shot
-    _ap_score = ap_scores[k_shot:].mean()
-    return ((_ap_score - ap_scores[0]) / _ap_score).item()
+    _ap_score = ap_scores[k_shot:].mean() 
+    return ((_ap_score - ap_scores[0]) / (_ap_score + 1e-9)).item()  #mqy fix icl_score NaN: add 1e-9
 
 def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score=0.3, k_shot=None,
                 attribute_k=False, add_dummy_nodes=True, verbose=True):
@@ -2118,7 +2181,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
 
     top_data = []
     for i, (layer, head, score) in enumerate(zip(layers, heads, scores)):
-        if score < threshold_score: continue
+        if score < threshold_score: continue 
         d = AttrData(step=pd.step + 1, topi=i, layer=layer, head=head, H=H, top_score=score)
         d._attn_pattern, d._attr_ap_score = 'unk', 0.  # used for sorting
         if head < H:
@@ -2201,7 +2264,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
                 **{k: [getattr(d, k) for d in data_group] for k in ['layer', 'head', 'topi', 'top_score']})
         parent.children = parent.children[n_chilren:] + parent.children[:n_chilren]  # move dummy nodes to top
 
-def filter_fn(p, c):
+def filter_fn(p, c):  
     if c.layer == 0 or c.head == c.H: return False
     pap, ap = abbreviate_attn_pattern(p.attn_pattern or ''), abbreviate_attn_pattern(c.attn_pattern)
     #return (p.step == -1 and c.ap_score > 0.15 and c.top_score > 0.4 and c.icl_score > 0.05 or # and ap.startswith('B->A0') or
@@ -2443,7 +2506,7 @@ def node2fn(node, outputs=None, ranges=None, labels=None):
 
     d = node.data
     return partial(mixed_forward, layer=d.layer, head=d.head, labels=labels, label_type=d.label_type,
-        attn_pattern=d.attn_pattern, outputs=outputs, attn_attr=outputs.attn_attr[node2key(node.parent)],
+        attn_pattern=d.attn_pattern, outputs=outputs, attn_attr=outputs.attn_attr.get(node2key(node.parent)),
         hidden_states0=hidden_states0, ranges=ranges, attribute_k=d.attribute_k, scaled=True)
 
 def is_root(node): return node.parent is None
@@ -2629,18 +2692,19 @@ def plot_attn(data_tuple, tokenizer, l, h, attn_pattern=None, k_shot=0):
     _plot_attn(a, tokens, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
         fontsize=9, transpose=True, figsize=(15, 15)); plt.show()  # bij->ij
 
-def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
+def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None, is_relating_head=False,
                 k_shot=0, attribute_k=False, plot_attr=True):
     device = model.lm_head.weight.device
     text, input_ids, labels, ranges, *args, o = data_tuple
     labels = labels.to(device)
     tokens = [t.replace(tokenizer.newword_prefix, ' ').replace(tokenizer.newline_token, '-'*12)
+        if not isinstance(tokenizer, LlamaTokenizer) else t
         for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
     aw_size = o.attentions[0][0, 0].size()  # l*[bnij]->ij
     ystart, ystop = 0, aw_size[0]
     if plot_attr and k_shot > 1:  # not ioi task
         bos_indices = args[1]
-        if not attribute_k and attn_patterns and is_relating(restore_attn_pattern(attn_patterns[0])):
+        if not attribute_k and attn_patterns and (is_relating(restore_attn_pattern(attn_patterns[0])) or is_relating_head):
             ystop = bos_indices[len(ranges) - k_shot] + 3
         else:
             ystart = bos_indices[k_shot]

@@ -139,6 +139,17 @@ def binarize(a, fraction=0.33):
 # from timeit import default_timer
 from datetime import datetime
 
+class Printer(object):
+    def __init__(self, fn, mode='w'):
+        self.file = open(fn, mode)
+        
+    def __enter__(self):
+        self.original_stdout = sys.stdout
+        sys.stdout = self.file
+        
+    def __exit__(self, *args):
+        sys.stdout = self.original_stdout
+
 class Timer(object):
     def __init__(self, msg='', verbose=True):
         self.verbose = verbose
