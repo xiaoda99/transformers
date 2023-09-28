@@ -26,7 +26,7 @@ import torch.nn.functional as F
 
 from const import *
 from common_utils import join_lists, list_diff, my_isinstance, lget, fn2str
-from openai_utils import query_openai
+from openai_utils import query_openai  
 from LLAMATokenizer import LLAMATokenizer
 from transformers import LlamaTokenizer
 # sys.path.insert(0, '/nas/xd/projects/PyFunctional')
@@ -819,7 +819,8 @@ class Ranges:
     bos: tuple = None
     ans: tuple = None
     ans0: tuple = None
-    query: tuple = None
+    query0: tuple = None
+    query1: tuple = None
     tgt: tuple = None
     rel: tuple = None
     sep: tuple = None
@@ -911,8 +912,8 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         ranges.example = (0, ranges.ans[-1])  # XD
         return ranges
 
-    cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
-
+    cxt, query0, candidates, (*_, query1), ans = example
+    #cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
     if trimmed:
         ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
         ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
@@ -922,60 +923,61 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
     rel_word = None # 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
     if ' capital ' in whole_string: rel_word = 'capital'
     elif ' not ' in whole_string: rel_word = 'not'
-    if isinstance(ans0,tuple) or ans0 is None:  #by nrk
-        ranges = mathlogicRanges(
-            bos = locate(whole_string, tokens, bos_token),
-            ans = locate(whole_string, tokens, ans),
-            ans0 = locate(whole_string, tokens, ans0[0]) if ans0 != None and len(ans0) > 0 else (len(tokens)-1,len(tokens)),  # nrk Must be present ans0, if not, set to last position (can't be followed)
-            ans1 = locate(whole_string, tokens, ans0[1], return_last=True) if len(ans0) > 1 else None,
-            ans2 = locate(whole_string, tokens, ans0[2], return_last=True) if len(ans0) > 2 else None,
-            query0 = locate(whole_string, tokens, query[0],return_last=True),
-            query1 = locate(whole_string, tokens, query[1],return_last=True) if len(query)>1 else None,
-            tgt0 = locate(whole_string, tokens, tgt[0]) if len(tgt) > 0 else None,
-            tgt1 = locate(whole_string, tokens, tgt[1]) if len(tgt) > 1 else None,
-            tgt2 = locate(whole_string, tokens, tgt[2]) if len(tgt) > 2 else None,
-            example = (0, len(tokens))
+    # if isinstance(ans0,tuple) or ans0 is None:  #by nrk
+    #     ranges = mathlogicRanges(
+    #         bos = locate(whole_string, tokens, bos_token),
+    #         ans = locate(whole_string, tokens, ans),
+    #         ans0 = locate(whole_string, tokens, ans0[0]) if ans0 != None and len(ans0) > 0 else (len(tokens)-1,len(tokens)),  # nrk Must be present ans0, if not, set to last position (can't be followed)
+    #         ans1 = locate(whole_string, tokens, ans0[1], return_last=True) if len(ans0) > 1 else None,
+    #         ans2 = locate(whole_string, tokens, ans0[2], return_last=True) if len(ans0) > 2 else None,
+    #         query0 = locate(whole_string, tokens, query[0],return_last=True),
+    #         query1 = locate(whole_string, tokens, query[1],return_last=True) if len(query)>1 else None,
+    #         tgt0 = locate(whole_string, tokens, tgt[0]) if len(tgt) > 0 else None,
+    #         tgt1 = locate(whole_string, tokens, tgt[1]) if len(tgt) > 1 else None,
+    #         tgt2 = locate(whole_string, tokens, tgt[2]) if len(tgt) > 2 else None,
+    #         example = (0, len(tokens))
             
-        )
+    #     )
         
-        if candidates is not None:
-            max_i = (ranges.query0[0],ranges.query1[0])[ranges.query0[0] > ranges.query1[0] if ranges.query1 != None else False]
-            ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True))))),
-            ranges.ans0s = ranges.ans0s[0] if len(ranges.ans0s[0])!=0 else None
-            ranges.nans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2] if a0 not in ans0], dedup=True))))),
-            ranges.nans0s = ranges.nans0s[0] if len(ranges.nans0s[0])!=0 else None
-            ranges.tgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, t, return_all=True) for t in candidates[1]], dedup=True)))))
-            ranges.ntgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, t, return_all=True) for t in candidates[1] if t not in tgt], dedup=True)))))
-            ranges.ntgts = ranges.ntgts if len(ranges.ntgts)!=0 else None
-        if ranges.tgt0 is not None and '.' in tokens[ranges.tgt0[1]:]:  
-            sep_i = tokens.index('.', ranges.tgt0[1])
-            ranges.sep = (sep_i, sep_i + 1)
-        return ranges
+    #     if candidates is not None:
+    #         max_i = (ranges.query0[0],ranges.query1[0])[ranges.query0[0] > ranges.query1[0] if ranges.query1 != None else False]
+    #         ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True))))),
+    #         ranges.ans0s = ranges.ans0s[0] if len(ranges.ans0s[0])!=0 else None
+    #         ranges.nans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2] if a0 not in ans0], dedup=True))))),
+    #         ranges.nans0s = ranges.nans0s[0] if len(ranges.nans0s[0])!=0 else None
+    #         ranges.tgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, t, return_all=True) for t in candidates[1]], dedup=True)))))
+    #         ranges.ntgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, t, return_all=True) for t in candidates[1] if t not in tgt], dedup=True)))))
+    #         ranges.ntgts = ranges.ntgts if len(ranges.ntgts)!=0 else None
+    #     if ranges.tgt0 is not None and '.' in tokens[ranges.tgt0[1]:]:  
+    #         sep_i = tokens.index('.', ranges.tgt0[1])
+    #         ranges.sep = (sep_i, sep_i + 1)
+    #     return ranges
     
-    else:
+    if True:
         ranges = Ranges(
             bos = locate(whole_string, tokens, bos_token, return_last=True),
             ans = locate(whole_string, tokens, ans, return_last=True),
-            ans0 = locate(whole_string, tokens, ans0),
-            query = locate(whole_string, tokens, query, return_last=True),# if not case_sensitive else False), #mqy
-            tgt = locate(whole_string, tokens, tgt),
+            ans0 = None,
+            query0 = locate(whole_string, tokens, query0, return_last=True),
+            query1 = locate(whole_string, tokens, query1, return_last=True),
+            tgt = None,
             rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word is not None and rel_word in whole_string else None,
             example = (0, len(tokens))
         )
     
-    ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
-    if candidates is not None:
-        max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
-        ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
-            [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
-        ranges.nans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
-            [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2] if a0 != ans0], dedup=True)))))
-        ranges.ntgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
-            [locate(whole_string, tokens, t, return_all=True) for t in candidates[1] if t != tgt], dedup=True)))))
-    if ranges.tgt is not None and '.' in tokens[ranges.tgt[1]:]:  # TODO: debug
-        sep_i = tokens.index('.', ranges.tgt[1])
-        ranges.sep = (sep_i, sep_i + 1)
-    if ' not ' in whole_string: rel_word = 'not'
+    # ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
+    # if candidates is not None:
+    #     max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
+    #     ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
+    #         [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
+    #     ranges.nans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
+    #         [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2] if a0 != ans0], dedup=True)))))
+    #     ranges.ntgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
+    #         [locate(whole_string, tokens, t, return_all=True) for t in candidates[1] if t != tgt], dedup=True)))))
+    # if ranges.tgt is not None and '.' in tokens[ranges.tgt[1]:]:  # TODO: debug
+    #     sep_i = tokens.index('.', ranges.tgt[1])
+    #     ranges.sep = (sep_i, sep_i + 1)
+    # if ' not ' in whole_string: rel_word = 'not'
     return ranges
 
 def move_ranges(r, offset): 
@@ -1141,7 +1143,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
-    text = '\n '.join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
+    text = '\n'.join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
         '\n' + '\n'.join(example_strs) + '\n'  # prepend '\n' to act as bos for tokenizer without bos
     return examples, text, bos_tokens
 
@@ -1335,11 +1337,25 @@ def remove_query(task):
     task = vocab_fn, new_gen_fn, cxt2str, new_query2str, *a
     return task
 
-def _g2c(g_fn, cls_labels=['True', 'False']):
+def _g2c(g_fn, cls_labels=['Yes', 'No']):
     def wrapped(*args,**kwargs):
         cxt, query, candidates, (*a, ans0, ans) = g_fn(*args,**kwargs)
-        (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
-            (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
+        vocabs = args[0]
+        has_local_hop = vocabs[0].data != vocabs[1].data
+        rel1 = vocabs[1].relations[0]
+        if random() < 0.5:
+            label = cls_labels[0]
+            _ans0, _ans = ans0, ans
+        else:
+            label = cls_labels[1]
+            if not has_local_hop and len(cxt) == 1:
+                _ans = choice(list_diff(rel1.dom(), [ans]))
+                _ans0 = choice(rel1.f(_ans))
+            else:
+                _ans0, _ans = choice([(c0, c) for q, *_, c0, c in zip(*candidates)
+                                    if c != ans and (query is None or q != query)])
+        # (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
+        #     (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
         return cxt, query, candidates, (*a, _ans0, _ans), label
     wrapped.__name__ = f'g2c[{fn2str(g_fn)}]'
     return wrapped
@@ -1403,7 +1419,6 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
     conditions = [True, ]
     while any(conditions):
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
-        # print('In generate: vocabs =', vocabs[0])
         # print('In generate: example =', examples[0])
         ans_counts = Counter([ans for cxt, query, cands, (*_, ans), *cls in examples]).most_common()
         answer_indices = [get_answer_index(e) for e in examples]

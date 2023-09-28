@@ -845,11 +845,13 @@ class WINORanges:   # wab
     bos: tuple = None
     ans: tuple = None
     ans0: tuple = None
+    nans0: tuple = None
     s1: tuple = None
     s2: tuple = None
     ans0s: list = None
     example: tuple = None
     perp: tuple = None
+    inter: tuple = None
     v: tuple = None
     rel: tuple = None
     candidates: list = None
@@ -912,7 +914,7 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False)
 def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=False):
     if 'V' in example:#wino task
         # cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
-        io,ans0,s1,s2 ,v,perp,candidates=example['IO'], example['ans0'],example['S'],example['S2'],example['V'],example['PERP'],example['candidates']
+        io,ans0,nans0,s1,s2 ,v,perp,inter,candidates=example['IO'], example['ans0'],example['nans0'],example['S'],example['S2'],example['V'],example['PERP'],example['inter'],example['candidates']
         if trimmed:
             ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
             ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
@@ -925,7 +927,9 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
             io = locate(whole_string, tokens, io, return_last=True),
             bos = locate(whole_string, tokens, bos_token, return_last=True),
             perp = locate(whole_string, tokens, perp, return_last=True),
+            inter = locate(whole_string, tokens, inter, return_last=True),
             ans0 = locate(whole_string, tokens, ans0),
+            nans0 = locate(whole_string, tokens, nans0),
             s1 = locate(whole_string, tokens, s1, return_last=True),# if not case_sensitive else False), #mqy
             s2 = locate(whole_string, tokens, s2),
             v = locate(whole_string, tokens, v),
@@ -1018,7 +1022,6 @@ def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
         r = example2ranges(e, tokens, bos_token[i] if isinstance(bos_token, (tuple, list)) else bos_token)
         r1 = move_ranges(r, len(all_tokens))
         r1.candidates = [tokenizer.encode(i)[-1] for i in e['candidates']]
-        print(r1.candidates)
         ranges.append(r1)
         all_tokens += tokens + [newline_token]
     return ranges

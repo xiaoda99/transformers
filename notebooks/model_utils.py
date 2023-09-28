@@ -44,7 +44,7 @@ sys.path.insert(0, './pptree')
 from pptree import Node, print_tree
 
 from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, topi_md, \
-    equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str, Printer
+    equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str, Printer, lget
 
 from child_utils import make_data_tuple, get_answer_index, generate
 from weight_analysis import get_head_weights
@@ -715,7 +715,7 @@ def head_forward(model, hidden_states, layer, head, logits_mask=None, labels=Non
         loss = -torch.einsum('bij->b', logprobs * causal_mask.to(attn_labels.device) * attn_labels)#.to(hq.dtype)
     return Outputs(hidden_states=(head_output,) if head_output is not None else (), logits=logits, loss=loss)
 
-def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, residual=False,
+def mlp_forward(block, hidden_states, layer=None, gate=None, output_intermediate=False, residual=False,
                 logits_mask=None, labels=None, loss_reduction=None, scaled=False):
     if layer is not None:
         model = block
@@ -725,8 +725,8 @@ def mlp_forward(block, hidden_states, layer=None, output_intermediate=False, res
             clone_module_to(block, name, hidden_states.device, remove_on_redo=False, switch=True)
     try:
         hidden_states, ln2_state = scaled_ln(block.ln_2, hidden_states, scaled=scaled)
-        if layer is None: return block.mlp(hidden_states), ln2_state #, output_intermediate=output_intermediate)
-        hidden_states = hidden_states * int(residual)*0 + block.mlp(hidden_states)
+        if layer is None: return block.mlp(hidden_states, output_intermediate=output_intermediate), ln2_state
+        hidden_states = hidden_states * int(residual)*0 + block.mlp(hidden_states, gate=gate, output_intermediate=False)
         logits, loss = lm_head_forward(model, hidden_states, logits_mask=logits_mask, labels=labels, loss_reduction=loss_reduction, scaled=scaled) \
             if labels is not None else (None, None)
     finally:
@@ -774,7 +774,8 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
                 kwargs['attn_labels'] = attn_labels * attn_mask
                 kwargs['attn_mask'] = (1 - attn_mask).tril()
         else:
-            kwargs = {'attn_weights': outputs.attentions[layer]} if head < H else {}
+            kwargs = {'attn_weights': outputs.attentions[layer]} \
+                if head < H else {'gate': lget(outputs.intermediate, layer)}
             if label_type in ['labels', 'argmax_labels']:
                 kwargs['labels'] = get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels) \
                     if label_type == 'argmax_labels' else labels
@@ -1002,9 +1003,9 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, rang
             attn_output = torch.einsum('bnie,ni->bie', head_output, multiplier)
         parallel_attn_mlp = my_isinstance(b, (GPTJBlock, GPTNeoXLayer))
         if not parallel_attn_mlp: hidden_states = hidden_states + attn_output
-        mlp_output, ln2_state = mlp_forward(b, hidden_states, output_intermediate=False)
+        (mlp_output, intermediate), ln2_state = mlp_forward(b, hidden_states, output_intermediate=True)
         if mlp_mask[i] is not None: mlp_output = einsum('bie,bi->bie', mlp_output, mlp_mask[i])
-        # intermediates += (to(intermediate, output_device),)
+        intermediates += (to(intermediate, output_device),)
         hidden_states = (hidden_states + mlp_output) if not parallel_attn_mlp else \
             (attn_output + mlp_output + hidden_states)  # order matters!
         attn_output = to(attn_output, output_device); attn_outputs += (attn_output,)

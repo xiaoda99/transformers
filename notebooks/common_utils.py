@@ -235,7 +235,7 @@ def maybe_map(fn, *iters):
         return {k: [d[k] for d in res] for k in res[0]} if isinstance(res[0], dict) else res
     return fn(*iters)
 
-def lget(l, i, default=None): return l[i] if len(l) > i else default
+def lget(l, i, default=None): return l[i] if l is not None and len(l) > i else default
 
 def list_get(l, i, reduce_fn=None):
     if reduce_fn is None: reduce_fn = lambda x: x
