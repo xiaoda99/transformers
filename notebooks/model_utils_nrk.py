@@ -1191,7 +1191,6 @@ def get_prob_dist(d, topk=5, digits=3):
 def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices,
         logits=None, labels=None, mask_logits=False, logits_bias=None,
         k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True):
-
     # if k_shot == 0: mask_logits = True  # ioi task
     if isinstance(mask_logits, types.FunctionType): logits = mask_logits(logits); mask_logits = False
     use_openai_api = hasattr(logits, 'token_logprobs')  # isinstance(model, types.FunctionType)
@@ -1218,8 +1217,6 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
             else:
                 logits_ = logits[0, bos_i + j]; dist = logits_.softmax(-1)  # mqy
                 labels_mask[:, bos_i + j] = logits_.argmax() == ans_id
-                # print("预测答案:",logits_.argmax(),"实际答案:",ans_id)
-
                 if candidates is not None and j == 0:
                     if logits_bias is not None:  # logits_bias promotes all candidates of the task. Better than logits_mask?
                         logits_ = logits_ + logits_bias.to(logits_.device)
@@ -2132,8 +2129,8 @@ mathlogic_patterns_by_step_2 = {
         'ans->query1^'],
     2: ['query1-->query0','query1-->query0+','query1-->ans+^','query1-->ans^','query0+->query1^',
         'query0-->query1+^','query0+->query0-','query0->ans^','query0-->ans^','query0-->query1]^','query0-->query0]^','bos->bos-'], 
-    3: ['query0->query0+^','query1]->bos^','query1+->query1'],
-    4: ['query0->query0^','query0->query0-','ans->bos','ans->ans^','ans->ans+^','ans->query1]','ans+->query1]','ans+->ans','ans+->bos','ans+->ans+',]
+    3: ['query0->query0+^','query1]->bos^','query1+->query1','ans]->ans0]','query0]->tgt]'],
+    
    
 }
 # all_attn_patterns = join_lists(attn_patterns_by_step.values())# + ['bos->bos']
@@ -2744,13 +2741,11 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         fwd_fn = partial(sum_forward, outputs=o, output_layer=l)
         label_type = 'labels' if len(fns) == 0 else None #if node is root set label_type = labels? otherwise None? Q:nrk
         fn = partial(mixed_forward, layer=l, head=h, labels=labels, label_type=label_type, outputs=o, ranges=ranges)
-        print("what label_type is in plot_attn_attr:",label_type)
-        print("what labels is in plot_attn_attr:",labels)
         keys = ['embed_mask', 'mlp_mask', 'head_mask']
         to_layer = max(l) if isinstance(l, Iterable) else l
         x = OrderedDict((key, get_x(key, o, to_layer=to_layer)) for key in keys)
         *_, ys, logits = attribute(fwd_fn, model, x, [fn] + fns, num_points=3, forward_only=True)
-        print('scaled_logprobs =', ys)
+        print('logits =', logits)
         if isinstance(logits, (list, tuple)): logits = sum(logits)
         if logits is None: pass
         elif logits.size(-1) == model.lm_head.out_features:  # lm_logits

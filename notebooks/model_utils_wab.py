@@ -2106,9 +2106,9 @@ ioi_attn_patterns_by_step = {-1: ['bos->ans0'],
 wino_attn_patterns_by_step = {-1: ['bos->ans0','bos->io','bos->s1'],
     0: [ 'bos->s1', 'bos->ans0+', 'bos->s2', 'bos->s2+','bos->rel','bos->v','bos->perp','bos->io','bos->v','bos->nans0'],
     1: [ 's1->s2','s1->s2+','s1->perp','s1->v','bos->io','s1->io','bos->v','s1->ans0','io->ans0','bos->s1','bos->perp','bos->s2','nans0->ans0','bos->nans0+'],
-    2: [ 's1->s2','s1->s2+','s1+->s1', 's1->perp','s1->v','bos->io','s1->io','s1->ans0','nans0+->nans0','bos->s2','bos->s2+','bos->nans0+','bos->inter'], 
-    3: ['s1->perp','s1->v','s2->v','s2->perp','bos->io','s2->io','s1->io','perp->io','perp->s2','perp->v','s1->ans0','perp->ans0','s2->ans0','io->s2','bos->s1'],
-    4:['s1->perp','s1->v','bos->io','s1->io','io->perp','io->v','io->s2','s1->ans0','perp->io','perp->s2','perp->v','perp->ans0','s2->ans0','bos->s1','inter->io','inter->perp','inter->v'],
+    2: [ 'inter->ansright','s1->s2','s1->s2+','s1+->s1', 's1->perp','s1->v','bos->io','s1->io','s1->ans0','nans0+->nans0','bos->s2','bos->s2+','bos->nans0+','bos->inter'], 
+    3: ['ansright->nans0','inter->s2','s1->perp','s1->v','s2->v','s2->perp','bos->io','s2->io','s1->io','perp->io','perp->s2','perp->v','s1->ans0','perp->ans0','s2->ans0','io->s2','bos->s1'],
+    4:['s1->perp','s1->v','s2->ansright','bos->io','s1->io','io->perp','io->v','io->s2','s1->ans0','perp->io','perp->s2','perp->v','perp->ans0','s2->ans0','bos->s1','inter->io','inter->perp','inter->v'],
     5:['v->s2','v->ans0','io->v','io->s2','s1->ans0','perp->io','perp->s2','perp->v','perp->ans0','s2->ans0','s1->v','s1->io','s1->perp','s1->inter']}
 
 
@@ -2159,7 +2159,7 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.3): # use fixed k_shot
     # if is_predicting_head or is_recurrent_head: label_types = [normalized_attn_labels]
     if is_root(parent) and point_wise(d.attn_pattern):
         label_types = ['labels']  # e.g. bos->bos at step 0
-    elif icl_score > icl_score_thld or is_predicting_head or is_recurrent_head or d.attn_pattern in ['bos->nans0+','bos->nans0','bos->s2','s1->s2']: #or d.ap_score >0.99: #mqy
+    elif icl_score > icl_score_thld or is_predicting_head or is_recurrent_head or d.attn_pattern in ['bos->nans0+','bos->nans0','bos->s2','s1->s2','inter->ansright','inter->s2']: #or d.ap_score >0.99: #mqy
         label_types = ['attn_labels', normalized_attn_labels][:1] if not point_wise(d.attn_pattern) else [None]
         activating_attn_labels = f'attn_labels:{parse_attn_pattern(d.attn_pattern)[0]}->~<s>,{min(3, k_shot)}'
         # head_label_types = get_root(parent).data.head_label_types
@@ -2752,7 +2752,8 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
             print('resulting ap_scores =', ap_scores, ap_scores.mean(-1))
             # _plot_attn(aw, tokens, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
             #     fontsize=9, transpose=True, figsize=(20-5, 20-5)); plt.show()  # bij->ij
-        if isinstance(h, Iterable) or h == H: return ap_scores
+        if isinstance(h, Iterable) or h == H: 
+            return ap_scores
 
     aw = o.attentions[l][0, h]; attns = [aw]
     if plot_attr:

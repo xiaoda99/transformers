@@ -134,6 +134,9 @@ def logits_lens(arg_tuples, model, tokenizer, residual_types=['all', 'attn', 'ml
                 confid = logits[0,:,0] - logits[0,:,1]
             elif metric == 'target':
                 confid = raw_logits[0,:,tgts_idx[0]]
+            elif metric == 'target_prob':
+                probs = torch.softmax(raw_logits,dim=-1)
+                confid = probs[0,:,tgts_idx[0]]
             pred_tokens = [(get_tokens_from_ids(pred_id[:topk_out], tokenizer, replace=False), _logits[:topk_out]) for pred_id, _logits in zip(pred_ids[0], logits[0])]
             heatd.append(confid); heat_texts.append(pred_tokens); ylabels.append(lens_key)
 
@@ -176,11 +179,11 @@ def logits_lens(arg_tuples, model, tokenizer, residual_types=['all', 'attn', 'ml
     logits_dict = dict(zip(['layer_diff2', 'attn_diff2', 'mlp_diff2', 'head_diff2', 'layer_ranks', 'head_ranks', 'mlp_ranks', 'attn_ranks', 'layer_diff', 'mlp_diff','attn_diff'],[layer_diff2, attn_diff2, mlp_diff2, head_diff2, layer_ranks, head_ranks, mlp_ranks, attn_ranks, layer_diff, mlp_diff, attn_diff]))
     for k, v in logits_dict.items():
         if isinstance(v, torch.Tensor):
-            logits_dict[k] = v.cpu().float()
+            logits_dict[k] = v.detach().cpu().float()
     if verbose:
         for k, v in logits_dict.items(): print(k, v.shape if isinstance(v, torch.Tensor) else v)
     if heatmap:
-        heatd = torch.stack(heatd).cpu().float() # (L * 3, n) 
+        heatd = torch.stack(heatd).detach().cpu().float() # (L * 3, n) 
         font_size=9; 
         if abs((heatd[:2].max() - heatd[:2].max()) / heatd[:2].max()) < 0.1: heatd[:2] = 0  # filter first emb and attn layer 
         if len(residual_types)==1: residual_idx = _residual_types.index(residual_types[0]); heatd=heatd[residual_idx::3]; heat_texts=heat_texts[residual_idx::3];ylabels=ylabels[residual_idx::3]
@@ -638,6 +641,7 @@ def scan_attn_patterns(node, attn_nodes=None, patterns=None, ap='B->A0'):
 
 def plot_attr_heatmap(root):
     ns = treeloop(root, parents=True)
+    ns = [root] + ns
     for n in ns:
         print(node2key(n))
         attr = n.data.attr.head/n.data.attr.head.max()
@@ -708,15 +712,16 @@ def plot_attr_circuit(root, grid_shape, ranges, depth=0, attn_colormap=None,patt
                     ])
     return fig
 
-def scan_global_attention_patterns(model, data_tuples):
+def scan_global_attention_patterns(model, data_tuples, attn_patterns=None):
     def _get_attention_score(data_tuple, layer, head, attn_pattern='bos->query'):
         text, input_ids, labels, ranges, *_, o = data_tuple
         attentions = o.attentions[layer][0, head]
         attn_labels, ranges_q = attn_pattern2labels(ranges, attn_pattern, attentions.size()[-2:], k_shot=3)
         return get_ap_scores(attentions, attn_labels, ranges_q).to('cpu', dtype=torch.float32).mean(-1)
+    if attn_patterns is None: attn_patterns=all_attn_patterns
     L, H = len(model.transformer.h), model.transformer.h[0].attn.num_heads
-    scores = torch.zeros((len(all_attn_patterns), L,H)) - 0.1
-    for i, ap in enumerate(all_attn_patterns):
+    scores = torch.zeros((len(attn_patterns), L,H)) - 0.1
+    for i, ap in enumerate(attn_patterns):
         print(ap)
         try:
             for l in range (L):
@@ -724,11 +729,11 @@ def scan_global_attention_patterns(model, data_tuples):
                     scores[i,l,h] = torch.tensor([_get_attention_score(dt, l, h,attn_pattern=ap) for dt in data_tuples]).mean() * 100
         except Exception as e:
             print('error', ap)
-    fig = px.imshow(scores, facet_col_wrap=10, facet_col=0,zmax=100)
+    fig = px.imshow(scores, facet_col_wrap=min(10,len(attn_patterns)), facet_col=0,zmax=100)
     for i, annot in enumerate(fig.layout.annotations):
-        fig.layout.annotations[i].update(text=all_attn_patterns[int(annot['text'].split('=')[-1])])
+        fig.layout.annotations[i].update(text=attn_patterns[int(annot['text'].split('=')[-1])])
     fig.update_layout(height=1000,width=1600)
-    return fig, [scores, all_attn_patterns]
+    return fig, [scores, attn_patterns]
 
 def get_cum_var_ratio(samples, mean=True, compute_uv=False, device='cpu', method='svd'): # method: svd, eigvals
     samples = samples.to(device)

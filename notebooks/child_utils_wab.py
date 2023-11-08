@@ -843,19 +843,22 @@ class IOIRanges:   # wab
 @dataclass
 class WINORanges:   # wab
     bos: tuple = None
+    op: tuple = None
     ans: tuple = None
+    preans: tuple = None
+    postans: tuple = None
     ans0: tuple = None
     nans0: tuple = None
+    ansright: tuple =None
     s1: tuple = None
     s2: tuple = None
     ans0s: list = None
     example: tuple = None
-    perp: tuple = None
     inter: tuple = None
-    v: tuple = None
     rel: tuple = None
     candidates: list = None
     io: tuple = None
+    relation: tuple = None
 
 @dataclass
 class mathlogicRanges:
@@ -884,8 +887,9 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False)
     if substring.strip() in ['->', '?']:
         char_locations = [whole_string.index(substring), whole_string.rindex(substring)]
     else:
-        pattern = r"\b%s(?:s|es)?\b" if not substring.startswith(" ") else r"%s(?:s|es)?\b"
-        try: matches = list(re.finditer(pattern % substring, whole_string))
+        pattern = r"\b%s(?:s|es)?\b" if not substring.startswith(" ") else r"%s(?:s|es)?"#wab
+        try: 
+            matches = list(re.finditer(pattern % substring, whole_string))
         except Exception: print(f'sub = {substring}, whole = {whole_string}'); raise
         assert len(matches) > 0, f'{tokens}\n{substring} not match {whole_string}'
         char_locations = [m.span()[0] for m in matches]
@@ -912,9 +916,9 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False)
     return ranges
 
 def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=False):
-    if 'V' in example:#wino task
+    if 'relation' in example: # wino task wab
         # cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
-        io,ans0,nans0,s1,s2 ,v,perp,inter,candidates=example['IO'], example['ans0'],example['nans0'],example['S'],example['S2'],example['V'],example['PERP'],example['inter'],example['candidates']
+        io,op,ans0,nans0,preans,postans,ansright,s1,s2,inter,candidates,relation=example['IO'],example['op'], example['ans0'],example['nans0'],example['preans'],example['postans'],example['ansright'],example['S'],example['S2'],example['inter'],example['candidates'],example['relation']
         if trimmed:
             ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
             ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
@@ -923,16 +927,21 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         whole_string = "".join(t for t in tokens)
         rel_word = None # 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
         # if ' not ' in whole_string: rel_word = 'not'
+        print(whole_string)
+        print(s1)
         ranges = WINORanges(
             io = locate(whole_string, tokens, io, return_last=True),
+            op = locate(whole_string, tokens, op, return_last=True),
             bos = locate(whole_string, tokens, bos_token, return_last=True),
-            perp = locate(whole_string, tokens, perp, return_last=True),
             inter = locate(whole_string, tokens, inter, return_last=True),
             ans0 = locate(whole_string, tokens, ans0),
             nans0 = locate(whole_string, tokens, nans0),
+            preans = locate(whole_string, tokens, preans),
+            postans = locate(whole_string, tokens, postans),
+            ansright = locate(whole_string, tokens, ansright),
             s1 = locate(whole_string, tokens, s1, return_last=True),# if not case_sensitive else False), #mqy
             s2 = locate(whole_string, tokens, s2),
-            v = locate(whole_string, tokens, v),
+            relation = locate(whole_string, tokens, relation),
             rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word is not None and rel_word in whole_string else None,
             example = (0, len(tokens))
         )
@@ -962,9 +971,9 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
     rel_word = None # 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
     if ' capital ' in whole_string: rel_word = 'capital'
     elif ' not ' in whole_string: rel_word = 'not'
-    print('whole_string',whole_string)
-    print('ans',ans)
-    print('ans0',ans0)
+    print('whole_string',whole_string)  # wab debug
+    print('ans',ans)  # wab debug
+    print('ans0',ans0)  # wab debug
     ranges = Ranges(
         bos = locate(whole_string, tokens, bos_token, return_last=True),
         ans = locate(whole_string, tokens, ans, return_last=True),
@@ -1021,7 +1030,6 @@ def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
         assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
         r = example2ranges(e, tokens, bos_token[i] if isinstance(bos_token, (tuple, list)) else bos_token)
         r1 = move_ranges(r, len(all_tokens))
-        r1.candidates = [tokenizer.encode(i)[-1] for i in e['candidates']]
         ranges.append(r1)
         all_tokens += tokens + [newline_token]
     return ranges
@@ -1073,17 +1081,16 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_to
     else:
         labels[:, :bos_indices[k_shot]] = -100  # 只算k_shot个示例后的loss
     candidates, answer_indices = None, None
-    cxt, query, cands, *_ = examples[0]
-    # if isinstance(examples[0], dict):  # ioi task
-    #     def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()
-    #     candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]
-    #     answer_indices = [0 for _ in ranges]
-    if isinstance(examples[0], dict):  # winograde task
-        def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()
-        candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]
+
+    if isinstance(examples[0], dict):  # ioi/wino task wab
         answer_indices = [0 for _ in ranges]
-        candidates = [ r.candidates for r in ranges]
-    elif cands is not None and len(cands[-1]) > 1:  # cxt_len > 1
+        # def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()
+        # candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]  # ioi task
+        candidates = [[tokenizer.encode(i)[1] for i in e['candidates'][-1]] for e in examples]  # wino task
+        return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices
+        
+    cxt, query, cands, *_ = examples[0]
+    if cands is not None and len(cands[-1]) > 1:  # cxt_len > 1
         prefix, encode = ('', partial(tokenizer.encode, add_special_tokens=False)) \
             if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else (' ', partial(tokenizer.encode))
         candidates = [[encode(prefix + token)[0] for token in cands[-1]]

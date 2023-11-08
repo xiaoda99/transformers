@@ -41,6 +41,10 @@ ordinals = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', '
 digit2cardinal = OrderedDict(zip(digits, cardinals))
 digit2ordinal = OrderedDict(zip(digits, ordinals))
 
+
+#NEW_LINE = '! \n'
+NEW_LINE = '\n'
+
 # uppercases = [l for l in string.ascii_uppercase if len(_tokenizer.tokenize('%s %s' % (l*2, l*2))) == 2]
 # lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
 full_vocab = uppercase + digits
@@ -812,6 +816,7 @@ def empty_cxt2str(cxt, **kwargs): return ''
 class Ranges:
     bos: tuple = None
     ans: tuple = None
+    cls: tuple = None
     ans0: tuple = None
     query: tuple = None
     tgt: tuple = None
@@ -901,6 +906,7 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         return ranges
 
     cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
+    cls = cls[0] if len(cls) > 0 else None
     if trimmed:
         ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
         ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
@@ -914,6 +920,7 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
     ranges = Ranges(
         bos = locate(whole_string, tokens, bos_token, return_last=True),
         ans = locate(whole_string, tokens, ans, return_last=True),
+        cls = locate(whole_string, tokens, cls, return_last=True),
         ans0 = locate(whole_string, tokens, ans0),
         query = locate(whole_string, tokens, query, return_last=True),# if not case_sensitive else False), #mqy
         tgt = locate(whole_string, tokens, tgt),
@@ -921,6 +928,7 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         example = (0, len(tokens))
     )
     ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
+    if len(cxt) == 0: return ranges  # for nrk g2c tasks
     if candidates is not None:
         max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
         ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
@@ -932,7 +940,6 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
     if ranges.tgt is not None and '.' in tokens[ranges.tgt[1]:]:  # TODO: debug
         sep_i = tokens.index('.', ranges.tgt[1])
         ranges.sep = (sep_i, sep_i + 1)
-    if ' not ' in whole_string: rel_word = 'not'
     return ranges
 
 def move_ranges(r, offset): 
@@ -946,6 +953,7 @@ def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
     ranges = []
     use_llama_tokenizer = my_isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer))
     newline_token = '<0x0A>' if use_llama_tokenizer else '\n' #tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同  <0x0A>llama换行符
+    if isinstance(tokenizer, LLAMATokenizer): newline_token = NEW_LINE.replace(' \n', '')
     if use_llama_tokenizer:  # add by lxy
         # tokenizer.decode will strip leading '__'
         all_tokens_llama = [tokenizer.convert_ids_to_tokens(id).replace('▁', ' ') for id in input_ids]
@@ -999,8 +1007,9 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
 # bos_token='▁is'; eos_token='</s>' for s2s
 # bos_token='Ġ->', eos_token='Ċ' for gpt
 def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
+    #if isinstance(tokenizer, LLAMATokenizer): text = text.replace('\n', '\ \n') # mqy
     input_ids = tokenizer.encode(text, return_tensors='pt')
-    example_strs = text.strip('\n').split('\n')  # strip the trailing '\n'
+    example_strs = text.strip('\n').split(NEW_LINE)  # strip the trailing '\n'
     ranges = locate_ranges(examples, example_strs, tokenizer, input_ids[0].tolist(), bos_token)
     # by lxy: when bos is tokenized into multiple tokens, e.g. 'likes' -> ['__lik', 'es'] in LLaMA, use last token's index
     bos_indices = [r.bos[-1] - 1 for r in ranges]  # [r.bos[0] for r in ranges]
@@ -1090,13 +1099,13 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
-    text = '\n '.join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
+    text = (NEW_LINE +' ').join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
         '\n' + '\n'.join(example_strs) + '\n'  # prepend '\n' to act as bos for tokenizer without bos
     return examples, text, bos_tokens
 
 def get_answer_index(example):
     cxt, query, cands, (*_, ans), *cls = example
-    if len(cxt) == 1: return 0  # for cxt_len==1 + ~has_local_hop + g2c
+    if len(cxt) <= 1: return 0  # for cxt_len==1 + ~has_local_hop + g2c
     return cands[-1].index(ans)
 
 class InvalidTransException(Exception): pass
@@ -1283,9 +1292,9 @@ def remove_query(task):
     task = vocab_fn, new_gen_fn, cxt2str, new_query2str, *a
     return task
 
-def _g2c(g_fn, cls_labels=['True', 'False']):
+def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
     def wrapped(*args,**kwargs):
-        cxt, query, candidates, (*a, ans0, ans) = g_fn(*args,**kwargs)
+        cxt, query, candidates, (tgt, *a, ans0, ans) = g_fn(*args,**kwargs)
         vocabs = args[0]
         has_local_hop = vocabs[0].data != vocabs[1].data
         rel1 = vocabs[1].relations[0]
@@ -1294,15 +1303,18 @@ def _g2c(g_fn, cls_labels=['True', 'False']):
             _ans0, _ans = ans0, ans
         else:
             label = cls_labels[1]
-            if not has_local_hop and len(cxt) == 1:
+            if not has_local_hop and len(cxt) == 1:  # for nrk g2c tasks, e.g. John is a boy? Yes
                 _ans = choice(list_diff(rel1.dom(), [ans]))
-                _ans0 = choice(rel1.f(_ans))
+                # _ans0 = choice(rel1.f(_ans)) # ans0 does not occur in example_str
             else:
                 _ans0, _ans = choice([(c0, c) for q, *_, c0, c in zip(*candidates)
                                     if c != ans and (query is None or q != query)])
         # (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
         #     (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
-        return cxt, query, candidates, (*a, _ans0, _ans), label
+        if not has_local_hop and len(cxt) == 1:
+            cxt, tgt, _ans0 = [], None, None
+            candidates = candidates + (cls_labels,)
+        return cxt, query, candidates, (tgt, *a, _ans0, _ans), label
     wrapped.__name__ = f'g2c[{fn2str(g_fn)}]'
     return wrapped
 

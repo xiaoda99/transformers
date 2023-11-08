@@ -4,7 +4,7 @@ from collections import OrderedDict
 from collections.abc import Iterable
 import numpy as np
 import math
-from functools import reduce
+from functools import reduce, partial
 from itertools import chain, product, combinations, cycle
 import matplotlib.pyplot as plt
 
@@ -14,6 +14,8 @@ import torch.nn.functional as F
 
 import einops
 from einops import rearrange
+
+from transformers import LlamaTokenizer
 
 from common_utils import iterable, show_topk, topk_md
 
@@ -44,6 +46,7 @@ def combine_weights(weights, qk=True, with_embedding=False, BA=False):
     return wqt.mm(wk) if qk else wo.mm(wv)
 
 def plot_eigv(w, start_i=0, end_i=None, alpha=0.1, plot=True):
+    if w.ndim == 1: w = torch.view_as_real(w)  # complex valued [d] to real valued [d, 2]
     if w.size(0) == w.size(1): w = w.eig()[0]
     else: assert w.size(1) == 2
     # w = w.detach()#.numpy()
@@ -421,8 +424,10 @@ def sample_all_top_entries(tokenizer, m, b, transpose=False, n_samples=50):
         print('  --', row_token, '--', sorted(zip(col_tokens, values), key=lambda x: x[1], reverse=True))
 
 def lookup_top_entries(tokenizer, m, keyword, topk=20):
-    if not keyword.startswith(' '): keyword = ' ' + keyword
-    ids = tokenizer.encode(keyword)
+    # adapted from make_data_tuple in child_utils.py
+    prefix, kwargs = ('', {'add_special_tokens': False}) \
+        if isinstance(tokenizer, LlamaTokenizer) else (' ', {})
+    ids = tokenizer.encode(prefix + keyword, **kwargs)
     if len(ids) > 1:
         # print(tokenizer.tokenize(keyword))
         return None
