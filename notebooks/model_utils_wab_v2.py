@@ -401,7 +401,7 @@ def apply_rotary_pos_emb_every_two(x, sincos, offset=0): # x: bnir
     return (x * cos) + (rotate_every_two(x) * sin)  # binr,1i1r->binr
 
 def apply_rotary_pos_emb_half(x, sincos, offset=0): # x: bnir
-    fn = (lambda t: t[None, None, offset : x.shape[2] + offset, :].repeat(1, 1, 1, 2) # gpt_j_style: i(r/2)->11i(r/2)->11ir
+    fn = (lambda t: t[None, None, offset : x.shape[2] + offset, :].repeat(1, 1, 1, x.shape[-1] // t.shape[-1]) # gpt_j_style: i(r/2)->11i(r/2)->11ir or llama_style
         if t.ndim == 2 else t[:, :, offset : x.shape[2] + offset, :]) # gpt_neox_style
     sin, cos = map(fn, sincos)
     return (x * cos) + (rotate_half(x) * sin)  # bnir,11ir->bnir
@@ -1210,6 +1210,7 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
     assert len(bos_indices) == len(example_strs), '%d != %d' % (len(bos_indices), len(example_strs))
     top1_corrects, answer_probs, candidate_probs = [], [], []
     convert_fn = tokenizer.convert_ids_to_tokens if True else partial(convert_ids_to_tokens, tokenizer=tokenizer)
+    num_correct,all_num = 0,0
     for i, (example_str, bos_i, eos_i, ans_ids) in enumerate(zip(example_strs, bos_indices, eos_indices, answers)):
         ans_tokens = convert_fn(ans_ids)
         for j, (ans_id, ans_token) in enumerate(zip(ans_ids, ans_tokens)):#, ans_probs, ans_prob_dist):
@@ -1244,10 +1245,9 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
                         f'{tokenizer.convert_ids_to_tokens(cand)}:{logits_[cand].item():.6f}'
                         for cand in set(candidates[i]).union({logits_.argmax().item()}))
                     candidate_probs.append([dist[cand].item() for cand in candidates[i]])
-                    print(candidates)  # wab debug
-                    print(candidate_probs)  # wab debug
+                    # print(candidates)  # wab debug
+                    # print(candidate_probs)  # wab debug
                 ans_prob = round(dist[ans_id].item(), 3)
-                print(ans_id)
                 top1_correct = (dist.argmax() == ans_id).item()
                 topk_stat = show_topk(*dist.topk(topk), indices_fn=convert_fn)
 
@@ -1261,7 +1261,6 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
     else:
         loss = compute_loss(logits, labels, reduction=loss_reduction)
         loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100]#.tolist()  # 'none'
-        
     if False and verbose:  # wab debug
         print(loss, np.array(top1_corrects[k_shot_len:]).mean())
         f, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 2.4), sharex=True)
@@ -2276,8 +2275,8 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.3): # use fixed k_shot
     if is_predicting_head and d.attn_pattern.startswith('bos->query'): label_types += ['labels']  # mqy TODO
     # if d.attn_pattern in ['bos->s1']:
     #     label_types = [None]
-    if d.step ==1 and d.attn_pattern in ['bos->relation']:#wab
-        label_types =[None]
+    if d.step ==1 and d.attn_pattern in ['bos->relation','bos->inter']:#wab
+        label_types =[None,'attn_labels:attribute_k','attn_labels']
     if d.step == 1 and d.attn_pattern in ['bos->s1']:#wab
         label_types = [None]
     return label_types
@@ -2859,7 +2858,7 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
             print('resulting ap_scores =', ap_scores, ap_scores.mean(-1))
             # _plot_attn(aw, tokens, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
             #     fontsize=9, transpose=True, figsize=(20-5, 20-5)); plt.show()  # bij->ij
-        if isinstance(h, Iterable) or h == H: return ap_scores
+        if isinstance(h, Iterable) or h == H: return ap_scores,corrects#wab
 
     aw = o.attentions[l][0, h]; attns = [aw]
     if plot_attr:
@@ -2888,7 +2887,7 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
             _plot_attn(a, tokens, ax=ax, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
                 fontsize=fontsize, transpose=True, use_imshow=False)
         plt.show()
-    return ap_scores
+    return ap_scores,corrects#wab
 
 def plot_attn_attrs(data_tuples, model, tokenizer, node, layer=None, head=None, topi=[0], 
                 head_attr_fn=None, attn_patterns=None, mix=False, **kwargs):
@@ -2900,8 +2899,16 @@ def plot_attn_attrs(data_tuples, model, tokenizer, node, layer=None, head=None, 
     for l, h in heads:
         s = f'{l}-{h}' if not mix else ' + '.join([f'{_l}-{_h}' for _l, _h in zip(l, h)])
         print(' -> '.join([s] + [n.name for n in node2path(node)]))
-        ap_scores = mr(plot_attn_attr)(data_tuples, model, tokenizer, node, l, h, attn_patterns=attn_patterns, **kwargs)
-        print('reduced_ap_scores =', ap_scores, ap_scores.mean())
+        # ap_scores = mr(plot_attn_attr)(data_tuples, model, tokenizer, node, l, h, attn_patterns=attn_patterns, **kwargs)#wab
+        # print('ap_scores',ap_scores)
+        ap_scores,corrects = [],[]
+        for data_tuple in data_tuples:
+            ap_score,correct = plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=attn_patterns, **kwargs)
+            ap_scores.append(ap_score)
+            corrects.append(correct)
+        num_correct = [co for co in corrects if co[0]]
+        print('acc:',round(len(num_correct)/len(corrects),3),len(num_correct),len(corrects))#wab
+        print('reduced_ap_scores =',sum(ap_scores)/len(ap_scores))#wab
 
 def cluster(emb, labels, n_clusters=3):
     assert emb.shape[0] == labels.shape[0], '%d != %d' % (emb.shape[0], labels.shape[0])

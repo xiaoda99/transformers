@@ -927,8 +927,6 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         whole_string = "".join(t for t in tokens)
         rel_word = None # 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
         # if ' not ' in whole_string: rel_word = 'not'
-        print(whole_string)
-        print(s1)
         ranges = WINORanges(
             io = locate(whole_string, tokens, io, return_last=True),
             op = locate(whole_string, tokens, op, return_last=True),
@@ -971,9 +969,6 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
     rel_word = None # 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
     if ' capital ' in whole_string: rel_word = 'capital'
     elif ' not ' in whole_string: rel_word = 'not'
-    print('whole_string',whole_string)  # wab debug
-    print('ans',ans)  # wab debug
-    print('ans0',ans0)  # wab debug
     ranges = Ranges(
         bos = locate(whole_string, tokens, bos_token, return_last=True),
         ans = locate(whole_string, tokens, ans, return_last=True),

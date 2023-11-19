@@ -494,7 +494,7 @@ def xxx_be(positive=True):
     return s if s.startswith(",") else " " + s
     
 synonym_dict = {
-    'has': ['owns', 'possesses'], 'have': ['own', 'possesse'],
+    'has': ['owns', 'possesses'], 'have': ['own', 'possess'],
     'wants to go to': ['wants to visit', 'longs for', 'yearns for'], 'want to go to': ['want to visit', 'long for', 'yearn for'],
     'arrived': ['appeared', 'showed up'], 'arrive': ['appear', 'show up'],
 }
@@ -797,7 +797,6 @@ def make_examples(task, nrows=4, vocab_for_each_row=False, **kwargs):
             vocabs.append(vocab)
             examples.append([cxt, query, candidates, ans_chain, *a])
         if len(examples) == nrows: break
-    
     return vocabs, examples
 
 def _item2str(item, vocab=None): #, reverse=False):
@@ -918,12 +917,9 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         ranges.ans0s = tuple(map(np.array, zip(ranges.ans0, ranges.s1)))  # XD: remove ranges.s2
         ranges.example = (0, ranges.ans[-1])  # XD
         return ranges
-    
-    
-    cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example 
-    # print("example:",example)   
-    cls = cls[0] if len(cls) > 0 else None    
-    
+
+    cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
+    cls = cls[0] if len(cls) > 0 else None
     if trimmed:
         ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
         ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
@@ -977,11 +973,12 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
     ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
     if len(cxt) == 0: return ranges  # for nrk g2c taskss
     if candidates is not None:
+        ans0s = candidates[-2] if cls is None else candidates[-3]  # XD
         max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
         ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
-            [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
+            [locate(whole_string, tokens, a0, return_all=True) for a0 in ans0s], dedup=True)))))
         ranges.nans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
-            [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2] if a0 != ans0], dedup=True)))))
+            [locate(whole_string, tokens, a0, return_all=True) for a0 in ans0s if a0 != ans0], dedup=True)))))
         ranges.ntgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(    
             [locate(whole_string, tokens, t, return_all=True) for t in candidates[1] if t != tgt], dedup=True)))))
     if ranges.tgt is not None and '.' in tokens[ranges.tgt[1]:]:  # TODO: debug
@@ -1151,9 +1148,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
 def get_answer_index(example):
     cxt, query, cands, (*_, ans), *cls = example
     if len(cxt) <= 1: return 0  # for cxt_len==1 + ~has_local_hop + g2c
-    if ans not in cands[-1]:   #modify by nrk
-        return 0
-    return cands[-1].index(ans)
+    return cands[-1].index(ans if len(cls) == 0 else cls[0])  # XD
 
 class InvalidTransException(Exception): pass
 
@@ -1199,7 +1194,8 @@ def verbalize_relation(vocab):
         'types_of_things': (' a kind of', 'one'),
         'capabilities_of_things': (' the thing that can', 'one'),
         'countries_of_cities': (' the city in', 'city'), 
-        'country2capital': (' the capital of', 'city'), 
+        # 'country2capital': (' the capital of', 'city'), 
+        'country2capital': (' the city in', 'city'),  # XD debug 
         'word2capitalized': (' the capitalized form of', 'word'), 
         'letter2uppercase': (' the uppercase of', 'letter'), 
         'do2did': (' the past tense of', 'word'), 
@@ -1352,15 +1348,15 @@ def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
             label = cls_labels[1]
             if not has_local_hop and len(cxt) == 1:  # for nrk g2c tasks, e.g. John is a boy? Yes
                 _ans = choice(list_diff(rel1.dom(), [ans]))
-                _ans0 = None # choice(rel1.f(_ans)) # ans0 does not occur in example_str
+                # _ans0 = choice(rel1.f(_ans)) # ans0 does not occur in example_str
             else:
                 _ans0, _ans = choice([(c0, c) for q, *_, c0, c in zip(*candidates)
                                     if c != ans and (query is None or q != query)])
         # (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
         #     (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
         if not has_local_hop and len(cxt) == 1:
-            cxt, tgt = [], None
-            candidates = candidates + (cls_labels,)
+            cxt, tgt, _ans0 = [], None, None
+        candidates = candidates + (cls_labels,)
         return cxt, query, candidates, (tgt, *a, _ans0, _ans), label
     wrapped.__name__ = f'g2c[{fn2str(g_fn)}]'
     return wrapped
@@ -1424,10 +1420,11 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
     conditions = [True, ]
     while any(conditions):
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
-        # print('In generate: example =', examples[0])
         ans_counts = Counter([ans for cxt, query, cands, (*_, ans), *cls in examples]).most_common()
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
+        cxt, query, candidates, (tgt, *_, ans0, ans), *cls = examples[0]
+        if len(cls) > 0: break
         conditions = [
             not position_relevant and len(ind_counts) > 1 and (len(ind_counts) < cxt_len 
                                     or ind_counts[0][1] > ind_counts[-1][1] * 3),

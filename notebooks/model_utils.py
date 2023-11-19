@@ -400,7 +400,8 @@ def apply_rotary_pos_emb_every_two(x, sincos, offset=0): # x: bnir
     return (x * cos) + (rotate_every_two(x) * sin)  # binr,1i1r->binr
 
 def apply_rotary_pos_emb_half(x, sincos, offset=0): # x: bnir
-    fn = (lambda t: t[None, None, offset : x.shape[2] + offset, :].repeat(1, 1, 1, 2) # gpt_j_style: i(r/2)->11i(r/2)->11ir
+    # gpt_j_style: i(r/2)->11i(r/2)->11ir or llama_style ir->11ir
+    fn = (lambda t: t[None, None, offset : x.shape[2] + offset, :].repeat(1, 1, 1, x.shape[-1] // t.shape[-1])
         if t.ndim == 2 else t[:, :, offset : x.shape[2] + offset, :]) # gpt_neox_style
     sin, cos = map(fn, sincos)
     return (x * cos) + (rotate_half(x) * sin)  # bnir,11ir->bnir
@@ -1279,9 +1280,6 @@ def trim_outputs(outputs):
 
 def is_trimmed_outputs(outputs): return outputs.mlp_outputs == ()
 
-def is_cls_candidates(candidates):
-    return len(set(candidates) & {'True', 'False', 'Yes', 'No'}) > 0  # set intersection is not empty
-
 def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_token=None, #'Ċ',
             logits_bias=None, custom_forward=True, by_head=None, trim=False, verbose=True, outputs = None):
     if by_head is None: by_head = ['value', 'attn_out']
@@ -1309,8 +1307,8 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
         tokenizer, *args, logits=logits, logits_bias=logits_bias, labels=labels, loss_reduction='mean',
         k_shot=k_shot, topk=3, verbose=verbose)
     # logits_mask is used when rel1 is equal relation and cxt_len > 1 (checked in make_data_tuple)
-    cxt, query, cands, *_ = examples[0]
-    if cands is not None and (cands[-2] == cands[-1] or is_cls_candidates(cands[-1])) and logits_mask is not None: # rel1 is copy or g2c task
+    cxt, query, cands, *cls = examples[0]
+    if cands is not None and (cands[-2] == cands[-1] or len(cls) > 0) and logits_mask is not None: # rel1 is copy or g2c task
         # print('In predict: set logits_mask')
         o.logits_mask = logits_mask
     # once evaluation completes, revise labels to use only correctly predicted labels for subsequent attribution
