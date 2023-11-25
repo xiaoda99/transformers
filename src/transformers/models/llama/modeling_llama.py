@@ -238,9 +238,10 @@ class LlamaMLP(nn.Module):
             down_proj = sum(down_proj)
         else:
             gate = self.act_fn(self.gate_proj(x)) if gate is None else gate.to(x.device)
-            out = self.down_proj(gate * self.up_proj(x))
+            pre_act = self.up_proj(x)
+            out = self.down_proj(gate * pre_act)
 
-        return (out, gate) if output_intermediate else out
+        return (out, pre_act, gate) if output_intermediate else out
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:

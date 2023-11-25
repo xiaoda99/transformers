@@ -14,6 +14,7 @@ import math
 from itertools import chain
 
 import numpy as np
+import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -258,6 +259,19 @@ def fn2str(fn, excluded_keys=[]):
         if isinstance(v, types.FunctionType): return v.__name__
         return v
     return fn.func.__name__ + '[' + ','.join(f'{k}={convert_value(k, v)}' for k, v in fn.keywords.items()) + ']'
+
+def fisher_discriminant_ratio(x, y, labels=['▁Yes', '▁No'], plot=True):
+    x = np.array(x); y = np.array(y)
+    y0 = y[x == labels[0]]; y1 = y[x == labels[1]]
+    m0 = y0.mean(); m1 = y1.mean()
+    fdr = (m0 - m1)**2 / (np.var(y0) + np.var(y1)) # Fisher Discriminant Ratio 
+    if plot:
+        # plt.hist([Y0, Y1], label=labels)
+        plt.hist(y0, alpha=0.5, label=labels[0])
+        plt.hist(y1, alpha=0.5, label=labels[1])
+        plt.legend(loc='upper right')
+        plt.show()
+    return fdr
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
