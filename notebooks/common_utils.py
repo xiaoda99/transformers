@@ -263,12 +263,18 @@ def fn2str(fn, excluded_keys=[]):
 def fisher_discriminant_ratio(x, y, labels=['▁Yes', '▁No'], plot=True):
     x = np.array(x); y = np.array(y)
     y0 = y[x == labels[0]]; y1 = y[x == labels[1]]
-    m0 = y0.mean(); m1 = y1.mean()
-    fdr = (m0 - m1)**2 / (np.var(y0) + np.var(y1)) # Fisher Discriminant Ratio 
+    m0 = y0.mean(0); m1 = y1.mean(0)
+    fdr = np.square(m0 - m1).sum() / (np.var(y0, axis=0).sum() + np.var(y1, axis=0).sum())
     if plot:
-        # plt.hist([Y0, Y1], label=labels)
-        plt.hist(y0, alpha=0.5, label=labels[0])
-        plt.hist(y1, alpha=0.5, label=labels[1])
+        if y.ndim == 1:
+            # plt.hist([Y0, Y1], label=labels)
+            plt.hist(y0, alpha=0.5, label=labels[0])
+            plt.hist(y1, alpha=0.5, label=labels[1])
+        elif y.ndim == 2:
+            plt.plot(y0[:, 0], y0[:, 1], 'gx', alpha=1, label=labels[0]);
+            plt.plot(y1[:, 0], y1[:, 1], 'rx', alpha=1, label=labels[1]);
+            line_range = [min(np.min(y[:, 0]), np.min(y[:, 1])), max(np.max(y[:, 0]), np.max(y[:, 1]))]
+            plt.plot(line_range, line_range, color='k', linestyle='-', alpha=0.2)
         plt.legend(loc='upper right')
         plt.show()
     return fdr

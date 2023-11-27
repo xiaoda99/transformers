@@ -1106,7 +1106,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
 
 def get_answer_index(example):
     cxt, query, cands, (*_, ans), *cls = example
-    if len(cxt) <= 1: return 0  # for cxt_len==1 + ~has_local_hop + g2c
+    # if len(cxt) <= 1: return 0  # for cxt_len==1 + ~has_local_hop + g2c
     return cands[-1].index(ans if len(cls) == 0 else cls[0])
 
 class InvalidTransException(Exception): pass
