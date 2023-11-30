@@ -50,7 +50,25 @@ from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, sh
 from child_utils_wab import make_data_tuple, get_answer_index, generate
 from weight_analysis import get_head_weights
 
-@dataclass
+# @dataclass
+# class Outputs:
+#     inputs_embeds: torch.FloatTensor = None
+#     position_embeds: torch.FloatTensor = None
+#     attn_outputs: tuple = ()
+#     values: tuple = ()
+#     attn_outs: tuple = ()
+#     head_inputs: tuple = ()
+#     head_outputs: tuple = ()
+#     intermediates: tuple = ()
+#     mlp_outputs: tuple = ()
+#     ln_states: tuple = ()
+#     hidden_states: tuple = ()
+#     attentions: tuple = ()
+#     logits: torch.FloatTensor = None
+#     labels: torch.LongTensor = None
+#     loss: torch.FloatTensor = None
+#     attn_attr: OrderedDict = field(default_factory=OrderedDict)
+@dataclass#wab
 class Outputs:
     inputs_embeds: torch.FloatTensor = None
     position_embeds: torch.FloatTensor = None
@@ -59,7 +77,8 @@ class Outputs:
     attn_outs: tuple = ()
     head_inputs: tuple = ()
     head_outputs: tuple = ()
-    intermediates: tuple = ()
+    mlp_pre_acts: tuple = ()
+    mlp_gates: tuple = ()
     mlp_outputs: tuple = ()
     ln_states: tuple = ()
     hidden_states: tuple = ()
@@ -68,7 +87,7 @@ class Outputs:
     labels: torch.LongTensor = None
     loss: torch.FloatTensor = None
     attn_attr: OrderedDict = field(default_factory=OrderedDict)
-
+    mlpneuron_attr: OrderedDict = field(default_factory=OrderedDict)
 @dataclass
 class Attributions:
     embed: torch.FloatTensor = 0.
@@ -957,6 +976,87 @@ def to(a, device):
         return {k: to(v, device) for k, v in a.items()}
     return a  # may be None
 
+# def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, ranges=None, attribute_layer=None, 
+#             head_mask=None, mlp_mask=None, attn_weights=None, hidden_states=None, detach_layer=None,
+#             special_head=(None, None), special_head_multiplier=1,
+#             multiplied_layers=[], attr_threshold=1., base_multiplier=1.5,
+#             output_hidden_states=True, output_device='cpu'):
+#     L = len(model.transformer.h)
+#     head_mask, mlp_mask, attn_weights = [fill_list(mask, L, attribute_layer)
+#         for mask in [head_mask, mlp_mask, attn_weights]]
+#     from_layer = attribute_layer if hidden_states is not None else None
+
+#     self = model.transformer
+#     (hidden_states, inputs_embeds, position_embeds) = embed_forward(self, inputs) \
+#         if from_layer is None else (hidden_states, None, None)
+#     inputs_embeds = inputs_embeds.to(output_device)
+#     all_hidden_states, intermediates, attn_outputs, mlp_outputs, ln_states = (), (), (), (), ()
+#     attn_fwd_outputs = []
+#     for i, b in enumerate(self.h):
+#         if from_layer is not None and i < from_layer: continue
+#         if i == detach_layer: hidden_states = hidden_states.detach()
+#         if output_hidden_states: all_hidden_states += (to(hidden_states, output_device),)
+#         hidden_states = hidden_states.to(b.ln_1.weight.device) # switch device on PP stage boundaries
+#         # input_ids = inputs if isinstance(inputs, torch.Tensor) else inputs.input_ids
+#         # device = input_ids.device
+#         # batch_size, seq_length = input_ids.size()
+#         # position_ids = torch.arange(seq_length, dtype=torch.long, device=device)
+#         # position_ids = position_ids.unsqueeze(0).view(-1, seq_length)
+#         # attention_mask = torch.ones(
+#         #     (batch_size, seq_length), dtype=torch.bool, device=inputs_embeds.device
+#         # )
+#         # attention_mask = model.transformer._prepare_decoder_attention_mask(
+#         #     attention_mask, (batch_size, seq_length), inputs_embeds, 0
+#         # )
+#         # hidden_states = b(hidden_states, attention_mask=attention_mask, position_ids=position_ids)[0]
+#         h, ln1_state = scaled_ln(b.ln_1, hidden_states, scaled=False)
+        
+#         # attn_output, aw, _ = b.attn(h, attention_mask=attention_mask, position_ids=position_ids, output_attentions=True)
+#         # attn_fwd_output = (aw, None, None, None, None)
+#         attn_output, *attn_fwd_output = maybe_composed_attn_forward(attn_fwd_outputs, model, b, h, h, h,
+#             by_head=by_head, head_mask=head_mask[i], attn_weights=attn_weights[i], ranges=ranges)
+#         attn_fwd_output = [to(o, output_device) for o in attn_fwd_output]
+#         attn_fwd_outputs.append(attn_fwd_output)
+        
+#         if False and i == special_head[0]:  # obsolete
+#             head_output = list(rearrange(head_output, 'b n i e -> n b i e'))  # nbie->n*bie
+#             head_output[special_head[1]] = head_output[special_head[1]] * special_head_multiplier
+#             special_head_outputs = torch.cat([special_head_outputs, head_output[special_head[1]]]) \
+#                 if special_head_outputs is not None else head_output[special_head[1]] # sie, s in [1, 2] for 8-1, 12-10
+#             attn_output = sum(head_output)
+#         if False and i in multiplied_layers:  # obsolete
+#             multiplier = get_multiplier(b, hidden_states, aw, head_input, special_head_outputs, labels, i,
+#                 attr_threshold=attr_threshold, base_multiplier=base_multiplier)
+#             attn_output = torch.einsum('bnie,ni->bie', head_output, multiplier)
+#         parallel_attn_mlp = my_isinstance(b, (GPTJBlock, GPTNeoXLayer))
+#         if not parallel_attn_mlp: hidden_states = hidden_states + attn_output
+#         (mlp_output, intermediate), ln2_state = mlp_forward(b, hidden_states, output_intermediate=True)
+#         if mlp_mask[i] is not None: mlp_output = einsum('bie,bi->bie', mlp_output, mlp_mask[i])
+#         intermediates += (to(intermediate, output_device),)
+#         hidden_states = (hidden_states + mlp_output) if not parallel_attn_mlp else \
+#             (attn_output + mlp_output + hidden_states)  # order matters!
+#         attn_output = to(attn_output, output_device); attn_outputs += (attn_output,)
+#         mlp_output = to(mlp_output, output_device); mlp_outputs += (mlp_output,)
+#         ln_states += ((to(ln1_state, output_device), to(ln2_state, output_device)),)
+#     all_attentions, values, attn_outs, head_inputs, head_outputs = zip(*attn_fwd_outputs)
+#     if output_hidden_states: all_hidden_states += (to(hidden_states, output_device),)
+#     hidden_states, lnf_state = scaled_ln(self.ln_f, hidden_states, scaled=False)
+#     ln_states += (to(lnf_state, output_device),)
+#     if output_hidden_states: all_hidden_states += (to(hidden_states, output_device),)
+
+#     logits = model.lm_head(hidden_states)
+#     loss = compute_loss(logits, labels, reduction=loss_reduction) if labels is not None else None
+#     logits, loss = to(logits, output_device), to(loss, output_device)
+
+#     def maybe_none(l): return l if l[0] is not None else None
+#     return Outputs(
+#         inputs_embeds=inputs_embeds, position_embeds=position_embeds,
+#         attn_outputs=attn_outputs, values=maybe_none(values), attn_outs=maybe_none(attn_outs),
+#         head_inputs=maybe_none(head_inputs), head_outputs=maybe_none(head_outputs), 
+#         intermediates=intermediates, mlp_outputs=mlp_outputs, ln_states=ln_states,
+#         hidden_states=all_hidden_states, attentions=all_attentions, 
+#         logits=logits, loss=loss,
+#     )
 def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, ranges=None, attribute_layer=None, 
             head_mask=None, mlp_mask=None, attn_weights=None, hidden_states=None, detach_layer=None,
             special_head=(None, None), special_head_multiplier=1,
@@ -971,7 +1071,7 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, rang
     (hidden_states, inputs_embeds, position_embeds) = embed_forward(self, inputs) \
         if from_layer is None else (hidden_states, None, None)
     inputs_embeds = inputs_embeds.to(output_device)
-    all_hidden_states, intermediates, attn_outputs, mlp_outputs, ln_states = (), (), (), (), ()
+    all_hidden_states, mlp_pre_acts, mlp_gates, attn_outputs, mlp_outputs, ln_states = (), (), (), (), (), ()
     attn_fwd_outputs = []
     for i, b in enumerate(self.h):
         if from_layer is not None and i < from_layer: continue
@@ -1011,9 +1111,10 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, rang
             attn_output = torch.einsum('bnie,ni->bie', head_output, multiplier)
         parallel_attn_mlp = my_isinstance(b, (GPTJBlock, GPTNeoXLayer))
         if not parallel_attn_mlp: hidden_states = hidden_states + attn_output
-        (mlp_output, intermediate), ln2_state = mlp_forward(b, hidden_states, output_intermediate=True)
+        (mlp_output, mlp_pre_act, mlp_gate), ln2_state = mlp_forward(b, hidden_states, output_intermediate=True)
         if mlp_mask[i] is not None: mlp_output = einsum('bie,bi->bie', mlp_output, mlp_mask[i])
-        intermediates += (to(intermediate, output_device),)
+        mlp_pre_acts += (to(mlp_pre_act, output_device),)
+        mlp_gates += (to(mlp_gate, output_device),)
         hidden_states = (hidden_states + mlp_output) if not parallel_attn_mlp else \
             (attn_output + mlp_output + hidden_states)  # order matters!
         attn_output = to(attn_output, output_device); attn_outputs += (attn_output,)
@@ -1034,11 +1135,10 @@ def forward0(model, inputs, labels=None, loss_reduction=None, by_head=None, rang
         inputs_embeds=inputs_embeds, position_embeds=position_embeds,
         attn_outputs=attn_outputs, values=maybe_none(values), attn_outs=maybe_none(attn_outs),
         head_inputs=maybe_none(head_inputs), head_outputs=maybe_none(head_outputs), 
-        intermediates=intermediates, mlp_outputs=mlp_outputs, ln_states=ln_states,
+        mlp_pre_acts=mlp_pre_acts, mlp_gates=mlp_gates, mlp_outputs=mlp_outputs, ln_states=ln_states,
         hidden_states=all_hidden_states, attentions=all_attentions, 
         logits=logits, loss=loss,
-    )
-
+    )#wab
 def forward(model, inputs, labels=None, loss_reduction=None, by_head=False, 
             head_mask=None, mlp_mask=None, attn_weights=None,
             attribute_layer=None, hidden_states=None, detach_layer=None,
@@ -2840,9 +2940,8 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         fn = partial(mixed_forward, layer=l, head=h, labels=labels, label_type=label_type, outputs=o, ranges=ranges)
         keys = ['embed_mask', 'mlp_mask', 'head_mask']
         to_layer = max(l) if isinstance(l, Iterable) else l
-        x = OrderedDict((key, get_x(key, o, to_layer=to_layer)) for key in keys)
+        x = OrderedDict((key, get_x(key, o, to_layer=to_layer)) for wakey in keys)
         *_, ys, logits = attribute(fwd_fn, model, x, [fn] + fns, num_points=3+4, forward_only=True)
-        # print('scaled_logprobs =', ys)  # wab remove
         if isinstance(logits, (list, tuple)): logits = sum(logits)
         if logits is None: pass
         elif logits.size(-1) == model.lm_head.out_features:  # lm_logits
