@@ -41,6 +41,10 @@ ordinals = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', '
 digit2cardinal = OrderedDict(zip(digits, cardinals))
 digit2ordinal = OrderedDict(zip(digits, ordinals))
 
+
+#NEW_LINE = '! \n'
+NEW_LINE = '\n'
+
 # uppercases = [l for l in string.ascii_uppercase if len(_tokenizer.tokenize('%s %s' % (l*2, l*2))) == 2]
 # lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
 full_vocab = uppercase + digits
@@ -971,7 +975,7 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
             example = (0, len(tokens))
         )
     ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
-    if len(cxt) == 0: return ranges  # for nrk g2c taskss
+    if len(cxt) == 0: return ranges  # for nrk g2c tasks
     if candidates is not None:
         ans0s = candidates[-2] if cls is None else candidates[-3]  # XD
         max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
@@ -997,6 +1001,7 @@ def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
     ranges = []
     use_llama_tokenizer = my_isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer))
     newline_token = '<0x0A>' if use_llama_tokenizer else '\n' #tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同  <0x0A>llama换行符
+    if isinstance(tokenizer, LLAMATokenizer): newline_token = NEW_LINE.replace(' \n', '')
     if use_llama_tokenizer:  # add by lxy
         # tokenizer.decode will strip leading '__'
         all_tokens_llama = [tokenizer.convert_ids_to_tokens(id).replace('▁', ' ') for id in input_ids]
@@ -1050,8 +1055,9 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
 # bos_token='▁is'; eos_token='</s>' for s2s
 # bos_token='Ġ->', eos_token='Ċ' for gpt
 def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
+    #if isinstance(tokenizer, LLAMATokenizer): text = text.replace('\n', '\ \n') # mqy
     input_ids = tokenizer.encode(text, return_tensors='pt')
-    example_strs = text.strip('\n').split('\n')  # strip the trailing '\n'
+    example_strs = text.strip('\n').split(NEW_LINE)  # strip the trailing '\n'
     ranges = locate_ranges(examples, example_strs, tokenizer, input_ids[0].tolist(), bos_token)
     # by lxy: when bos is tokenized into multiple tokens, e.g. 'likes' -> ['__lik', 'es'] in LLaMA, use last token's index
     bos_indices = [r.bos[-1] - 1 for r in ranges]  # [r.bos[0] for r in ranges]
@@ -1141,14 +1147,14 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
-    text = '\n '.join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
+    text = (NEW_LINE +' ').join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
         '\n' + '\n'.join(example_strs) + '\n'  # prepend '\n' to act as bos for tokenizer without bos
     return examples, text, bos_tokens
 
 def get_answer_index(example):
     cxt, query, cands, (*_, ans), *cls = example
-    if len(cxt) <= 1: return 0  # for cxt_len==1 + ~has_local_hop + g2c
-    return cands[-1].index(ans if len(cls) == 0 else cls[0])  # XD
+    # if len(cxt) <= 1: return 0  # for cxt_len==1 + ~has_local_hop + g2c
+    return cands[-1].index(ans if len(cls) == 0 else cls[0])
 
 class InvalidTransException(Exception): pass
 
@@ -1194,8 +1200,7 @@ def verbalize_relation(vocab):
         'types_of_things': (' a kind of', 'one'),
         'capabilities_of_things': (' the thing that can', 'one'),
         'countries_of_cities': (' the city in', 'city'), 
-        # 'country2capital': (' the capital of', 'city'), 
-        'country2capital': (' the city in', 'city'),  # XD debug 
+        'country2capital': (' the capital of', 'city'), 
         'word2capitalized': (' the capitalized form of', 'word'), 
         'letter2uppercase': (' the uppercase of', 'letter'), 
         'do2did': (' the past tense of', 'word'), 
