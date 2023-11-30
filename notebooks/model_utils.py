@@ -717,8 +717,8 @@ def head_forward(model, hidden_states, layer, head, ln_state=None, logits_mask=N
         logits = attn_logits[:, head]  # bnij->bij
         if attn_mask is not None:
             # mask_value = torch.finfo(logits.dtype).min
-            mask_value = -1e9 if logits.dtype == attn_mask.dtype == torch.float32 else -1e4  # else shoud not happen for gpt-j. see _attn()
-            logits = logits + attn_mask * mask_value
+            mask_value = -1e9 if logits.dtype == torch.float32 else -1e4  # else shoud not happen for gpt-j. see _attn()
+            logits = logits + attn_mask.astype(logits.dtype) * mask_value
         logprobs = logits.log_softmax(-1) if not attribute_k else logits
         causal_mask = self.bias[:, :, :logits.size(-2), :logits.size(-1)].squeeze(0)  # 11ij->1ij, may be unneccesary?
         # per_example_sum. per_example_mean is hard to define when using unormalized attn attr  # bug fix
@@ -805,7 +805,9 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
             if label_type in ['labels', 'argmax_labels']:
                 kwargs['labels'] = get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels) \
                     if label_type == 'argmax_labels' else labels
-        kwargs = {k: v.to(hs.device, dtype=hs.dtype if 'labels' not in k and k != 'attn_mask' else None)  # TODO: why None?
+        # kwargs = {k: v.to(hs.device, dtype=hs.dtype if 'labels' not in k and k != 'attn_mask' else None)  # TODO: why None?
+        # labels should be long. attn_labels should be float32 (TODO: float16 mayb also be OK?)
+        kwargs = {k: v.to(hs.device, dtype=hs.dtype if 'labels' not in k else None)
                 for k, v in kwargs.items()}
         kwargs['ln_state'] = to(outputs.ln_states[layer][int(head == H)], hs.device)
         return kwargs
@@ -1959,11 +1961,11 @@ def data2str(data, threshold_score=0.3, verbose=True):
     if attribute_k: s = s + ' ' + 'attr_k'
     return s
 
-def get_head_mlp_attr(attr, mask_last_mlps=False):
+def get_head_mlp_attr(attr):#, mask_last_mlps=False):
     if attr is None: return None
     L, H = attr.head.size()
     mask = torch.ones(L, H + 1)
-    if mask_last_mlps: mask[-2:, -1] = 0  # mask last two mlp layers  # TODO: Bug! L-2:L are not last two layers!
+    # if mask_last_mlps: mask[-2:, -1] = 0  # mask last two mlp layers  # TODO: Bug! L-2:L are not last two layers!
     return torch.cat([attr.head, attr.mlp.unsqueeze(-1)], dim=1) * mask
 
 def get_matched_head_attr(data):
@@ -2019,7 +2021,8 @@ def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_
 
 attn_patterns_by_step = {
     -1: ['bos->ans0'],
-    0: ['bos->ans]^', 'bos->query', 'bos->ans0+', 'bos->tgt', 'bos->bos^', 'bos->rel', 'bos->cls^', 'bos->ans]',
+    0: ['bos->ans]^', 'bos->query', 'bos->ans0+', 'bos->tgt', 'bos->bos^', 'bos->rel', 'bos->cls^',
+        'bos->ans]', 'bos->ans-',
         'bos->sep',  # 11-4
         'bos->sep+',  # 13-11
         'bos->sep-',
@@ -2089,7 +2092,7 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.3): # use fixed k_shot
         label_types = ['labels']  # e.g. bos->bos at step 0
         # if d.head == d.H and (d.layer, d.head) in parent.data.top_mlps:
         #     label_types += ['mlp_gate_labels']
-    elif icl_score > icl_score_thld or is_predicting_head or is_recurrent_head or d.attn_pattern in ['ans]->query']: #or d.ap_score >0.99: #mqy
+    elif False: # icl_score > icl_score_thld or is_predicting_head or is_recurrent_head or d.attn_pattern in ['ans]->query']: #or d.ap_score >0.99: #mqy
         label_types = ['attn_labels', normalized_attn_labels][:1] if not point_wise(d.attn_pattern) else [None]
         activating_attn_labels = f'attn_labels:{parse_attn_pattern(d.attn_pattern)[0]}->~<s>,{min(3, k_shot)}'
         # head_label_types = get_root(parent).data.head_label_types
@@ -2683,14 +2686,14 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         x = OrderedDict((key, get_x(key, o, to_layer=to_layer, mask_last_mlp=_mask_last_mlp,
                                     device=device)) for key in keys)
         *_, ys, logits = attribute(fwd_fn, model, x, [fn] + fns, num_points=3+2, forward_only=True)
-        print('scaled_logprobs =', ys)
+        # print('scaled_logprobs =', ys)
         if isinstance(logits, (list, tuple)): logits = sum(logits)
         if logits is None: pass
         elif logits.size(-1) == model.lm_head.out_features:  # lm_logits
             # logits = logits + o.logits_mask #* (1e4 if logits.dtype == torch.float16 else 1e9)
             pred_logits, pred_labels, ap_scores, *_ = show_predictions(
                 tokenizer, *args, logits=logits[-1:], labels=labels,
-                k_shot=k_shot, topk=4, loss_reduction='none', sep='\t')
+                k_shot=k_shot, topk=4, loss_reduction='none', sep='\t', verbose=False)
         elif logits.size(-1) == input_ids.size(1): # attn_logits, bij
             attn_pattern = node2path(node)[-1].data.attn_pattern or 'bos->ans0'
             attn_labels, ranges_q = attn_pattern2labels(ranges, attn_pattern, aw_size, k_shot=0)

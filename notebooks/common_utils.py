@@ -261,7 +261,7 @@ def fn2str(fn, excluded_keys=[]):
     return fn.func.__name__ + '[' + ','.join(f'{k}={convert_value(k, v)}' for k, v in fn.keywords.items()) + ']'
 
 def fisher_discriminant_ratio(x, y, labels=['▁Yes', '▁No'], plot=True):
-    x = np.array(x); y = np.array(y)
+    x = np.array(x); y = np.array(y, dtype=np.float32)
     y0 = y[x == labels[0]]; y1 = y[x == labels[1]]
     m0 = y0.mean(0); m1 = y1.mean(0)
     fdr = np.square(m0 - m1).sum() / (np.var(y0, axis=0).sum() + np.var(y1, axis=0).sum())
