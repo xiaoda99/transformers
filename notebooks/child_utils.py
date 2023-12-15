@@ -861,7 +861,7 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False)
     substring = substring.lower() 
     substring = strip_a(substring)
     assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
-    if substring.strip() in ['->', '?']:
+    if substring.strip() in ['->', '?', ':']:
         char_locations = [whole_string.index(substring), whole_string.rindex(substring)]
     else:
         pattern = r"\b%s(?:s|es)?\b" if not substring.startswith(" ") else r"%s(?:s|es)?\b"
@@ -1097,7 +1097,8 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         s = ' '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
         _bos_token = bos_token
         if bos_token == '': query_str = strs[1]; _bos_token = rsplit_bos(query_str)
-        if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
+        # if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
+        if len(cls) > 0: _bos_token = ':'; s += '? Answer' + _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
     text = (NEW_LINE +' ').join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
