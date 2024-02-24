@@ -1,4 +1,3 @@
-from lib2to3.pgen2 import token
 import sys
 import os
 import json
@@ -26,9 +25,10 @@ import torch.nn.functional as F
 
 from const import *
 from common_utils import join_lists, list_diff, my_isinstance, lget, fn2str
-from openai_utils import query_openai
-from LLAMATokenizer import LLAMATokenizer
-from transformers import LlamaTokenizer
+# from openai_utils import query_openai
+# from LLAMATokenizer import LLAMATokenizer
+# from transformers import LlamaTokenizer
+
 # sys.path.insert(0, '/nas/xd/projects/PyFunctional')
 # from functional import seq
 # from functional.pipeline import Sequence
@@ -820,6 +820,8 @@ class Ranges:
     ans0: tuple = None
     query: tuple = None
     tgt: tuple = None
+    dans0: tuple = None
+    dtgt: tuple = None
     rel: tuple = None
     sep: tuple = None
     ans0s: list = None
@@ -836,6 +838,36 @@ class IOIRanges:   # wab
     s2: tuple = None
     ans0s: list = None
     example: tuple = None
+
+@dataclass    
+class Winograd:  # wab
+    def __init__(self, text_json, word_idx_json):
+        with open(text_json, 'r') as f:
+            self.sentences=json.load(f)
+        with open(word_idx_json, 'r') as f:
+            self.word_idx = json.load(f)
+            if 'candidates' in self.word_idx:  # to be consistent with candidates of examples from generate
+                self.word_idx['candidates'] = [[cand, cand] for cand in self.word_idx['candidates']]
+                
+@dataclass
+class WINORanges:   # wab
+    bos: tuple = None
+    op: tuple = None
+    ans: tuple = None
+    preans: tuple = None
+    postans: tuple = None
+    ans0: tuple = None
+    nans0: tuple = None
+    ansright: tuple =None
+    s1: tuple = None
+    s2: tuple = None
+    ans0s: list = None
+    example: tuple = None
+    inter: tuple = None
+    rel: tuple = None
+    candidates: list = None
+    io: tuple = None
+    relation: tuple = None
 
 @dataclass
 class mathlogicRanges:
@@ -892,7 +924,37 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False)
     return ranges
 
 def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=False):
-    if 'IO' in example:  # ioi task
+    if 'relation' in example: # wino task wab
+        # cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
+        io,op,ans0,nans0,preans,postans,ansright,s1,s2,inter,candidates,relation=example['IO'],example['op'], example['ans0'],example['nans0'],example['preans'],example['postans'],example['ansright'],example['S'],example['S2'],example['inter'],example['candidates'],example['relation']
+        if trimmed:
+            ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
+            ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
+            return ranges
+        if not case_sensitive: tokens = [t.lower() for t in tokens]
+        whole_string = "".join(t for t in tokens)
+        rel_word = None # 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
+        # if ' not ' in whole_string: rel_word = 'not'
+        ranges = WINORanges(
+            io = locate(whole_string, tokens, io, return_last=True),
+            op = locate(whole_string, tokens, op, return_last=True),
+            bos = locate(whole_string, tokens, bos_token, return_last=True),
+            inter = locate(whole_string, tokens, inter, return_last=True),
+            ans0 = locate(whole_string, tokens, ans0),
+            nans0 = locate(whole_string, tokens, nans0),
+            preans = locate(whole_string, tokens, preans),
+            postans = locate(whole_string, tokens, postans),
+            ansright = locate(whole_string, tokens, ansright),
+            s1 = locate(whole_string, tokens, s1, return_last=True),# if not case_sensitive else False), #mqy
+            s2 = locate(whole_string, tokens, s2),
+            relation = locate(whole_string, tokens, relation),
+            rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word is not None and rel_word in whole_string else None,
+            example = (0, len(tokens))
+        )
+        ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
+        if ' not ' in whole_string: rel_word = 'not'
+        return ranges
+    elif 'IO' in example:  # ioi task
         e = example
         ranges = IOIRanges(
             bos = (e['end'].item(), e['end'].item()+1),
@@ -905,7 +967,7 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         ranges.example = (0, ranges.ans[-1])  # XD
         return ranges
 
-    cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
+    cxt, query, candidates, (tgt, *others, ans0, ans), *cls = example
     cls = cls[0] if len(cls) > 0 else None
     if trimmed:
         ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
@@ -927,6 +989,11 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word is not None and rel_word in whole_string else None,
         example = (0, len(tokens))
     )
+    if len(others) > 0:
+        assert len(others) == 2, str(others)
+        dtgt, dans0 = others
+        ranges.dtgt = locate(whole_string, tokens, dtgt)
+        ranges.dans0 = locate(whole_string, tokens, dans0)
     ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
     if len(cxt) == 0: return ranges  # for nrk g2c tasks
     if candidates is not None:
@@ -1028,12 +1095,15 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_to
         labels[:, :bos_indices[k_shot]] = -100  # 只算k_shot个示例后的loss
 
     candidates, answer_indices = None, None
-    cxt, query, cands, *_ = examples[0]
-    if isinstance(examples[0], dict):  # ioi task
-        def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()
-        candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]
+    if isinstance(examples[0], dict):  # ioi/wino task wab
         answer_indices = [0 for _ in ranges]
-    elif cands is not None and len(cands[-1]) > 1:  # cxt_len > 1
+        # def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()
+        # candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]  # ioi task
+        candidates = [[tokenizer.encode(i)[1] for i in e['candidates'][-1]] for e in examples]  # wino task
+        return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices
+    
+    cxt, query, cands, *_ = examples[0]
+    if cands is not None and len(cands[-1]) > 1:  # cxt_len > 1
         prefix, encode = ('', partial(tokenizer.encode, add_special_tokens=False)) \
             if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else (' ', partial(tokenizer.encode))
         candidates = [[encode(prefix + token)[0] for token in cands[-1]]
@@ -1303,20 +1373,23 @@ def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
         if random() < 0.5:
             label = cls_labels[0]
             _ans0, _ans = ans0, ans
+            _dtgt, _dans0 = tgt, ans0
         else:
             label = cls_labels[1]
             if not has_local_hop and len(cxt) == 1:  # for nrk g2c tasks, e.g. John is a boy? Yes
                 _ans = choice(list_diff(rel1.dom(), [ans]))
                 # _ans0 = choice(rel1.f(_ans)) # ans0 does not occur in example_str
             else:
-                _ans0, _ans = choice([(c0, c) for q, *_, c0, c in zip(*candidates)
+                _dtgt, _dans0, _ans = choice([(t, c0, c) for q, t, c0, c in zip(*candidates)
                                     if c != ans and (query is None or q != query)])
+            _ans0 = ans0
         # (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
         #     (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
         if not has_local_hop and len(cxt) == 1:
             cxt, tgt, _ans0 = [], None, None
+            _dtgt, _dans0 = None, None
         candidates = candidates + (cls_labels,)
-        return cxt, query, candidates, (tgt, *a, _ans0, _ans), label
+        return cxt, query, candidates, (tgt, _dtgt, _dans0, _ans0, _ans), label
     wrapped.__name__ = f'g2c[{fn2str(g_fn)}]'
     return wrapped
 

@@ -4,16 +4,11 @@ from dataclasses import dataclass
 # from pattern.en import lexeme
 # from nltk.corpus import cmudict  # nltk.download('cmudict')
  
-from transformers import AutoTokenizer, GPT2Tokenizer
-from common_utils import Timer
-
- # cache_dir = None
- # for home_dir in ['/nas', 'raid', '/home']:
- #     _cache_dir = f'{home_dir}/xd/.cache/torch/transformers/'
- #     if os.path.exists(_cache_dir): cache_dir = _cache_dir; break
-cache_dir = f'/nas/xd/.cache/torch/transformers/'  # use symlink to unify to /nas on different machines
-with Timer('In const.py: Loading tokenizer'):
-    tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-j-6B', local_files_only=True, cache_dir=cache_dir)
+# from common_utils import Timer
+# from transformers import AutoTokenizer
+# cache_dir = f'/nas/xd/.cache/torch/transformers/'  # use symlink to unify to /nas on different machines
+# with Timer('In const.py: Loading tokenizer'):
+#     tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-j-6B', local_files_only=True, cache_dir=cache_dir)
 
 # from https://eslyes.com/namesdict/popular_names.htm
 boys = [
@@ -42,7 +37,7 @@ def all_persons(tokenizer):
         all_persons.boys, all_persons.girls = boys, girls
     return all_persons.boys, all_persons.girls
 
-def persons():
+def persons(tokenizer):
     boys, girls = all_persons(tokenizer)
     return boys + girls
 
@@ -122,8 +117,6 @@ def does2did():
 
 def pasttenses_of_verbs(): return {did: [do] for do, [did] in do2did().items()}
 
-
-    
 noun2adj = [  # The adjective form of x is y
     ('rain','rainy'),
     ('sun','sunny'),
