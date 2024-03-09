@@ -40,6 +40,8 @@ from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention, GPT
 from transformers.models.xglm.modeling_xglm import XGLMForCausalLM, XGLMAttention, XGLMDecoderLayer
 from transformers.models.llama.modeling_llama import LlamaForCausalLM, LlamaAttention, LlamaDecoderLayer, LlamaModel
 
+from talking_heads_pythia_aligned import GPTNeoXTalkingConfig, GPTNeoXForCausalLMTalking, GPTNeoXLayerTalking, GPTNeoXAttentionTalking 
+
 sys.path.insert(0, './pptree')
 from pptree import Node, print_tree
 
@@ -63,6 +65,7 @@ class Outputs:
     head_outputs: tuple = ()
     mlp_pre_acts: tuple = ()
     mlp_gates: tuple = ()
+    avg_mlp_gates: dict = field(default_factory=dict)
     mlp_outputs: tuple = ()
     ln_states: tuple = ()
     hidden_states: tuple = ()
@@ -88,11 +91,17 @@ class AttrData:
     topi: int = None
     layer: int = None
     head: int = None
-    base_layer: int = None
-    base_head: int = None
+    # base_layer: int = None
+    # base_head: int = None
+    attr_groups: dict = field(default_factory=dict)
+    attr_group_name: str = None
+    attr_group: list = None
+    use_base_head: bool = True
     H: int = None
     label_type: str = None
     attn_pattern: str = None
+    sub_patterns: dict = field(default_factory=dict)  # for self
+    mask_patterns: dict = field(default_factory=dict)  # for children
     attribute_k: bool = False
     attr: Attributions = None  # for children
     logit_attr: Attributions = None  # for children
@@ -157,7 +166,7 @@ def unify(model):
         model.transformer = model.model
         model.model.h = model.model.layers
         model.model.ln_f = model.model.layer_norm
-    elif my_isinstance(model, GPTNeoXForCausalLM):
+    elif my_isinstance(model, GPTNeoXForCausalLM) or my_isinstance(model, GPTNeoXForCausalLMTalking):
         model.transformer = model.gpt_neox
         model.lm_head = model.embed_out
         model.transformer.wte = model.transformer.embed_in
@@ -181,7 +190,7 @@ def unify(model):
         elif my_isinstance(block, GPTJBlock):
             block.ln_2 = block.ln_1
             block.parallel_mlp = True
-        elif my_isinstance(block, GPTNeoXLayer):
+        elif my_isinstance(block, GPTNeoXLayer) or my_isinstance(block, GPTNeoXLayerTalking):
             block.attn = block.attention
             block.ln_1 = block.input_layernorm
             block.ln_2 = block.post_attention_layernorm
@@ -211,7 +220,7 @@ def unify(model):
             self.resid_dropout = nn.Dropout(0)
         elif my_isinstance(self, GPTJAttention):
             self.num_heads = self.num_attention_heads
-        elif my_isinstance(self, GPTNeoXAttention):
+        elif my_isinstance(self, GPTNeoXAttention) or my_isinstance(self, GPTNeoXAttentionTalking):
             for old_name, new_name in [('num_attention_heads', 'num_heads'), ('hidden_size', 'embed_dim'),
                         ('head_size', 'head_dim'), ('rotary_ndims', 'rotary_dim'), ('dense', 'out_proj')]:
                 setattr(self, new_name, getattr(self, old_name))
@@ -774,9 +783,24 @@ def parse_label_type(label_type): # e.g. 'attn_labels:bos->ans0],3'
         (label_type.split(':')[1].split(',')[0], (int(label_type[-1]) if label_type[-1].isdigit() else None))
     return label_type.split(':')[0], attn_pattern, k_shot
 
-def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=None, attn_pattern=None,
-                  outputs=None, node_key=None, residual=False, base_layer=None, base_head=None,
-                  hidden_states0=None, ranges=None, attribute_k=False, **kwargs):
+def mask_attention(attentions, layer, head, ranges, mask_pattern):
+    attn = attentions[layer]
+    if mask_pattern is None: return attn
+    attn = attn.clone()
+    mask_pattern, substract = (mask_pattern[1:], True) \
+        if mask_pattern.startswith('~') else (mask_pattern, False)
+    k_shot = 1
+    if ',' in mask_pattern:
+        mask_pattern, k_shot = mask_pattern.split(','); k_shot = int(k_shot)
+    mask, _ = attn_pattern2labels(ranges, mask_pattern, attn.size()[-2:], k_shot=k_shot, normalize=True)
+    if substract: mask = 1 - mask
+    attn[0, head] = attn[0, head] * mask
+    return attn
+
+def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=None, attn_pattern=None, mask_patterns={},
+                  outputs=None, node_key=None, residual=False, attr_group=None, # base_layer=None, base_head=None, use_base_head=True,
+                  output_layer=None, mask_last_mlp=None,
+                  reuse_ln_states=False, hidden_states0=None, ranges=None, attribute_k=False, **kwargs):
     # TODO: modify input arg kwargs in-place is not good practice
     kwargs['logits_mask'] = getattr(outputs, 'logits_mask', None)
     kwargs['lnf_state'] = outputs.ln_states[-1]
@@ -792,6 +816,7 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
         mlpneuron_attr=outputs.mlpneuron_attr.get(node_key)
     
     def get_kwargs(layer, head, hs):
+        layer, head = int(layer), int(head)  # numpy.int64 -> int when mix
         if label_type and 'attn_labels' in label_type:
             assert head < H
             attn_size = outputs.attentions[0].size()[-2:]
@@ -814,29 +839,42 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
                 kwargs['attn_labels'] = attn_labels * attn_mask
                 kwargs['attn_mask'] = (1 - attn_mask).tril()
         else:
-            if head < H: kwargs = {'attn_weights': outputs.attentions[layer]}
-            elif label_type == 'mlp_gate_labels': kwargs = {'gate_labels': mlpneuron_attr[layer]}
-            else: kwargs = {'gate': lget(outputs.mlp_gates, layer)}
-            if base_layer is not None:
-                base_hidden_states = 0.
-                for l, h in zip(base_layer, base_head):
-                    wo = model.transformer.h[l].attn.out_proj.weight
-                    base_hidden_states = base_hidden_states + (to(outputs.mlp_outputs[l], wo.device) if h == H else
-                        to(outputs.attn_outs[l][:, h], wo.device) @ rearrange(wo, 'e (n d) -> n d e', n=H)[h])  # (bnid->bid),(nde->de)->bie
-                kwargs['base_hidden_states'] = base_hidden_states
+            if head < H:
+                kwargs = {'attn_weights': mask_attention(outputs.attentions, layer, head, ranges,
+                                                         mask_patterns.get((layer, head)))}
+            elif label_type == 'mlp_gate_labels':
+                kwargs = {'gate_labels': mlpneuron_attr[layer]}
+            elif layer in outputs.avg_mlp_gates:
+                kwargs = {'gate': outputs.avg_mlp_gates[layer]}
+            else:
+                kwargs = {}
             if label_type in ['labels', 'argmax_labels']:
                 kwargs['labels'] = get_argmax_labels(model, outputs.head_outputs[layer][:, head], labels) \
                     if label_type == 'argmax_labels' else labels
         # kwargs = {k: v.to(hs.device, dtype=hs.dtype if 'labels' not in k and k != 'attn_mask' else None)  # TODO: why None?
         # labels should be long. attn_labels should be float32 (TODO: float16 mayb also be OK?)
         kwargs = {k: v.to(hs.device, dtype=hs.dtype if 'labels' not in k else None) for k, v in kwargs.items()}
-        kwargs['ln_state'] = to(outputs.ln_states[layer][int(head == H)], hs.device)
+        if reuse_ln_states or head == H and kwargs == {}: # to avoid too small logits when the path contains many mlps.
+                                                          # TODO: Very ad hoc. Need to find more principled method
+            kwargs['ln_state'] = to(outputs.ln_states[layer][int(head == H)], hs.device)
         return kwargs
 
     fwd_outputs = [head_forward(model, hs, l, h, attribute_k=attribute_k, **get_kwargs(l, h, hs), **kwargs) 
         if h < H else mlp_forward(model, hs, layer=l, residual=residual, **get_kwargs(l, h, hs), **kwargs)
         for l, h, hs in zip(layer, head, hidden_states)]
-    if len(fwd_outputs) == 1: return fwd_outputs[0]
+    
+    base_hidden_states = []
+    if attr_group is not None:
+        attr_group = [(l, h) for l, h in attr_group if (l, h) not in zip(layer, head)]
+        for l, h in attr_group:
+            wo = model.transformer.h[l].attn.out_proj.weight
+            base_hidden_states.append(to(outputs.mlp_outputs[l], wo.device) if h == H else
+                to(outputs.attn_outs[l][:, h], wo.device) @ rearrange(wo, 'e (n d) -> n d e', n=H)[h])  # (bnid->bid),(nde->de)->bie
+    # if len(fwd_outputs) == 1:
+    #     o = fwd_outputs[0]
+    #     assert isinstance(o.hidden_states, tuple) and len(o.hidden_states) in [0, 1]
+    #     if len(o.hidden_states) == 1: o.hidden_states = (o.hidden_states[0] + base_hidden_states,)
+    #     return o
 
     def try_sum(l):
         none_flags = [i is None for i in l]
@@ -844,16 +882,27 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
         return sum(l) if not any(none_flags) else None
     assert all(isinstance(o.hidden_states, tuple) and len(o.hidden_states) in [0, 1] for o in fwd_outputs), \
         str([(type(o.hidden_states), len(o.hidden_states)) for o in fwd_outputs])
+    if isinstance(output_layer, Iterable):
+        all_heads = list(zip(layer, head)) + attr_group
+        all_outputs = [o.hidden_states[0] for o in fwd_outputs] + base_hidden_states
+        hidden_states = []
+        for ol, m in zip(output_layer, mask_last_mlp):
+            hidden_states.append(sum([hs for (l, h), hs in zip(all_heads, all_outputs)
+                                      if l < ol - int(m and h == H)]))
+        return Outputs(hidden_states=hidden_states)
+    
     all_hidden_states, all_logits, all_loss = zip(*[
         (o.hidden_states[0] if len(o.hidden_states) == 1 else None, o.logits, o.loss) for o in fwd_outputs])
     hidden_states, logits, loss = [try_sum(l) for l in [all_hidden_states, all_logits, all_loss]]
+    hidden_states = hidden_states + sum(base_hidden_states)
     if logits_after_sum: logits, loss = lm_head_forward(model, hidden_states, labels=labels, **kwargs)
     else: logits = None  # attn_logits is not useful
     hidden_states = (hidden_states,) if hidden_states is not None else ()
     return Outputs(hidden_states=hidden_states, logits=logits, loss=loss)
 
 def lm_head_forward(model, hidden_states, logits_mask=None, labels=None, loss_reduction=None, # labels_mask=None, 
-                lnf_state=None, return_logit_diff=False, compact=False, scaled=False):
+                    lnf_state=None, return_logit_diff=True,  # for g2c tasks
+                    compact=False, scaled=False):
     if compact and labels is not None:
         if labels.size(0) != hidden_states.size(0): labels = einops.repeat(labels, '1 i -> b i', b=hidden_states.size(0))
         valid_flags = labels != -100
@@ -878,7 +927,8 @@ def lm_head_forward(model, hidden_states, logits_mask=None, labels=None, loss_re
             _logits_mean = (_logits * _logits_mask).sum(-1) / _logits_mask.sum(-1)  # bk = bkv->bk / bkv->bk
             _logits = _logits - _logits_mean.unsqueeze(-1)  # bkv - bk->bk1 = bkv
             # loss as the NEGATIVE of logit diff
-            loss = -_logits[:, torch.arange(_logits.size(1)), _labels[0]].sum(-1)  # bkv->bk->b, per_example loss
+            assert loss_reduction in [None, 'per_example_mean'], loss_reduction
+            loss = -_logits[:, torch.arange(_logits.size(1)), _labels[0]].sum(-1)  # bkv->bk->b, per_example_mean
         else:
             # if labels_mask is not None:  # moved to attribute_step
             #     labels = labels.clone()
@@ -1096,7 +1146,7 @@ def get_prob_dist(d, topk=5, digits=3):
 
 def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices,
         logits=None, labels=None, mask_logits=False, logits_bias=None,
-        k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True):
+        k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True, plot=True):
     # if k_shot == 0: mask_logits = True  # ioi task
     if isinstance(mask_logits, types.FunctionType): logits = mask_logits(logits); mask_logits = False
     use_openai_api = hasattr(logits, 'token_logprobs')  # isinstance(model, types.FunctionType)
@@ -1156,7 +1206,7 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
         loss = compute_loss(logits, labels, reduction=loss_reduction)
         loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100]#.tolist()  # 'none'
         
-    if verbose:
+    if verbose and plot:
         print(loss, np.array(top1_corrects[k_shot_len:]).mean())
         f, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 2.4), sharex=True)
         x = [i + 0.5 for i in range(len(example_strs))] # to align with sns.heatmap
@@ -1168,7 +1218,7 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
         plt.show()
     label_mask = labels != -100
     pred_logits, pred_labels = logits[label_mask], labels[label_mask]  # batch dim is squeezed
-    if logits_mask is not None:
+    if logits_mask is not None and all(len(c) == 2 for c in candidates):  # for Y/N g2c task
         pred_logits_mask = (logits_mask == 0)[label_mask]
         pred_logits = pred_logits[pred_logits_mask].view(pred_logits.size(0), -1)
     return pred_logits, pred_labels, loss, top1_corrects[k_shot_len:], \
@@ -1211,7 +1261,8 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
         tokenizer, *args, logits=logits, logits_bias=logits_bias, labels=labels,
         loss_reduction='mean', k_shot=k_shot, topk=3, verbose=verbose)
     # logits_mask is used when rel1 is equal relation and cxt_len > 1 (checked in make_data_tuple)
-    cxt, query, cands, *cls = examples[0]
+    if isinstance(examples[0], dict): cands = examples[0]['candidates'] # ioi/wino task wab
+    else: cxt, query, cands, *cls = examples[0]
     if cands is not None and (cands[-2] == cands[-1] or len(cls) > 0) and logits_mask is not None: # rel1 is copy or g2c task
         # print('In predict: set logits_mask')
         o.logits_mask = logits_mask
@@ -1303,17 +1354,17 @@ def plot_aggregate_predictions(tokenizer, pred_logits, pred_labels):
         ratio = fisher_discriminant_ratio(pred_labels, pred_logits.cpu(), plot=True)
 
 def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size,
-            logits_bias=None, ioi_dataset=None, by_head=None, trim=False,custom_forward=True,
+            logits_bias=None, dataset=None, by_head=None, trim=False,custom_forward=True,
             verbose=True, result=None, save_label = False, test_acc = False, **gen_args):
     if result is None:
-        if ioi_dataset is not None:
+        if dataset is not None:  # wab ioi/wino dataset
             indices_groups = np.arange(batch_size * nrows).reshape(batch_size, nrows)
             texts, all_examples, all_bos_tokens = [], [], []
             for indices in indices_groups:
-                # texts.append('\n'.join(ioi_dataset.sentences[i] for i in indices) + '\n')#wab
-                texts.append(''.join(ioi_dataset.sentences[i] for i in indices))#wab
-                all_examples.append([{k: ioi_dataset.word_idx[k][i] for k in ioi_dataset.word_idx} for i in indices])
-                all_bos_tokens.append(None)
+                # texts.append('\n'.join(dataset.sentences[i] for i in indices) + '\n')
+                texts.append(''.join(dataset.sentences[i] for i in indices))#wab
+                all_examples.append([{k: dataset.word_idx[k][i] for k in dataset.word_idx} for i in indices])
+                all_bos_tokens.append([dataset.word_idx['end'][i] for i in indices] if 'end' in dataset.word_idx else None)
         else:
             all_examples, texts, all_bos_tokens = zip(*[generate(task, nrows=nrows, tokenizer=tokenizer,
                 plot=False, verbose=False, **gen_args) for i in range(batch_size)])
@@ -1328,8 +1379,8 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
         result = Result(task=task, gen_args=gen_args, all_examples=all_examples, texts=texts, all_bos_tokens=all_bos_tokens)
     else:
         all_examples, texts, all_bos_tokens = result.all_examples, result.texts, result.all_bos_tokens
-    for text in texts[:1]: print('\n'.join(text.strip('\n').split('\n')[:3]))
-    if batch_size == 1: return result
+    for text in texts[:5]: print('\n' + '\n'.join(text.strip('\n').split('\n')[:]))
+    if batch_size == 1 or model is None: return result
 
     if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):
         #assert not my_isinstance(tokenizer, LLAMATokenizer) # mqy
@@ -1402,6 +1453,22 @@ def abbreviate_attn_pattern(attn_pattern):
 def restore_attn_pattern(attn_pattern):
     return attn_pattern.replace('B', 'bos').replace('Q', 'query').replace('T', 'tgt').\
         replace('A', 'ans').replace('S', 'sep').replace('R', 'rel').replace('C', 'cls')
+
+def average_activations(data_tuples, layer, range_label, neuron_idx=None):
+    range_label = restore_attn_pattern(range_label)
+    avg_mlp_gate = torch.stack([o.mlp_gates[layer][0, slice(*get_range(ranges[1], range_label))].mean(0)
+        for text, input_ids, labels, ranges, *_, o in data_tuples], dim=0).mean(dim=0)
+    for text, input_ids, labels, ranges, *_, o in data_tuples:
+        o.avg_mlp_gates[layer] = o.mlp_gates[layer].clone()
+        sli = slice(*get_range(ranges[1], range_label))
+        if neuron_idx:
+            o.avg_mlp_gates[layer][0, sli] = 0
+            o.avg_mlp_gates[layer][0, sli, neuron_idx] = avg_mlp_gate[neuron_idx]
+        else:
+            o.avg_mlp_gates[layer][0, sli] = avg_mlp_gate
+
+def remove_avg_activations(data_tuples, layer):
+    for *_, o in data_tuples: del o.avg_mlp_gates[layer]
 
 def is_intermediary(attn_pattern):
     # return attn_pattern.endswith('^')
@@ -1513,7 +1580,7 @@ def scatter_by_heads(tensors, heads, size):
 
 def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         embed_mask=None, mlp_mask=None, head_mask=None, neuron_mask=None,
-        attn_weights=None, mlpneuron_weights=None, forward_only=False,
+        attn_weights=None, mlpneuron_weights=None, reuse_ln_states=True, forward_only=False,
         from_layer=0, output_layer=None, mask_last_mlp=None, sum_output=None, attr_heads=None,
         reduce_fn=sum, truncate_layers=False, scaled=True, reshape=False, device=None):
     blocks = model.transformer.h; H = blocks[0].attn.num_heads
@@ -1527,7 +1594,7 @@ def sum_forward(model, outputs, labels=None, loss_reduction='per_example_mean',
         if isinstance(output_layer, Iterable) else ('', sum)
     kwargs = dict(labels=labels, loss_reduction=loss_reduction, scaled=scaled)  # for lm_head_forward
     kwargs['logits_mask'] = getattr(o, 'logits_mask', None)
-    kwargs['lnf_state'] = o.ln_states[-1]
+    if reuse_ln_states: kwargs['lnf_state'] = o.ln_states[-1]
     if not has_mask: kwargs['return_logit_diff'] = True  # for logit attribution
     logits, loss = None, None
     
@@ -1931,7 +1998,7 @@ def get_head_matching_scores(data_tuple, attn_patterns, layer=None, head=None, n
             attn_attrs = o.attn_attr[node_key]
             # def get_score(a): return (a * attn_labels).sum((-2, -1)) / ((a * (a > 0)).sum((-2, -1)) + 1e-9)  # lnij->ln
             def get_score(a):
-                a = a * (a > 0)
+                a = a.abs() # * (a > 0)
                 return (a * attn_labels).sum((-2, -1)) / (a.sum((-2, -1)) + 1e-9)  # lnij->ln
             matching_scores[attn_pattern] = get_score(attn_attrs * attentions) if isinstance(attn_attrs, torch.Tensor) \
                 else OrderedDict(((l, h), get_score(aa * o.attentions[l][0, h])) for (l, h), aa in attn_attrs.items()) # l*[1nij]->ij
@@ -1979,6 +2046,8 @@ def data2str(data, threshold_score=0.3, verbose=True):
                 if not is_intermediary(attn_pattern):
                     if d.icl_score is not None: s += f'/{round(d.icl_score * 100)}'
                     if d.sensitivity is not None: s += f'/{d.sensitivity:.1f}'
+    elif d.dummy and d.attr_group_name is not None:
+        s = f'{d.attr_group_name} ' + ','.join([f'{l}-{h}' for l, h in zip(layer, head)])
     elif d.dummy:
         def suffix(score): return f' {round(score*100)}' if verbose and \
             top_score is not None and (lt if True or step < 2 else ge)(score, threshold_score) else ''
@@ -1989,6 +2058,7 @@ def data2str(data, threshold_score=0.3, verbose=True):
     else:
         assert d.mixed
         s = ','.join([f'{l}-{wrap(h)}' for l, h in zip(layer, head)]) if len(layer) < 5 else ''
+        if d.attr_group_name: s += f' {d.attr_group_name}'
         if verbose: s += f' {ap}'
     if (not d.mixed and verbose or d.mixed and len(layer) >= 5) and topi is not None:
         s = (f'@:{len(topi)} ' if isinstance(topi, Iterable) and len(topi) > 1 and list(topi) == list(range(topi[-1] + 1))
@@ -2073,19 +2143,30 @@ attn_patterns_by_step = {
         ],
     1: ['ans]->ans0]', 'ans]->ans0+', 'ans]->ans-', 'query->tgt','query->tgt+', 'query->ans0', 'tgt->ans0',
         'ans]->query', 'ans]->ans+^', 'ans]->query+', 'sep->ans0', 'sep+->ans0', 'sep-->ans0',
-        'ans+->query', 'ans+->ans]', 'ans+->ans]|ans+', 'ans+->ans+^',
+        'ans+->query', 'ans+->ans]', 'ans+->ans+^', 'ans]->query|query+', 'ans+->ans]|ans+', 'ans]->dans0]', 'dans0]->dtgt]|dtgt+',  # 'ans+->query-|ans+', # g2c tasks
         'ans0+->ans0', 'sep+->sep', 'query->ans]^','ans]->bos^', 'query->sep+', 'rel->query',
         'query->ntgts', 'query->ntgts+', 'query->ans0+', 'query->nans0s', 'query->nans0s+', 'query->query-', 'query->sep+', 'query-->ans]', 'query+->query]',
         'sep+->ans+^', 'sep+->ans]^', 'tgt+->ntgts+', 'tgt+->ntgts', 'ans]->ntgts+','ans]->nans0s',
         'cls->ans', 'cls->query', 'ans->query',
         ], # mqy add 'ans0+->ans0', 'sep+->sep', 'query->ans]^','query->sep+', 'rel->query'
-    2: ['ans0->tgt', 'ans0->tgt+'], 3: ['tgt+->tgt']
+    2: ['ans0->tgt', 'ans0->tgt+',   'ans0]->tgt]', 'ans0]->tgt+', 'ans0]->tgt]|tgt+'],   # g2c tasks
+    3: ['tgt+->tgt']
 }
 
 ioi_attn_patterns_by_step = {-1: ['bos->ans0'],
     0: [ 'bos->s1', 'bos->ans0+', 'bos->s2', 'bos->s2+'],
     1: [ 's2->s1+', 's2->io','s2->s1'],
     2: ['s1+->s1', 's1+->io+','s1+->io','s2->s1'], 3: ['tgt+->tgt']}
+
+wino_attn_patterns_by_step_v2 = {-1: ['bos->ans0','bos->nans0'],
+    0: [ 'bos->s1', 'bos->ans0+', 'bos->s2', 'bos->inter','bos->relation','bos->io','bos->nans0','s1->relation','bos->relation','s1->s2'],
+    1: [ 's1->s2','s1->inter','s1->io','s1->ans0','bos->io','bos->s1','bos->s2','io->ans0','nans0->ans0','bos->nans0+','postans->preans','s1->relation','bos->relation','inter->relation','bos->inter','relation->s2'],
+    2: ['s1->s2', 's1->ansright','ansright->postans','bos->io','inter->ansright','s1->inter','s1+->s1','bos->io','s1->io','s1->ans0','nans0+->nans0','bos->s2','bos->s2+','bos->nans0+','bos->inter','bos->ansright','s1->relation','inter->relation','relation->s2'], 
+    3: ['s1->nans0+','s1->inter','ansright->nans0','inter->s2','bos->io','s2->io','s1->io','s1->ans0','s2->ans0','relation->ansright','bos->s1','bos->ansright','s1->inter','relation->ans0','relation->nans0','relation->io','relation->s2','bos->s2','s1->s2'],
+    4:['s2->ansright','bos->io','s1->io','io->s2','s1->ans0','s2->ans0','bos->s1','inter->io','bos->ansright','bos->inter','relation->ans0','relation->nans0','relation->io','relation->s2'],
+    5:['io->s2','s1->ans0','s2->ans0','s1->io','s1->inter','inter->op','relation->ans0','relation->nans0','relation->io','relation->s2'],
+    6:['bos->inter','bis->s1','s2->ansright'],
+    }
 
 all_attn_patterns = join_lists(attn_patterns_by_step.values())# + ['bos->bos']
 
@@ -2192,7 +2273,7 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
         if head < H:
             attr_ap_scores = {ap: v[layer, head].item() for ap, v in pd.attr_ap_scores.items()}
             d.attn_pattern, d.attr_ap_score = max(attr_ap_scores.items(), key=lambda x: x[1])
-            d.sub_patterns = {ap: attr_ap_scores[ap] for ap in get_sub_patterns(d.attn_pattern)} or None
+            d.sub_patterns = {ap: attr_ap_scores[ap] for ap in get_sub_patterns(d.attn_pattern)}# or None
             if d.sub_patterns:
                 sub_pattern, sub_score = max(d.sub_patterns.items(), key=lambda x: x[1])
                 if sub_score > d.attr_ap_score * 0.8: d.attn_pattern, d.attr_ap_score = sub_pattern, sub_score
@@ -2270,6 +2351,10 @@ def expand_node(data_tuples, parent, head_attr_fn=None, topk=10, threshold_score
             add_node(parent, attn_pattern=ap, dummy=True, verbose=verbose,
                 attr_ap_score=ap2score.get(ap, 0),  # score 0 for 'unk' not in ap2score
                 **{k: [getattr(d, k) for d in data_group] for k in ['layer', 'head', 'topi', 'top_score']})
+        if parent.data.attr_groups is not None:
+            for name, attr_group in parent.data.attr_groups.items():
+                layer, head = map(list, zip(*attr_group))
+                add_node(parent, layer=layer, head=head, attr_group_name=name, dummy=True, verbose=verbose)
         parent.children = parent.children[n_chilren:] + parent.children[:n_chilren]  # move dummy nodes to top
 
 def filter_fn(p, c):  
@@ -2290,7 +2375,14 @@ def filter_fn(p, c):
         # p.step == 0 and pap.startswith('B->A0') and (ap.startswith('B->A0') and c.ap_score > 0.4 or ap == 'B->B' and c.ap_score > 0.6 or ap in ['B->Q', 'B->A]']) or \
     # return  p.step < 1 or (p.step == 1 and ap in ['B->s2'] ) or (p.step == 2 and ap in ['s2->s1+','s2->s1'])  # ioi task
 
-def attribute_tree(data_tuples, model, node, max_step, filter_fn, topk=10, threshold_score=0.3,
+def get_attr_groups(attr_groups, node_group):
+    if attr_groups is None: return [(None, None)]
+    attr_groups = [(name, attr_group) for name, attr_group in attr_groups.items()
+        if set((n.data.layer, n.data.head) for n in node_group).issubset(set(attr_group))]
+    print('In get_attr_groups: node_group, attr_groups =', [(n.data.layer, n.data.head) for n in node_group], attr_groups)
+    return attr_groups if len(attr_groups) > 0 else [(None, None)]
+
+def attribute_tree(data_tuples, model, node, max_step, filter_fn, topk=10, threshold_score=0.3, node_fn=None,
                    attributed_top_mlps=None, k_shot=None, attribute_k=False, mix=True, device=None, verbose=True):
     blocks = model.transformer.h
     L, H = len(blocks), blocks[0].attn.num_heads
@@ -2298,6 +2390,7 @@ def attribute_tree(data_tuples, model, node, max_step, filter_fn, topk=10, thres
     d = node.data; node_key = node2key(node)
     *_, o =  data_tuples[0]
     _topk = topk # round(topk * (d.layer if not isinstance(d.layer, Iterable) else max(d.layer)) / L)
+    if node_fn is not None: node = node_fn(node)
     
     attributed_heads = get_root(node).data.attributed_heads
     attributed_head = (str(d.layer), str(d.head), d.attn_pattern, d.label_type, d.attribute_k)
@@ -2350,7 +2443,7 @@ def attribute_tree(data_tuples, model, node, max_step, filter_fn, topk=10, thres
         expand_node(data_tuples, node, topk=_topk, threshold_score=threshold_score,
             k_shot=k_shot, attribute_k=attribute_k, add_dummy_nodes=True, verbose=verbose)
 
-        if d.label_type is not None: attributed_heads.add(attributed_head)
+        if d.label_type not in [None, 'labels']: attributed_heads.add(attributed_head)
 
     if d.step == max_step: return
     children = [c for c in node.children if not c.data.dummy and not c.data.mixed and filter_fn(d, c.data)]
@@ -2361,14 +2454,16 @@ def attribute_tree(data_tuples, model, node, max_step, filter_fn, topk=10, thres
         def key_fn(node): return tuple([wrap_none(getattr(node.data, k)) for k in keys])
         for _, node_group in groupby(sorted(children, key=key_fn), key=key_fn):
             node_group = list(node_group); node0 = node_group[0]
-            child = add_node(node, mixed=True, verbose=verbose, **{k: getattr(node0.data, k) for k in keys},
-                **{k: [getattr(n.data, k) for n in node_group] for k in ['layer', 'head', 'topi']})
-            _children.append(child)
+            for name, attr_group in get_attr_groups(node.data.attr_groups, node_group):
+                child = add_node(node, attr_group_name=name, attr_group=attr_group,
+                    mixed=True, verbose=verbose, **{k: getattr(node0.data, k) for k in keys},
+                    **{k: [getattr(n.data, k) for n in node_group] for k in ['layer', 'head', 'topi']})
+                _children.append(child)
         children = _children
 
     for c in children:
         attribute_tree(data_tuples, model, c, max_step, filter_fn, topk=topk, 
-            threshold_score=threshold_score, attributed_top_mlps=attributed_top_mlps, 
+            threshold_score=threshold_score, node_fn=node_fn, attributed_top_mlps=attributed_top_mlps, 
             k_shot=k_shot, attribute_k=attribute_k, mix=mix, device=device, verbose=verbose)
 
 def attribute_tree_on(data_tuples, model, node, max_step, filter_fn, device='cpu', **kwargs):
@@ -2523,10 +2618,13 @@ def node2fn(node, outputs=None, ranges=None, labels=None, residual=False):
         _, hidden_states0, _, _ = attribute(fwd_fn, node.model, x, fns, num_points=1, forward_only=True)
         hidden_states0 = hidden_states0[-1:]  # bsz dim 2->1
 
-    d = node.data
+    d = node.data; pd = node.parent.data
+    output_layer, mask_last_mlp = maybe_increment_layer(pd.layer, pd.head, pd.H, do_inc=True)  # TODO: not model.transformer.h[0].parallel_mlp
     return partial(mixed_forward, layer=d.layer, head=d.head, labels=labels, label_type=d.label_type,
         attn_pattern=d.attn_pattern, outputs=outputs, node_key=node2key(node.parent), residual=residual,
-        base_layer=d.base_layer, base_head=d.base_head,
+        attr_group=d.attr_group, #base_layer=pd.base_layer, base_head=pd.base_head, use_base_head=pd.use_base_head,
+        output_layer=output_layer, mask_last_mlp=mask_last_mlp,
+        mask_patterns=getattr(node.parent.data, 'mask_patterns', {}),
         hidden_states0=hidden_states0, ranges=ranges, attribute_k=d.attribute_k, scaled=True)
 
 def is_root(node): return node.parent is None
@@ -2733,7 +2831,13 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
         L = len(o.attentions); H = o.attentions[0].size(1)
         fns = path2fns(node, partial(node2fn, outputs=o, ranges=ranges, labels=labels))
         label_type = 'labels' if len(fns) == 0 else None
-        fn = partial(mixed_forward, layer=l, head=h, labels=labels, label_type=label_type, outputs=o, ranges=ranges)
+        pd = node.data
+        output_layer, mask_last_mlp = maybe_increment_layer(
+            pd.layer, pd.head, pd.H,do_inc=not model.transformer.h[0].parallel_mlp)
+        fn = partial(mixed_forward, layer=l, head=h, labels=labels, label_type=label_type, outputs=o, ranges=ranges,
+                    #  base_layer=pd.base_layer, base_head=pd.base_head, use_base_head=pd.use_base_head,
+                     output_layer=output_layer, mask_last_mlp=mask_last_mlp,
+                     mask_patterns=node.data.mask_patterns)
         keys = ['embed_mask', 'mlp_mask', 'head_mask']
         output_layer, mask_last_mlp = maybe_increment_layer(
             l, h, H, do_inc=not model.transformer.h[0].parallel_mlp)
@@ -2751,7 +2855,9 @@ def plot_attn_attr(data_tuple, model, tokenizer, node, l, h, attn_patterns=None,
             # logits = logits + o.logits_mask #* (1e4 if logits.dtype == torch.float16 else 1e9)
             pred_logits, pred_labels, ap_scores, *_ = show_predictions(
                 tokenizer, *args, logits=logits[-1:], labels=labels,
-                k_shot=k_shot, topk=4, loss_reduction='none', sep='\t', verbose=False)
+                mask_logits=True, # TODO: only for g2c task
+                k_shot=k_shot, topk=4, loss_reduction='none', sep='\t',
+                verbose=not isinstance(l, Iterable), plot=False)
         elif logits.size(-1) == input_ids.size(1): # attn_logits, bij
             attn_pattern = node2path(node)[-1].data.attn_pattern or 'bos->ans0'
             attn_labels, ranges_q = attn_pattern2labels(ranges, attn_pattern, aw_size, k_shot=0)
@@ -2801,7 +2907,7 @@ def plot_attn_attrs(data_tuples, model, tokenizer, node, layer=None, head=None, 
     heads = zip(*heads) if not mix else [heads]
     for l, h in heads:
         s = f'{l}-{h}' if not mix else ' + '.join([f'{_l}-{_h}' for _l, _h in zip(l, h)])
-        print(' -> '.join([s] + [n.name for n in node2path(node)]))
+        print(' -> '.join([n.name for n in reversed(node2path(node))] + [s]))
         # ap_scores = mr(plot_attn_attr)(data_tuples, model, tokenizer, node, l, h, attn_patterns=attn_patterns, **kwargs)
         pred_logits, pred_labels, ap_scores = tuple(zip(*[plot_attn_attr(
             dt, model, tokenizer, node, l, h, attn_patterns=attn_patterns, **kwargs)
@@ -2821,6 +2927,7 @@ def cluster(emb, labels, n_clusters=3):
             return False, labels_
     return True, labels_
 
+from sklearn.decomposition import PCA
 def visualize_by_pca(emb, labels):
     pca = PCA(n_components=2)
     data = pca.fit_transform(emb)
