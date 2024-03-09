@@ -25,10 +25,9 @@ import torch.nn.functional as F
 
 from const import *
 from common_utils import join_lists, list_diff, my_isinstance, lget, fn2str
-# from openai_utils import query_openai
-# from LLAMATokenizer import LLAMATokenizer
-# from transformers import LlamaTokenizer
-
+from openai_utils import query_openai
+from LLAMATokenizer import LLAMATokenizer
+from transformers import LlamaTokenizer
 # sys.path.insert(0, '/nas/xd/projects/PyFunctional')
 # from functional import seq
 # from functional.pipeline import Sequence
@@ -702,23 +701,25 @@ def swap(l, dst, src=0):
     if dst != src: l[dst], l[src] = l[src], l[dst]
     return l
 
-def distractive_sample(cxt_len, rel, ans_i=0):
-    query = choice(rel.dom()) 
+def distractive_sample(cxt_len, rel, n_answers=1):
+    query = choice(rel.dom())
     siblings = rel.sibling.f(query) if rel.name == 'neg_equal' and hasattr(rel, 'sibling') else []
-    ans = choice(list_diff(rel.f(query), siblings))
+    answers = sample(list_diff(rel.f(query), siblings), n_answers)
     distractors = list_diff(rel.codom(), rel.f(query) + ([query] if rel.name == 'sibling' else []))
-    k = cxt_len - 1
+    k = cxt_len - n_answers
     # neg_xxx or parent rel may have only one distractor
     assert len(distractors) >= k or len(distractors) == 1, \
         f'{rel.name}, query = {query}, f(query) = {rel.f(query)}, distractors = {distractors}'
     distractors = sample(distractors, k) if len(distractors) >= k else distractors * k
     # TODO: rel.inv_f(x)[0] -> choice(rel.inv_f(x)). check not equivalent for sibling
     distractors0 = [choice(rel.inv_f(x)) for x in distractors]
-    candidates = [[query] + distractors0, [ans] + distractors]
+    candidates = [[query] * n_answers + distractors0, answers + distractors]
+    assert len(candidates[0]) == len(candidates[0]), f'{len(candidates[0])} != {len(candidates[0])}'
     if rel.skip_inv_f and rel.x_f is None: rel.x_f = lambda x: x
     if rel.x_f: candidates[0] = [rel.x_f(c) for c in candidates[int(rel.skip_inv_f)]]
     if rel.y_f: candidates[1] = [rel.y_f(c) for c in candidates[1]]
-    return tuple([swap(l, ans_i) for l in candidates])
+    return candidates
+    # return tuple([swap(l, ans_i) for l in candidates])
 
 def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   # example_gen_fn
     rels = [s.relations for s in vocabs]
@@ -730,8 +731,6 @@ def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   # example_gen_
     hop = 0; rel = rels[hop][0]
     candidates[hop - 1], candidates[hop] =  distractive_sample(cxt_len, rel) \
         if not fixed_query else cxt_sample_fn(cxt_len, rel)
-    # if not fixed_query: query = candidates[hop - 1][0]
-    # elif not position_relevant: assert query == candidates[hop - 1][0], f'{query} != {candidates[hop - 1][0]}'
 
     hop = 1; rel = rels[hop][0]
     candidates[hop], candidates[hop + 1] = distractive_sample(cxt_len, rel)[::-1] if has_local_hop \
@@ -748,6 +747,42 @@ def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   # example_gen_
     if fixed_query: cxt, query = [x[1:] for x in cxt], None
     if not has_local_hop: cxt = [x[0] for x in cxt]
     return cxt, query, candidates, ans_chain
+
+def rlr_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   # example_gen_fn
+    rels = [s.relations[0] for s in vocabs]
+    fixed_query = query is not None
+    has_local_hop = vocabs[0].data != vocabs[1].data
+    position_relevant = getattr(cxt_sample_fn, '__name__', None) == 'enumerate_sample'
+    
+    sample_fn = distractive_sample if not fixed_query else cxt_sample_fn
+    candidates = sample_fn(cxt_len, rels[0]) # hop0: query_cands, tgt_cands
+    candidates += distractive_sample(cxt_len, rels[1])[::-1] if has_local_hop \
+        else (candidates[-1].copy(), [choice(rels[1].inv_f(x)) for x in candidates[-1]])  # hop2: ans0_cands, ans_cands
+    i = 0 if query is None else candidates[0].index(query)
+    candidates = np.array(candidates)  # # -> 4 * cxt_len array
+
+    query, *ans_chain = candidates[:, i]; ans_chain = tuple(ans_chain)
+    if not position_relevant:
+        candidates = candidates[:, np.random.permutation(cxt_len)]
+    cxt = list(map(tuple, candidates[int(not fixed_query):3].T))  # hop1: tgt_cands, ans0_cands
+
+    if fixed_query: cxt, query = [x[1:] for x in cxt], None
+    if not has_local_hop: cxt = [x[0] for x in cxt]
+    return cxt, query, candidates.tolist(), ans_chain
+
+def rlrlr_gen(rels, circled=False, cxt_len=3):
+    rels = [s.relations[0] for s in rels]
+    candidates = distractive_sample(cxt_len, rels[0], n_answers=1+int(circled)) # hop0: query_cands, tgt_cands
+    (ans1, _), ans2_cands = distractive_sample(cxt_len - 1, rels[1])  # hop2: ans1 + ans2_cands
+    candidates.append([ans1] + ans2_cands)
+    candidates += candidates[:2:][::-1]  # hop4: tgt_cands, query_cands
+    candidates = np.array(candidates)  # 5 * cxt_len
+
+    query, *ans_chain = tuple(candidates[:3, 0]) + tuple(candidates[int(circled):3, 1])[::-1] # query,tgt1,ans1,ans2,tgt2,query2
+    ans_chain = tuple(ans_chain)
+    candidates = candidates[:, np.random.permutation(cxt_len)]  # shuffle cols
+    cxt = list(map(tuple, candidates[1:3].T))  # hop1/3: tgt_cands, ans_cands
+    return cxt, query, candidates.tolist(), ans_chain
 
 def MlMlM_gen(rels, cxt_len=3):
     rels = [s.relations for s in rels]
@@ -1221,7 +1256,8 @@ def verbalize_relation(vocab):
     data_name, rel_name = vocab.data.__name__, vocab.relations[0].name
     _rel_name = rel_name.split('neg_')[-1]
     r2v = {'genders_of_persons': ('', 'one'),
-        'types_of_things': (' a kind of', 'one'),
+        # 'types_of_things': (' a kind of', 'one'),
+        'types_of_things': (' a kind of', 'kind of thing'),
         'capabilities_of_things': (' the thing that can', 'one'),
         'countries_of_cities': (' the city in', 'city'), 
         'country2capital': (' the capital of', 'city'), 
@@ -1233,7 +1269,8 @@ def verbalize_relation(vocab):
         temporal_word = {tuple(clock_of_day): 'time', tuple(days_of_week): 'day', tuple(months):'month',
             tuple(seasons): 'season', tuple(years): 'year'}[tuple(vocab._data)]
     if _rel_name == 'child' and data_name in r2v: rel_str = r2v[data_name][0]
-    elif _rel_name == 'sibling': rel_str = f' the {r2v[data_name][1]} like'
+    # elif _rel_name == 'sibling': rel_str = f' the {r2v[data_name][1]} like'
+    elif _rel_name == 'sibling': rel_str = f' the same {r2v[data_name][1]} as'
     elif _rel_name == 'prev': rel_str = f' the {temporal_word} just before'
     elif _rel_name == 'next': rel_str = f' the {temporal_word} just after'
     elif _rel_name == 'opposite': rel_str = ' the opposite of'
@@ -1380,7 +1417,7 @@ def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
                 _ans = choice(list_diff(rel1.dom(), [ans]))
                 # _ans0 = choice(rel1.f(_ans)) # ans0 does not occur in example_str
             else:
-                _dtgt, _dans0, _ans = choice([(t, c0, c) for q, t, c0, c in zip(*candidates)
+                _dtgt, _dans0, _ans = choice([(t, c0, c) for q, t, *_, c0, c in zip(*candidates)
                                     if c != ans and (query is None or q != query)])
             _ans0 = ans0
         # (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
@@ -1388,8 +1425,8 @@ def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
         if not has_local_hop and len(cxt) == 1:
             cxt, tgt, _ans0 = [], None, None
             _dtgt, _dans0 = None, None
-        candidates = candidates + (cls_labels,)
-        return cxt, query, candidates, (tgt, _dtgt, _dans0, _ans0, _ans), label
+        candidates = candidates + [cls_labels]  # XD MlM_gen(cls_labels,) -> rlr_gen
+        return cxt, query, candidates, (tgt, _dtgt, _dans0, *a, _ans0, _ans), label
     wrapped.__name__ = f'g2c[{fn2str(g_fn)}]'
     return wrapped
 
@@ -1435,7 +1472,7 @@ def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
     # if cxt_len == 1 and (rels[1].name == 'equal' or rels[0].name != 'equal' or do_negate or do_g2c):
     #     print(f'\ninvalid args for cxt_len 1: {args2str(args)}')
     #     return None
-    if rels[1].name == 'sibling' and not do_g2c:
+    if rels[1].name == 'sibling' and not do_g2c and task[1].__name__ not in ['rlrlr_gen']:
         print(f'\ninvalid args for sibling: {args2str(args)}')
         return None
     return task
@@ -1462,7 +1499,7 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
                                     or ind_counts[0][1] > ind_counts[-1][1] * 3),
             len(ans_counts) == 1,
             len(ans_counts) > 2 and ans_counts[0][1] > max(2, nrows / 3),
-            len(ans_counts) == 2 and ans_counts[0][1] >= ans_counts[1][1] * 2,
+            len(ans_counts) == 2 and ans_counts[0][1] > ans_counts[1][1] * 2,
         ]
         i += 1
         assert i < 40, str(conditions) + '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:]) + \
