@@ -125,7 +125,7 @@ Types of tools: hammer, screwdriver, saw, drill, wrench
 Types of clothes: shirt, pants, dress, coat, shoes
 Types of fruits: apple, grape, pear, banana, orange
 Types of animals: dog, cat, horse, rabbit, pig'''
-def types_of_things(): return {
+def kinds_of_things(): return {
     'animal': ['duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig',
             'monkey', 'rabbit', 'elephant', 'wolf', 'deer', 'fox', 'gorilla', 'squirrel', 'mouse'], # 'chicken', 'bear', 'zebra', 'giraffe', 'kangaroo', 21-5, 15-8
     'fruit': ['apple', 'banana', 'pear', 'grapes', 'cherries', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberries',
@@ -155,11 +155,11 @@ def types_of_things(): return {
     'musical instrument': ['piano', 'violin', 'guitar'],
     # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
-}
+}, dict(child='a kind of', sibling='the thing of a similar kind as')
 
-def things(): return {thing: [thing] for thing in join_lists(types_of_things().values())}
-def word2capitalized(): return {thing: [capitalize(thing)] for thing in join_lists(types_of_things().values()) if not thing[0].isupper()}
-def capitalized_forms_of_words(): return {capitalize(thing): [thing] for thing in join_lists(types_of_things().values()) if not thing[0].isupper()}
+def things(): return {thing: [thing] for thing in join_lists(kinds_of_things().values())}
+def word2capitalized(): return {thing: [capitalize(thing)] for thing in join_lists(kinds_of_things().values()) if not thing[0].isupper()}
+def capitalized_forms_of_words(): return {capitalize(thing): [thing] for thing in join_lists(kinds_of_things().values()) if not thing[0].isupper()}
 
 # A list of words with their types:
 # big small -> size
@@ -232,7 +232,7 @@ def capabilities_of_things(): return {
     'paint': ['brush', 'palette', 'roller', 'spray'],
     'swim': ['swimsuit', 'goggles', 'swim fins'],
     'calculate': ['computer', 'calculator', 'abacus'],
-}
+},dict(child='', sibling='')
 
 adj2very = [
     ('good', 'excellent'),
@@ -334,7 +334,7 @@ def countries_of_cities(): return {
     # 'Mexico': ['Mexico City', 'Guadalajara', 'Monterrey'],
     # 'Egypt': ['Cairo', 'Alexandria'],
     # 'Portugal': ['Lisbon', 'Porto'],
-}
+}, dict(child=' city in', sibling='a city in the same country as')
 
 def city2resident():
     if not hasattr(city2resident, 'demonyms'):
@@ -378,7 +378,7 @@ def strip_a(text):
         text = re.sub(r"^a ", "", text); text = re.sub(r"^an ", "", text)
     return text
 
-def the_(noun, uppercase=True):
+def the_(noun, uppercase=False):
     if noun.lower() in ['who', 'which']:   # in swap_qa
         return capitalize(noun) if uppercase else noun
     if noun[0].isupper(): return noun  # proper noun
@@ -535,6 +535,7 @@ remove_two = [
 class Relation(object):
     def __init__(self, name, _dict):
         self.name = name
+        self.verbalizer = None  # for child and sibling relations
         self._dict = _dict
         self._inv_dict = None
         self.inv_rel = None
@@ -569,6 +570,7 @@ class NegativeRelation(Relation):
         self.rel = self.neg_rel = rel
         rel.neg_rel = self
         self.name = 'neg_' + rel.name if not rel.name.startswith('neg_') else rel.name[4:]
+        if rel.name in ['child', 'sibling']: self.verbalizer = rel.verbalizer
         for name in ['x_f', 'y_f', 'skip_inv_f']: setattr(self, name, getattr(self.rel, name))
         if self.name == 'neg_equal' and hasattr(set_obj, 'sibling'):  # set_obj is a TreeSet or SymSet
             self.sibling = set_obj.sibling  # used in distractive_sample
@@ -656,7 +658,8 @@ class BijectSet(Set):  # can be treated as a special case of TreeSet?
 class TreeSet(Set):
     def __init__(self, data):
         super().__init__(data, ['child', 'parent', 'sibling', 'equal'])
-        data = data()
+        data, verbalizers = data()
+        for k, v in verbalizers.items(): getattr(self, k).verbalizer = v  # child, sibling
         for parent, children in data.items():
             self.child._dict[parent] = children
             # self.equal._dict[parent] = [parent]
@@ -775,7 +778,7 @@ def rlrlr_gen(rels, circled=False, cxt_len=3):
     candidates = distractive_sample(cxt_len, rels[0], n_answers=1+int(circled)) # hop0: query_cands, tgt_cands
     (ans1, _), ans2_cands = distractive_sample(cxt_len - 1, rels[1])  # hop2: ans1 + ans2_cands
     candidates.append([ans1] + ans2_cands)
-    candidates += candidates[:2:][::-1]  # hop4: tgt_cands, query_cands
+    candidates += candidates[:2][::-1]  # hop4: tgt_cands, query_cands
     candidates = np.array(candidates)  # 5 * cxt_len
 
     query, *ans_chain = tuple(candidates[:3, 0]) + tuple(candidates[int(circled):3, 1])[::-1] # query,tgt1,ans1,ans2,tgt2,query2
@@ -1024,9 +1027,9 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word is not None and rel_word in whole_string else None,
         example = (0, len(tokens))
     )
-    if len(others) > 0:
-        assert len(others) == 2, str(others)
-        dtgt, dans0 = others
+    if len(others) > 0 and cls is not None:
+        assert len(others) in [2, 4], str(others) # len(others) == 4 for rlrlr
+        dtgt, dans0 = others[:2]
         ranges.dtgt = locate(whole_string, tokens, dtgt)
         ranges.dans0 = locate(whole_string, tokens, dans0)
     ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
@@ -1051,7 +1054,7 @@ def move_ranges(r, offset):
         if pair is not None: setattr(r, name, tuple([i + offset for i in pair]))
     return r
 
-def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
+def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token, instruction=None):
     assert len(examples) == len(example_strs)
     ranges = []
     use_llama_tokenizer = my_isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer))
@@ -1068,9 +1071,14 @@ def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
         # split all_tokens_llama using newline_token as delimiter
         # https://stackoverflow.com/questions/15357830/splitting-a-list-based-on-a-delimiter-word
         sep_tokens = [list(y) for x, y in itertools.groupby(all_tokens_llama, lambda z: z == newline_token) if not x]
-        assert len(sep_tokens) == len(example_strs)
+        if instruction:
+            inst_tokens, *sep_tokens = sep_tokens
+            assert ''.join(inst_tokens) == instruction, f"{inst_tokens} -> {''.join(inst_tokens)} != {instruction}"
+            all_tokens += inst_tokens + [newline_token]
+        assert len(sep_tokens) == len(example_strs), f'{len(sep_tokens)} != {len(example_strs)}'
     else:
         all_tokens = [newline_token] if tokenizer.decode(input_ids[0]) == newline_token else []
+        # TODO: deal with instruction
     for i, (e, e_str) in enumerate(zip(examples, example_strs)):
         # tokens = tokenizer.tokenize(e_str)  # can not work with locate
         tokens = sep_tokens[i] if use_llama_tokenizer else \
@@ -1113,7 +1121,9 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_to
     #if isinstance(tokenizer, LLAMATokenizer): text = text.replace('\n', '\ \n') # mqy
     input_ids = tokenizer.encode(text, return_tensors='pt')
     example_strs = text.strip('\n').split(NEW_LINE)  # strip the trailing '\n'
-    ranges = locate_ranges(examples, example_strs, tokenizer, input_ids[0].tolist(), bos_token)
+    if len(example_strs) == len(examples): instruction = None
+    else: assert len(example_strs) == len(examples) + 1; instruction, *example_strs = example_strs
+    ranges = locate_ranges(examples, example_strs, tokenizer, input_ids[0].tolist(), bos_token, instruction=instruction)
     # by lxy: when bos is tokenized into multiple tokens, e.g. 'likes' -> ['__lik', 'es'] in LLaMA, use last token's index
     bos_indices = [r.bos[-1] - 1 for r in ranges]  # [r.bos[0] for r in ranges]
     bos_indices, eos_indices, answers, labels = locate_answers(
@@ -1190,7 +1200,8 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         cxt2str = partial(_cxt2str, prefix=prefix, suffix=suffix, sep=sep, item2str=item2str)
         bos_token, ans2str = abstract_bos_token, _str
     else:
-        cxt2str, query2str, bos_token, ans2str = [lget(task, i, '' if i == 4 else _str) for i in range(2, 6)]
+        instruction, cxt2str, query2str, bos_token, ans2str = \
+            [lget(task, i, '' if i in [2, 5] else _str) for i in range(2, 7)]
         if isinstance(cxt2str, types.FunctionType) and cxt2str.__name__ == 'empty_cxt2str':
             examples = [(cxt, query, None, (None, None, ans), *cls)
                 for cxt, query, candidates, (tgt, ans0, ans), *cls in examples]
@@ -1206,8 +1217,10 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         if len(cls) > 0: _bos_token = ':'; s += '? Answer' + _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
-    text = (NEW_LINE +' ').join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
-        '\n' + '\n'.join(example_strs) + '\n'  # prepend '\n' to act as bos for tokenizer without bos
+    if instruction and not instruction.endswith('\n'): instruction = instruction + '\n'
+    text = instruction + (NEW_LINE + ' ').join(example_strs) + '\n' \
+        if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
+        '\n' + instruction + '\n'.join(example_strs) + '\n'  # prepend '\n' to act as bos for tokenizer without bos
     return examples, text, bos_tokens
 
 def get_answer_index(example):
@@ -1218,7 +1231,7 @@ def get_answer_index(example):
 class InvalidTransException(Exception): pass
 
 def choose_rels(task, rel_indices):
-    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    vocab_fn, gen_fn, *a = task
     vocabs = vocab_fn()
     for hop, rel_i in enumerate(rel_indices):
         if rel_i >= len(vocabs[hop].relations): return None
@@ -1229,11 +1242,11 @@ def choose_rels(task, rel_indices):
             vocabs[hop].relations = vocabs[hop].relations[rel_i: rel_i + 1]
         return vocabs
     
-    task = new_vocab_fn, gen_fn, cxt2str, query2str, *a
+    task = new_vocab_fn, gen_fn, *a
     return task
 
 def decorate_rel(task, hop, kwargs):
-    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    vocab_fn, gen_fn, *a = task
 
     def new_vocab_fn():
         vocabs = vocab_fn()
@@ -1241,7 +1254,7 @@ def decorate_rel(task, hop, kwargs):
         for k, v in kwargs.items(): setattr(rel, k, v)
         return vocabs
 
-    task = new_vocab_fn, gen_fn, cxt2str, query2str, *a
+    task = new_vocab_fn, gen_fn, *a
     return task
 
 def get_wh_and_the(vocab):
@@ -1249,28 +1262,31 @@ def get_wh_and_the(vocab):
     wh = 'who' if data_name in ['persons', 'genders_of_persons'] else 'which'
     the = ' the' if data_name == 'genders_of_persons' and rel_name == 'child' or \
         data_name == 'capabilities_of_things' and rel_name != 'child' or \
-        data_name == 'types_of_things' and rel_name != 'child' else ''
+        data_name == 'kinds_of_things' and rel_name != 'child' else ''
     return wh, the
 
 def verbalize_relation(vocab):
     data_name, rel_name = vocab.data.__name__, vocab.relations[0].name
     _rel_name = rel_name.split('neg_')[-1]
-    r2v = {'genders_of_persons': ('', 'one'),
-        # 'types_of_things': (' a kind of', 'one'),
-        'types_of_things': (' a kind of', 'kind of thing'),
-        'capabilities_of_things': (' the thing that can', 'one'),
-        'countries_of_cities': (' the city in', 'city'), 
-        'country2capital': (' the capital of', 'city'), 
-        'word2capitalized': (' the capitalized form of', 'word'), 
-        'letter2uppercase': (' the uppercase of', 'letter'), 
-        'do2did': (' the past tense of', 'word'), 
-    }
+    # r2v = {'genders_of_persons': ('', 'one'),
+    #     # 'kinds_of_things': (' a kind of', 'one'),
+    #     'kinds_of_things': (' a kind of', 'kind of thing'),
+    #     'capabilities_of_things': (' the thing that can', 'one'),
+    #     'countries_of_cities': (' the city in', 'city'), 
+    #     'country2capital': (' the capital of', 'city'), 
+    #     'word2capitalized': (' the capitalized form of', 'word'), 
+    #     'letter2uppercase': (' the uppercase of', 'letter'), 
+    #     'do2did': (' the past tense of', 'word'), 
+    # }
     if _rel_name in ['prev', 'next']:
         temporal_word = {tuple(clock_of_day): 'time', tuple(days_of_week): 'day', tuple(months):'month',
             tuple(seasons): 'season', tuple(years): 'year'}[tuple(vocab._data)]
-    if _rel_name == 'child' and data_name in r2v: rel_str = r2v[data_name][0]
-    # elif _rel_name == 'sibling': rel_str = f' the {r2v[data_name][1]} like'
-    elif _rel_name == 'sibling': rel_str = f' the same {r2v[data_name][1]} as'
+    verbalizer = vocab.relations[0].verbalizer
+    if _rel_name in ['child', 'sibling'] and verbalizer not in [None, '']:
+        rel_str = ' ' + verbalizer
+    # if _rel_name == 'child' and data_name in r2v: rel_str = r2v[data_name][0]
+    # # elif _rel_name == 'sibling': rel_str = f' the {r2v[data_name][1]} like'
+    # elif _rel_name == 'sibling': rel_str = f' the same {r2v[data_name][1]} as'
     elif _rel_name == 'prev': rel_str = f' the {temporal_word} just before'
     elif _rel_name == 'next': rel_str = f' the {temporal_word} just after'
     elif _rel_name == 'opposite': rel_str = ' the opposite of'
@@ -1278,17 +1294,17 @@ def verbalize_relation(vocab):
     return rel_str
 
 def refine_query2str(task, do_swap_qa=False):
-    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    vocab_fn, gen_fn, inst, cxt2str, query2str, *a = task
     if query2str is None: return task
-    rel_names = [vocab.relations[0].name for vocab in vocab_fn()]
-    def new_query2str(q, v):
+    def new_query2str(q, vocabs):
         # Tricky: new_query2str called and v passed AFTER swap_qa, so v has been swapped
-        return query2str(q, v) + verbalize_relation(v[1 - do_swap_qa])
-    task = (vocab_fn, gen_fn, cxt2str, new_query2str, *a)
+        vocab0, vocab1 = vocabs if not do_swap_qa else vocabs[::-1]
+        return query2str((verbalize_relation(vocab0) + ' ' + q).strip(), vocabs) + verbalize_relation(vocab1)
+    task = (vocab_fn, gen_fn, inst, cxt2str, new_query2str, *a)
     return task
 
 def swap_qa(task):
-    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    vocab_fn, gen_fn, inst, cxt2str, query2str, *a = task
     if isinstance(gen_fn, partial) and 'query' in gen_fn.keywords:
         raise InvalidTransException(f"invalid swap_qa with fixed_query = {gen_fn.keywords['query']}")
     def new_vocab_fn(): return vocab_fn()[::-1]  # would cause infinite recursion bug if use same name
@@ -1302,7 +1318,7 @@ def swap_qa(task):
     def new_query2str(q, v):
         wh, the = get_wh_and_the(v[1])
         return f'{query2str(wh, v)} {q}?'.replace("who's", "whose") + capitalize(the)
-    task = (new_vocab_fn, gen_fn, new_cxt2str, new_query2str, *a)
+    task = (new_vocab_fn, gen_fn, inst, new_cxt2str, new_query2str, *a)
     return task
 
 def negate_sent(s):  # TODO: a more principled way of negating a sentence
@@ -1332,7 +1348,7 @@ def negate_sent(s):  # TODO: a more principled way of negating a sentence
     return s
 
 def negate(task):
-    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    vocab_fn, gen_fn, inst, cxt2str, query2str, *a = task
 
     def new_vocab_fn():
         vocabs = vocab_fn()
@@ -1341,11 +1357,11 @@ def negate(task):
     new_query2str = (lambda q, v: negate_sent(query2str(q, v))) \
         if query2str is not None else None
 
-    task = (new_vocab_fn, gen_fn, cxt2str, new_query2str, *a)
+    task = (new_vocab_fn, gen_fn, inst, cxt2str, new_query2str, *a)
     return task
     
 def remove_local_hop(task, do_swap_qa, do_rm_query, do_g2c, cxt_len):
-    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    vocab_fn, gen_fn, inst, cxt2str, query2str, *a = task
     vocabs = vocab_fn()
     assert vocabs[0].data == vocabs[1].data
     data_name = vocabs[0].data.__name__
@@ -1367,7 +1383,7 @@ def remove_local_hop(task, do_swap_qa, do_rm_query, do_g2c, cxt_len):
         raise InvalidTransException(f"invalid rel for rm_local_hop with g2c: {rel_names}")
     
     if cxt2str is None:
-        cxt2str = partial(_cxt2str, prefix='There are ', suffix='.', sep=', ', item2str=lambda i, _: a_(i))
+        cxt2str = partial(_cxt2str, prefix='There are ', suffix='.', sep=', ', item2str=lambda i, _: [a_(i), ''])
     
     if query2str is None:
         if not fixed_query:
@@ -1378,11 +1394,11 @@ def remove_local_hop(task, do_swap_qa, do_rm_query, do_g2c, cxt_len):
                 return f"{wh} is{neg_str}{verbalize_relation(v[0])} {q}?" + capitalize(rel_str)
         else:
             query2str = lambda q, v: ""
-    task = vocab_fn, gen_fn, cxt2str, query2str, *a
+    task = vocab_fn, gen_fn, inst, cxt2str, query2str, *a
     return task
 
 def remove_query(task):
-    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    vocab_fn, gen_fn, inst, cxt2str, query2str, *a = task
     vocabs = vocab_fn()
     rel_names = [v.relations[0].name for v in vocabs]
     if not rel_names[0].startswith('neg_') or rel_names[0] == 'neg_sibling':  # neg_sibling == neg_child
@@ -1398,7 +1414,7 @@ def remove_query(task):
         wh, the = get_wh_and_the(v[1])
         rel_str = verbalize_relation(v[1]) + the
         return f"{wh} is different?" + capitalize(rel_str)
-    task = vocab_fn, new_gen_fn, cxt2str, new_query2str, *a
+    task = vocab_fn, new_gen_fn, inst, cxt2str, new_query2str, *a
     return task
 
 def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
