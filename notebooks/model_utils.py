@@ -49,7 +49,7 @@ from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, sh
     equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str, Printer, lget, \
     fisher_discriminant_ratio
 
-from child_utils import make_data_tuple, get_answer_index, generate
+from child_utils import make_data_tuple, get_answer_index, generate, candidates2dict
 from weight_analysis import get_head_weights
 
 attribute_mlp_gate = True
@@ -1208,11 +1208,13 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
         
     if verbose and plot:
         print(loss, np.array(top1_corrects[k_shot_len:]).mean())
-        f, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 2.4), sharex=True)
+        plot_dist = candidates is not None and answer_indices is not None and len(answer_indices) > 2
+        if not plot_dist: _, ax0 = plt.subplots(figsize=(10, 1.2))
+        else: _, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 2.4), sharex=True)
         x = [i + 0.5 for i in range(len(example_strs))] # to align with sns.heatmap
         _ = ax0.bar(x, top1_corrects, width=0.9, alpha=0.5)
         _ = ax0.plot(x, answer_probs, color='r')
-        if candidates is not None and answer_indices is not None:
+        if plot_dist:
             label_probs = F.one_hot(torch.LongTensor(answer_indices))
             _ = sns.heatmap(torch.cat([label_probs, torch.Tensor(candidate_probs)], dim=1).T, cbar=False, ax=ax1)
         plt.show()
@@ -1263,7 +1265,8 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
     # logits_mask is used when rel1 is equal relation and cxt_len > 1 (checked in make_data_tuple)
     if isinstance(examples[0], dict): cands = examples[0]['candidates'] # ioi/wino task wab
     else: cxt, query, cands, *cls = examples[0]
-    if cands is not None and (cands[-2] == cands[-1] or len(cls) > 0) and logits_mask is not None: # rel1 is copy or g2c task
+    cands = candidates2dict(cands)
+    if cands is not None and (cands['ans0'] == cands['ans'] or len(cls) > 0) and logits_mask is not None: # rel1 is copy or g2c task
         # print('In predict: set logits_mask')
         o.logits_mask = logits_mask
     # once evaluation completes, revise labels to use only correctly predicted labels for subsequent attribution
@@ -1379,7 +1382,7 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
         result = Result(task=task, gen_args=gen_args, all_examples=all_examples, texts=texts, all_bos_tokens=all_bos_tokens)
     else:
         all_examples, texts, all_bos_tokens = result.all_examples, result.texts, result.all_bos_tokens
-    for text in texts[:5]: print('\n' + '\n'.join(text.strip('\n').split('\n')[:]))
+    for text in texts[:3]: print('\n' + '\n'.join(text.strip('\n').split('\n')[:]))
     if batch_size == 1 or model is None: return result
 
     if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):

@@ -271,11 +271,12 @@ def fisher_discriminant_ratio(x, y, labels=['▁Yes', '▁No'], plot=True):
             plt.hist(y0, alpha=0.5, label=labels[0])
             plt.hist(y1, alpha=0.5, label=labels[1])
         elif y.ndim == 2:
-            plt.plot(y0[:, 0], y0[:, 1], 'gx', alpha=1, label=labels[0]);
-            plt.plot(y1[:, 0], y1[:, 1], 'rx', alpha=1, label=labels[1]);
+            plt.plot(y0[:, 0], y0[:, 1], 'gx', alpha=0.5, label=labels[0]);
+            plt.plot(y1[:, 0], y1[:, 1], 'rx', alpha=0.5, label=labels[1]);
             line_range = [min(np.min(y[:, 0]), np.min(y[:, 1])), max(np.max(y[:, 0]), np.max(y[:, 1]))]
             plt.plot(line_range, line_range, color='k', linestyle='-', alpha=0.2)
-        plt.legend(loc='upper right')
+        plt.legend(loc='best')  # upper right
+        plt.title(f'ratio = {fdr}')
         plt.show()
     return fdr
 
