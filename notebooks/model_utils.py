@@ -882,7 +882,7 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
         return sum(l) if not any(none_flags) else None
     assert all(isinstance(o.hidden_states, tuple) and len(o.hidden_states) in [0, 1] for o in fwd_outputs), \
         str([(type(o.hidden_states), len(o.hidden_states)) for o in fwd_outputs])
-    if isinstance(output_layer, Iterable):
+    if isinstance(output_layer, Iterable) and attr_group is not None:
         all_heads = list(zip(layer, head)) + attr_group
         all_outputs = [o.hidden_states[0] for o in fwd_outputs] + base_hidden_states
         hidden_states = []
@@ -894,7 +894,7 @@ def mixed_forward(model, hidden_states, layer, head, labels=None, label_type=Non
     all_hidden_states, all_logits, all_loss = zip(*[
         (o.hidden_states[0] if len(o.hidden_states) == 1 else None, o.logits, o.loss) for o in fwd_outputs])
     hidden_states, logits, loss = [try_sum(l) for l in [all_hidden_states, all_logits, all_loss]]
-    hidden_states = hidden_states + sum(base_hidden_states)
+    if hidden_states is not None: hidden_states = hidden_states + sum(base_hidden_states)
     if logits_after_sum: logits, loss = lm_head_forward(model, hidden_states, labels=labels, **kwargs)
     else: logits = None  # attn_logits is not useful
     hidden_states = (hidden_states,) if hidden_states is not None else ()
@@ -1382,7 +1382,7 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
         result = Result(task=task, gen_args=gen_args, all_examples=all_examples, texts=texts, all_bos_tokens=all_bos_tokens)
     else:
         all_examples, texts, all_bos_tokens = result.all_examples, result.texts, result.all_bos_tokens
-    for text in texts[:3]: print('\n' + '\n'.join(text.strip('\n').split('\n')[:]))
+    for text in texts[:1]: print('\n' + '\n'.join(text.strip('\n').split('\n')[:]))
     if batch_size == 1 or model is None: return result
 
     if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):
@@ -1505,8 +1505,10 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=F
     attn_pattern = restore_attn_pattern(attn_pattern)
     q, k = attn_pattern.split('->')  # e.g. 'bos->ans0'
     cross_example = k.endswith('^'); k = k.replace('^', '')
-    ranges_q = ranges[k_shot:] if attribute_k or not is_relating(attn_pattern) \
-        else ranges[: len(ranges) - k_shot]
+    is_relating_pattern = q.endswith('^'); q = q.replace('^', '')
+    ranges_q, rq_start = (ranges[k_shot:], k_shot) \
+        if attribute_k or not is_relating_pattern \
+        else (ranges[: len(ranges) - k_shot], 0)
     if k in ['ans0s', 'ntgts'] and getattr(ranges_q[0], k) is None:
         k = 'example'  # tasks with cxt_len=1 has no 'ans0s' or 'ntgts'. Fall back to 'example'
     attn_labels = torch.zeros(*attn_size)
@@ -1526,7 +1528,7 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=F
             print(f'In attn_pattern2labels: name = {name} not in {[k for k, v in r.__dict__.items() if v]}?')
             raise e
         return slice(b, e) if not isinstance(b, Iterable) else [slice(_b, _e) for _b, _e in zip(b, e)]
-    for i, r in enumerate(ranges_q):
+    for i, r in enumerate(ranges_q, start=rq_start):
         if cross_example: # is_intermediary(attn_pattern):
             for rk in ranges[: i]: attn_labels[get_slice(r, q), get_slice(rk, k)] = 1
             # if True: # attn_pattern == 'bos->bos^':  # only to prev bos, not to self
@@ -2136,6 +2138,29 @@ def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_
 attn_patterns_by_step = {
     -1: ['bos->ans0'],
     0: ['bos->ans]^', 'bos->query', 'bos->ans0+', 'bos->tgt', 'bos->bos^', 'bos->rel', 'bos->cls^',
+        'bos->ans]', 'bos->ans+', # 'bos->ans-', 
+        'bos->sep',  # 11-4
+        'bos->sep+',  # 13-11
+        'bos->sep-',
+        'bos->query-', # 10-11?
+        'bos->tgt+',
+        'bos->tgt',
+        ],
+    1: ['ans]^->ans0]', 'ans]^->ans0+', 'ans]^->ans-', 'query->tgt','query->tgt+', 'query->ans0', 'tgt->ans0',
+        'ans]^->query', 'ans]->ans+^', 'ans]^->query+', 'sep->ans0', 'sep+->ans0', 'sep-->ans0',
+        'ans+->query', 'ans+->ans]', 'ans+->ans+^', 'ans]^->query|query+', 'ans+->ans]|ans+', 'ans]->dans0]', 'dans0]->dtgt]|dtgt+',  # 'ans+->query-|ans+', # g2c tasks
+        'ans0+->ans0', 'sep+->sep', 'query->ans]^','ans]->bos^', 'query->sep+', 'rel->query',
+        'query->ntgts', 'query->ntgts+', 'query->ans0+', 'query->nans0s', 'query->nans0s+', 'query->query-', 'query->sep+', 'query-->ans]', 'query+->query]',
+        'sep+->ans+^', 'sep+->ans]^', 'tgt+->ntgts+', 'tgt+->ntgts', 'ans]->ntgts+','ans]->nans0s',
+        'cls->ans', 'cls->query', 'ans->query',
+        ], # mqy add 'ans0+->ans0', 'sep+->sep', 'query->ans]^','query->sep+', 'rel->query'
+    2: ['ans0->tgt', 'ans0->tgt+',   'ans0]->tgt]', 'ans0]->tgt+', 'ans0]->tgt]|tgt+'],   # g2c tasks
+    3: ['tgt+->tgt']
+}
+
+attn_patterns_by_step_g2c = {
+    -1: ['bos->ans0'],
+    0: ['bos->ans]^', 'bos->query', 'bos->ans0+', 'bos->tgt', 'bos->bos^', 'bos->rel', 'bos->cls^',
         'bos->ans]', 'bos->ans-', 'bos->ans+',
         'bos->sep',  # 11-4
         'bos->sep+',  # 13-11
@@ -2203,7 +2228,7 @@ def get_possible_attn_patterns(parent, ranges):
     if parent.parent is None: src = 'bos'  # root
     elif d.label_type is not None and 'attn_labels' in d.label_type and not d.attribute_k:
         src = d.attn_pattern.split('->')[0]
-    else: src = d.attn_pattern.split('->')[1].split(':')[0].replace('^', '')
+    else: src = d.attn_pattern.split('->')[1].split(':')[0]#.replace('^', '')
     attn_patterns = [ap for ap in all_attn_patterns if is_subordinate_ap_label(ap.split('->')[0], src) and
         is_prominent_range(ranges, ap.split('->')[1])] + [f'{src}->{src}'] #if not any(s in src for s in ['ans0s', 'ntgts']) else []) # mqy
     added_patterns = []
@@ -2231,7 +2256,7 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.3): # use fixed k_shot
         label_types = ['labels']  # e.g. bos->bos at step 0
         # if d.head == d.H and (d.layer, d.head) in parent.data.top_mlps:
         #     label_types += ['mlp_gate_labels']
-    elif False: # icl_score > icl_score_thld or is_predicting_head or is_recurrent_head or d.attn_pattern in ['ans]->query']: #or d.ap_score >0.99: #mqy
+    elif icl_score > icl_score_thld or is_predicting_head or is_recurrent_head or d.attn_pattern in ['ans]->query']: #or d.ap_score >0.99: #mqy
         label_types = ['attn_labels', normalized_attn_labels][:1] if not point_wise(d.attn_pattern) else [None]
         activating_attn_labels = f'attn_labels:{parse_attn_pattern(d.attn_pattern)[0]}->~<s>,{min(3, k_shot)}'
         # head_label_types = get_root(parent).data.head_label_types
@@ -2240,7 +2265,7 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.3): # use fixed k_shot
             label_types += [activating_attn_labels]
             # if head_label_type not in head_label_types: head_label_types.add(head_label_type) 
         #if not is_predicting_head and not is_recurrent_head: label_types += [None]
-        if not d.attn_pattern in ['bos->ans0']:
+        if d.attn_pattern not in ['bos->ans0']:
             label_types += [None] if parent.data.step != -1 else ['labels']  # mqy 
     else:
         label_types = [None]
