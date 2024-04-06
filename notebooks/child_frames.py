@@ -113,7 +113,7 @@ frames = [
     [['believable'], ['incredible']]
 ]
 
-_person_adjs = [
+_person_adjs_old = [
     # [['fat'], ['thin']],
     # [['hot'], ['cold']],
     # [['big'], ['small']],
@@ -175,6 +175,80 @@ _person_adjs = [
     # [['single'], ['married']],
     # [['shy'], ['outgoing']],
     # [['kind'], ['cruel']],
+]
+
+_person_adjs = [
+    # [['fat'], ['thin']],
+    # [['hot'], ['cold']],
+    # [['big'], ['small']],
+    # [['insensitive'], ['sensitive']],
+    # [['quiet'], ['loud']],  # noisy
+    # [['young'], ['old']],
+    # [['conscious'], ['unconscious']],
+    # [['asleep'], ['awake']],
+    # [['male'], ['female']],
+    # [['inside'], ['outside']],
+    # [['white'], ['black']],
+    [['careful', 'cautious'], ['careless', 'incautious']],
+    [['happy', 'glad'], ['sad', 'unhappy']],
+    [['rich', 'wealthy'], ['poor', 'impoverished']],
+    [['clean', 'splotless'], ['dirty', 'filthy']],  # messy
+    # [['tidy'], ['untidy']],
+    [['honest', 'candid'], ['dishonest', 'fraudulent']],
+    [['brave', 'bold', 'adventurous', 'daring'], ['cowardly', 'timid']],
+    [['healthy', 'fine'], ['sick', 'unhealthy']],  # fit, well
+    [['friendly', 'affable'], ['unfriendly', 'hostile']],
+    [['interesting', 'fascinating'], ['boring', 'uninteresting']],  # amusing
+    # expanded by gpt-4
+    [['beautiful', 'attractive', 'pretty'], ['ugly', 'unattractive']],
+    [['gentle', 'tender'], ['harsh', 'severe']],
+    # [['good', 'virtuous'], ['bad', 'evil']],
+    # [['popular'], ['unpopular']],
+    [['comfortable', 'cozy'], ['uncomfortable', 'awkward']],
+    [['responsible', 'dependable'], ['irresponsible', 'negligent']],
+    [['rational', 'logical'], ['irrational', 'unreasonable']],
+    [['safe', 'secure'], ['dangerous', 'hazardous']],  # harmless, safe is not good according to 16-14
+    [['knowledgeable', 'informed'], ['ignorant', 'uninformed']],
+    [['active', 'energetic', 'lively'], ['passive', 'inactive', 'lethargic', 'listless']],
+    # given by code-davinci-002 and expaneded by gpt-4
+    [['reliable', 'trustworthy'], ['unreliable', 'undependable']],
+    [['successful', 'prosperous'], ['unsuccessful', 'failing']],
+    [['lucky', 'fortunate'], ['unlucky', 'unfortunate']],
+    [['generous', 'benevolent'], ['stingy', 'miserly']],
+    [['correct', 'right'], ['incorrect', 'wrong']],
+    [['diligent', 'hardworking'], ['lazy', 'indolent']],
+    [['courteous', 'polite'], ['rude', 'impolite']],  # brutal, harsh
+    [['clever', 'smart', 'intelligent'], ['stupid', 'foolish']],
+    # by gpt-4
+    [['strong', 'powerful'], ['weak', 'feeble']],
+    [['fast', 'quick'], ['slow', 'sluggish']],
+    [['tall', 'high'], ['short', 'low']],
+    [['full', 'filled'], ['empty', 'vacant']],
+    [['quiet', 'silent'], ['noisy', 'loud']],
+    [['sharp', 'keen'], ['dull', 'blunt']],
+    [['kind', 'compassionate'], ['cruel', 'heartless']],
+    [['ambitious', 'driven'], ['apathetic', 'unmotivated']],
+    [['curious', 'inquiring'], ['indifferent', 'uninterested']],
+    [['loyal', 'faithful'], ['disloyal', 'unfaithful']],
+    [['modest', 'humble'], ['arrogant', 'boastful']],
+    [['sociable', 'outgoing'], ['introverted', 'reserved']],  # shy
+    [['thoughtful', 'considerate'], ['thoughtless', 'inconsiderate']],
+    [['patient', 'tolerant'], ['impatient', 'intolerant']],
+    [['creative', 'innovative'], ['unimaginative', 'conventional']],
+    [['punctual', 'timely'], ['tardy', 'late']],
+    [['optimistic', 'positive'], ['pessimistic', 'negative']],
+    [['humorous', 'witty', 'funny'], ['serious', 'humorless']],
+    [['selfish', 'egotistical'], ['selfless', 'altruistic']],
+    [['determined', 'decisive', 'resolute'], ['hesitant', 'indecisive', 'tentative']],
+    # [['light', 'bright'], ['dark', 'dim']], # not for person
+    # ['warm', 'hot'], ['cool', 'cold']], # not for person
+
+    # [['sane'], ['mad', 'insane']],
+    # [['light'], ['heavy', 'dark']],
+    # [['serious'], ['funny']],
+    # [['cerebral'], ['emotional']],
+    # [['insecure'], ['confident']],
+    # [['single'], ['married']],
 ]
 
 def person_adjs(): return _person_adjs

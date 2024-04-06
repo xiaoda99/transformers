@@ -159,6 +159,39 @@ def kinds_of_things():
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
 }, dict(child='a kind of', sibling='the thing of the same kind as')
 
+def kinds_of_things_v2():
+    kinds_of_things_v2.name = 'kinds of things'
+    return {
+    'animal': ['duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig',
+            'monkey', 'rabbit', 'elephant', 'wolf', 'deer', 'fox', 'gorilla', 'squirrel', 'mouse'], # 'chicken', 'bear', 'zebra', 'giraffe', 'kangaroo', 21-5, 15-8
+    'fruit': ['apple', 'banana', 'pear', 'grapes', 'cherries', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberries',
+            'blueberries', 'strawberries', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'], # may be food too?
+    # 'vegetable': ['spinach', 'broccoli', 'lettuce', 'cabbage', 'tomato'],
+    'drink': ['tea', 'coffee', 'beer', 'wine', 'whiskey', 'vodka', 'soda', 'juice', 'cocktail'],  # some as alcohol, 21-5, 15-8
+    # 'food': ['hamburger', 'burger', 'bread', 'meat', 'pizza', 'cake', 'steak', 'spaghetti',
+    #         # 'biscuits', 'spaghetti', 'chips', 'peanuts', 'nuts', 'pork', 'beef', 'mutton'
+    #         ],  # last three as meat?~L 21-5?~L 15-8
+    'weapon': ['gun', 'handgun', 'shotgun', 'rifle',  'pistol', 'revolver', 'grenade', 'cannon'], #'bomb', 'dagger', 'sword',], # 21-5, 15-8, though latter prefers firearm
+    # 'color': ['white', 'black', 'red', 'yellow', 'blue', 'green', 'purple', 'pink', 'gray'],  # 15-8
+    # 'insect': ['mosquito', 'beetle', 'bee'], #'spider', 'ant', 'wasp', 'butterfly'],  # , 'fly'
+    # 'flower': ['rose', 'tulip', 'lily', 'daisy', 'sunflower'],
+    'vehicle': ['car', 'jeep', 'bus', 'taxi', 'motorcycle'],# 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage',
+                # 'subway', 'van', 'boat'],  # transportation
+    # 'furniture': ['sofa', 'couch'], #'desk', 'chair', 'table', 'bed', 'bookshelf'],# 'closet', 'wardrobe'],
+    # 'tool': ['hammer', 'spanner', 'awl', 'scissors', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'], #, 'axe' should be weapon?
+    'clothing': ['shirt', 'T-shirt', 'jeans', 'jacket', 'pants', 'trousers', 'shoes', 'sweater', 'jersey', 'underwear', 'costume', 'uniform'],#'dress', 'coat', 'socks', 'hat', 'tie', 'skirt', ],
+    # 'clothing': ['shirt', 'T-shirt', 'jeans', 'jacket', 'pants', 'trousers', 'shoes', 'sweater', 'underwear', 'costume', 'uniform',   'jersey'],  # bad order
+    # 'appliance': ['microwave', 'fridge', 'washer', 'dryer', 'washing machine'],  #, 'oven'
+    # 'fish': [],
+    # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
+    # 'electronic device': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
+    # 'electronic device': ['iPad', 'phone', 'smartphone',    'laptop'],  # bad order
+    'sport': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport or ball?
+    'musical instrument': ['piano', 'violin', 'guitar'],
+    # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
+    # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
+}, dict(child='a kind of', sibling='the thing of the same kind as')
+
 def things(): return {thing: [thing] for thing in join_lists(kinds_of_things().values())}
 def word2capitalized(): return {thing: [capitalize(thing)] for thing in join_lists(kinds_of_things().values()) if not thing[0].isupper()}
 def capitalized_forms_of_words(): return {capitalize(thing): [thing] for thing in join_lists(kinds_of_things().values()) if not thing[0].isupper()}
@@ -336,7 +369,7 @@ def countries_of_cities(): return {
     # 'Mexico': ['Mexico City', 'Guadalajara', 'Monterrey'],
     # 'Egypt': ['Cairo', 'Alexandria'],
     # 'Portugal': ['Lisbon', 'Porto'],
-}, dict(child='a city in', sibling='the city in the same country as')
+}, dict(child='a city of', sibling='the city in the same country as') # mgy 改  a city in -> a city of
 
 def city2resident():
     if not hasattr(city2resident, 'demonyms'):
@@ -551,7 +584,7 @@ class Relation(object):
     def dom(self, xs=None): return list(self._dict.keys())
     def codom(self, ys=None):
         elems = join_lists(self._dict.values()) if self.name != 'sibling' else list(self._dict.keys())
-        if self.name in ['parent', 'opposite']: elems = list(set(elems))
+        if self.name in ['parent', 'similar', 'opposite']: elems = list(set(elems))
         else: assert len(elems) == len(set(elems)), f'{self.name} {len(elems)} != {len(set(elems))}'
         return elems
 
@@ -572,7 +605,7 @@ class NegativeRelation(Relation):
         self.rel = self.neg_rel = rel
         rel.neg_rel = self
         self.name = 'neg_' + rel.name if not rel.name.startswith('neg_') else rel.name[4:]
-        if rel.name in ['child', 'sibling']: self.verbalizer = rel.verbalizer
+        self.verbalizer = rel.verbalizer if rel.name in ['child', 'sibling'] else None
         for name in ['x_f', 'y_f', 'skip_inv_f']: setattr(self, name, getattr(self.rel, name))
         if self.name == 'neg_equal' and hasattr(set_obj, 'sibling'):  # set_obj is a TreeSet or SymSet
             self.sibling = set_obj.sibling  # used in distractive_sample
@@ -636,7 +669,7 @@ class SymSet(Set):
                 for e in similars:
                     self.equal._dict[e] = [e]
                     if len(similars) > 1: self.similar._dict[e] = list_diff(similars, [e])
-                    self.opposite._dict[e] = opposites[:1]
+                    self.opposite._dict[e] = opposites[:]
                     self.sibling._dict[e] = list_diff(similars, [e]) + opposites  # used by neg_equal
         self.opposite._inv_dict, self.similar._inv_dict = self.opposite._dict, self.similar._dict
         self.equal._inv_dict = self.equal._dict
@@ -753,7 +786,7 @@ def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   # example_gen_
     if not has_local_hop: cxt = [x[0] for x in cxt]
     return cxt, query, candidates, ans_chain
 
-def rlr_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None, dict_candidates=False):
+def rlr_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None, use_numpy=False, dict_candidates=False):
     rels = [v.relations[0] for v in vocabs]
     fixed_query = query is not None
     has_local_hop = vocabs[0].data != vocabs[1].data
@@ -761,22 +794,37 @@ def rlr_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None, dict_candidates=F
     
     sample_fn = distractive_sample if not fixed_query else cxt_sample_fn
     candidates = sample_fn(cxt_len, rels[0]) # hop0: query_cands, tgt_cands
+    cand_keys = ['query', 'tgt']
     candidates += distractive_sample(cxt_len, rels[1])[::-1] if has_local_hop \
         else (candidates[-1].copy(), [choice(rels[1].inv_f(x)) for x in candidates[-1]])  # hop2: ans0_cands, ans_cands
+    cand_keys += ['ans0', 'ans']
+    if len(vocabs[1].relations) > 1:
+        assert not use_numpy
+        for r in vocabs[1].relations[1:]:  # typically opposite
+            def cat(a, b): return a + (b,) if isinstance(a, tuple) else (a, b)
+            candidates[-1] = [cat(c, choice(r.inv_f(x))) for x, c in
+                              zip(candidates[-2], candidates[-1])]
     i = 0 if query is None else candidates[0].index(query)
-    candidates = np.array(candidates)  # # -> 4 * cxt_len array
+    if use_numpy: candidates = np.array(candidates)  # # -> 4 * cxt_len array
+    else: tuples = list(zip(*candidates))  # row -> col
 
-    query, *ans_chain = candidates[:, i]; ans_chain = tuple(ans_chain)
+    query, *ans_chain = tuples[i] # candidates[:, i]
+    ans_chain = tuple(ans_chain)
     if not position_relevant:
-        candidates = candidates[:, np.random.permutation(cxt_len)]
-    cxt = list(map(tuple, candidates[int(not fixed_query):3].T))  # hop1: tgt_cands, ans0_cands
+        if use_numpy: candidates = candidates[:, np.random.permutation(cxt_len)]
+        else: shuffle(tuples)
+    if use_numpy:
+        cxt = list(map(tuple, candidates[int(not fixed_query):3].T))  # hop1: tgt_cands, ans0_cands
+        candidates = candidates.tolist()
+    else:
+        cxt = [t[int(not fixed_query):3] for t in tuples]  # hop1: tgt_cands, ans0_cands
+        candidates = [list(c) for c in zip(*tuples)]  # col -> row
 
     if fixed_query: cxt, query = [x[1:] for x in cxt], None
     if not has_local_hop: cxt = [x[0] for x in cxt]
-    candidates = candidates.tolist()
     if dict_candidates:
         _rel_hops = [('query', 'tgt'), ('ans', 'ans0')]  # hop0/2
-        candidates = OrderedDict(zip(['_rel_hops', 'query', 'tgt', 'ans0', 'ans'],
+        candidates = OrderedDict(zip(['_rel_hops'] + cand_keys,
                                      [_rel_hops] + candidates))
     return cxt, query, candidates, ans_chain
 
@@ -1217,7 +1265,8 @@ def multi_replace(s, pairs):
 def _rel_cands2str(rel_candidates, vocabs, i=1, verb='include'):
     rel_cands, vocab = rel_candidates[i], vocabs[i]
     def join_fn(cands): return ', '.join(cands[:-1]) + ' and ' + cands[-1]
-    return f"{capitalize(vocab.data.name)} {verb} {join_fn(rel_cands)}."
+    return f"{capitalize(vocab.data.name)} {verb} {join_fn(rel_cands)}." \
+        if hasattr(vocab.data, 'name') else ''
 
 def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, options_position=None, tokenizer = None):
     # Randomized transformations here are per input basis, i.e. each example in an input are the same,
@@ -1262,7 +1311,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         rel_cands = [get_rel_candidates(candidates2dict(candidates)) for cxt, query, candidates, *_ in examples]
         joined_rel_cands = list(map(partial(join_lists, dedup=True), zip(*rel_cands)))
         rel_cands_str = rel_cands2str(joined_rel_cands, vocabs[0])  # TODO: assumes all examples share the same vocab (vocab_for_each_row == False) so we use vocab of 1st example
-        instruction = instruction + ' ' + rel_cands_str if instruction else rel_cands_str
+        instruction = ' '.join([instruction, rel_cands_str]) if instruction else rel_cands_str
     if instruction and not instruction.endswith('\n'): instruction = instruction + '\n'
     text = instruction + (NEW_LINE + ' ').join(example_strs) + '\n' \
         if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
@@ -1281,12 +1330,13 @@ def choose_rels(task, rel_indices):
     vocab_fn, gen_fn, *a = task
     vocabs = vocab_fn()
     for hop, rel_i in enumerate(rel_indices):
-        if rel_i >= len(vocabs[hop].relations): return None
+        if isinstance(rel_i, int) and rel_i >= len(vocabs[hop].relations): return None
 
     def new_vocab_fn():
         vocabs = vocab_fn()
         for hop, rel_i in enumerate(rel_indices):
-            vocabs[hop].relations = vocabs[hop].relations[rel_i: rel_i + 1]
+            vocabs[hop].relations = vocabs[hop].relations[rel_i: rel_i + 1] \
+                if not isinstance(rel_i, Iterable) else [vocabs[hop].relations[i] for i in rel_i]
         return vocabs
     
     task = new_vocab_fn, gen_fn, *a
@@ -1329,7 +1379,7 @@ def verbalize_relation(vocab):
         temporal_word = {tuple(clock_of_day): 'time', tuple(days_of_week): 'day', tuple(months):'month',
             tuple(seasons): 'season', tuple(years): 'year'}[tuple(vocab._data)]
     verbalizer = vocab.relations[0].verbalizer
-    if _rel_name in ['child', 'sibling'] and verbalizer not in [None, '']:
+    if _rel_name in ['child', 'sibling'] and verbalizer:
         rel_str = ' ' + verbalizer
     # if _rel_name == 'child' and data_name in r2v: rel_str = r2v[data_name][0]
     # # elif _rel_name == 'sibling': rel_str = f' the {r2v[data_name][1]} like'
@@ -1471,7 +1521,12 @@ def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
         vocabs = args[0]
         has_local_hop = vocabs[0].data != vocabs[1].data
         rel1 = vocabs[1].relations[0]
-        if random() < 0.5:
+        if len(vocabs[1].relations) > 1:
+            assert isinstance(ans, tuple)
+            assert len(vocabs[1].relations) == len(ans) == 2
+            label, _ans = (cls_labels[0], ans[0]) if random() < 0.5 else (cls_labels[1], ans[1])
+            _ans0, _dtgt, _dans0 = ans0, tgt, ans0
+        elif random() < 0.5:
             label = cls_labels[0]
             _ans0, _ans = ans0, ans
             _dtgt, _dans0 = tgt, ans0
@@ -1568,8 +1623,8 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
             len(ans_counts) == 2 and ans_counts[0][1] > ans_counts[1][1] * 2,
         ]
         i += 1
-        assert i < 40, str(conditions) + '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:]) + \
-            '\n' + str(ind_counts) + '\n' + str(ans_counts)  #原 i<35，改为了40  nrk
+        assert i < 60, str(conditions) + '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:]) + \
+            '\n' + str(ind_counts) + '\n' + str(ans_counts)  #原 i<35，改为了40  nrk  |  40 -> 60 mgy
     if i > 10: print('In generate: i =', i, task2str(task))
     if cxt_len > 1 and plot:
         print(Counter(answer_indices).most_common())
