@@ -653,11 +653,11 @@ class GPTNeoXMLP(nn.Module):
         self.dense_4h_to_h = nn.Linear(config.intermediate_size, config.hidden_size)
         self.act = ACT2FN[config.hidden_act]
 
-    def forward(self, hidden_states, output_intermediate=False):  # XD
-        hidden_states = self.dense_h_to_4h(hidden_states)
-        intermediate = hidden_states = self.act(hidden_states)  # XD
+    def forward(self, hidden_states, gate=None, output_intermediate=False):  # XD
+        hidden_states_pre_act = self.dense_h_to_4h(hidden_states) # mqy add gate kwarg & save pre_act hidden_state
+        intermediate = hidden_states = self.act(hidden_states_pre_act)  # XD
         hidden_states = self.dense_4h_to_h(hidden_states)
-        return (hidden_states, intermediate) if output_intermediate else hidden_states # XD
+        return (hidden_states, hidden_states_pre_act, intermediate) if output_intermediate else hidden_states # XD
 
 
 GPT_NEOX_ATTENTION_CLASSES = {
