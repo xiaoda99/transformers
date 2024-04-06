@@ -190,3 +190,4 @@ notebooks/nrk_train/code/train_tasks_0701_28_2
 notebooks/nrk_train/code/eval_tasks_0701_28_2
 notebooks/results_logits_lens
 notebooks/*mqy.py
+notebooks/figures

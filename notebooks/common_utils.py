@@ -273,6 +273,8 @@ def fisher_discriminant_ratio(x, y, labels=['▁Yes', '▁No'], plot=True):
         elif y.ndim == 2:
             plt.plot(y0[:, 0], y0[:, 1], 'gx', alpha=0.5, label=labels[0]);
             plt.plot(y1[:, 0], y1[:, 1], 'rx', alpha=0.5, label=labels[1]);
+            # print('gx', y0[:, 1])  # nrk debug
+            # print('rx', y1[:, 1])
             line_range = [min(np.min(y[:, 0]), np.min(y[:, 1])), max(np.max(y[:, 0]), np.max(y[:, 1]))]
             plt.plot(line_range, line_range, color='k', linestyle='-', alpha=0.2)
         plt.legend(loc='best')  # upper right

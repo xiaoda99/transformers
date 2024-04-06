@@ -1,4 +1,4 @@
-from model_utils import *
+from model_utils_mqy import *
 from weight_analysis import get_positional_score
 
 import circuitsvis as cv
@@ -909,3 +909,450 @@ def get_cross_layer_similarity(model, save=False, layer_pairs=None, full_layer='
         else:
             torch.save(sim, f'data/cross_layer_similarity_full_layer{full_layer}_modes-{mode_name}_Model-{model.__class__.__name__}.pt')
     return sim, sim_heads
+
+def analyse_dcpythia_few_shot():
+    with open('DCPythia_Pythia_eval_results_v2_with_negate.json', 'r') as f:
+        eval_data = json.loads(f.read())
+    #with open('synthetic_dataset.jsonl', 'r') as f:
+    #    #lines = f.readlines()
+    #    for i,(k,v) in enumerate(eval_data['dcpythia'].items()):
+    #        for t in v['labeled_texts']:
+    #            f.write(json.dumps({'task_id': f'task{i}', 'texts':t})+'\n')
+    loss_shot = {}
+    acc_shot = {}
+    for eval_name,data in eval_data.items():
+        mean_acc = []
+        mean_loss = []
+        for res_key, task_res in data.items():
+            mean_acc.append(task_res['acc'])
+            mean_loss.append(task_res['loss'])
+        loss_shot[eval_name] = np.exp(np.array(mean_loss).mean(0))
+        acc_shot[eval_name] = np.array(mean_acc).mean(0)
+        print(eval_name, 'acc:', np.array(mean_acc).mean(), 'loss:', np.array(mean_loss).mean(), np.exp(np.array(mean_loss).mean()))
+        print(eval_name, 'acc:', np.array(mean_acc).mean(0), 'loss:', np.array(mean_loss).mean(0), np.exp(np.array(mean_loss).mean(0)))
+    
+    pythia_losses = []
+    dcpythia_losses = []
+    res_keys = list(eval_data['pythia'].keys())
+    res_keys = sorted(res_keys)
+    lose_tasks = []
+    win_tasks=[]
+    for i, k in enumerate(res_keys):
+        pythia_acc = round(np.array(eval_data['pythia'][k]['acc']).mean(),3)
+        dcpythia_acc = round(np.array(eval_data['dcpythia'][k]['acc']).mean(),3)
+        pythia_loss = round(np.array(eval_data['pythia'][k]['loss']).mean(),3)
+        dcpythia_loss = round(np.array(eval_data['dcpythia'][k]['loss']).mean(),3)
+        pythia_losses.append(pythia_loss)
+        dcpythia_losses.append(dcpythia_loss)
+        diff = round((dcpythia_loss - pythia_loss)/dcpythia_loss * 100, 1)
+    #     if pythia_acc >= dcpythia_acc:
+        if pythia_loss <= dcpythia_loss:
+            lose_tasks.append((diff, k, pythia_loss, dcpythia_loss,pythia_acc, dcpythia_acc ))
+    #         print(round(diff, 1), k, pythia_loss, dcpythia_loss)
+            text = eval_data['pythia'][k]['texts'][0].split('\n')
+        else:
+            win_tasks.append((diff,k,pythia_loss,dcpythia_loss,pythia_acc, dcpythia_acc))
+    ovs = []
+    lose_tasks = sorted(lose_tasks, key=lambda x: abs(x[0]), reverse=True)
+    for t in lose_tasks:
+        filtered = False
+        for ov_relation in ovs:
+            if ov_relation in t[1]:
+                filtered = True
+        if not filtered:
+            print(t)
+        print(eval_data['pythia'][t[1]]['texts'][0].split('\n')[1])
+        print('-----------------------')
+    win_tasks = sorted(win_tasks, key=lambda x: abs(x[0]), reverse=True)
+    for t in win_tasks:
+        print(t)
+        print('\n'.join(eval_data['pythia'][t[1]]['texts'][0].split('\n')[1:3]))
+        print('-----------------------')
+
+def plot_few_shot():
+    x = [2,3,4,5,6,7]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4),width_ratios=[1,1])
+    for label, ax in zip(['(a)', '(b)'], axes):
+        ax.text(0.45, -0.3, label, transform=ax.transAxes, size=20)
+    ax1, ax2 = axes
+    ax1.plot(x, loss_shot['pythia'], marker='o', label='Pythia',color='c')#linestyle='dashed'
+    ax1.plot(x, loss_shot['dcpythia'], marker='*', markersize=10, label='DCPythia',color='orange')
+
+    ax1.set_ylabel('PPL',fontsize=16)
+    ax1.yaxis.set_tick_params(labelsize=12)
+    ax1.xaxis.set_tick_params(labelsize=12)
+    ax1.set_xlabel('Number of shots',fontsize=16)
+    ax1.legend(fontsize=14,frameon=False, loc='best', bbox_to_anchor=(0.45, 0.12, 0.5, 0.5))
+
+    ax2.plot(x, acc_shot['pythia'], marker='o', label='Pythia',color='c')#linestyle='dashed'
+    ax2.plot(x, acc_shot['dcpythia'], marker='*', markersize=10, label='DCPythia',color='orange')
+    ax2.set_ylabel('Acc',fontsize=16)
+    ax2.yaxis.set_tick_params(labelsize=12)
+    ax2.xaxis.set_tick_params(labelsize=12)
+    ax2.set_xlabel('Number of shots',fontsize=16)
+    ax2.legend(fontsize=14,frameon=False)
+
+    plt.subplots_adjust(wspace=.3)
+    plt.savefig('figures/Few_shot_eval_on_synthetic_dataset.pdf',format="pdf", bbox_inches="tight")
+
+# pythia_losses = np.array(pythia_losses)
+# dcpythia_losses = np.array(dcpythia_losses)
+# print('win tasks cnt:', len(win_tasks))
+# print('lose tasks cnt:', len(lose_tasks))
+
+def get_dynamic_inner_state():
+    # 21-6 copy thing
+    # 16-11, 20-1 thing2type
+    LAYER_INDEX =21
+    HEAD_INDEX=18
+    sample_idx=-1
+    proj_type = 'post_proj' # post_proj
+    batch_bos_logits_or_probs = 0
+    batch_bos_logits_or_probs_residual = 0
+    batch_bos_logits_or_probs_sw= 0
+    batch_bos_logits_or_probs_qw =0
+    batch_bos_logits_or_probs_kw =0
+    batch_bos_logits_or_probs_qdd =0
+    batch_bos_logits_or_probs_kdd =0
+    negative_idx = 157
+    for dt in r.data_tuples[2:3]:
+    #for dt in r.data_tuples[:1]:
+        text, input_ids, labels, ranges, *_, o = dt
+        texts = [ str(_i)+ '_'+ tokenizer.decode(t) for _i, t in enumerate(input_ids[0])]
+        print(text)
+        bos_idxs = torch.tensor([_range.bos[0] for _range in ranges[k_shot:]])[sample_idx]
+        ans0_idxs = torch.tensor([_range.ans0[1]-1 for _range in ranges[k_shot:]])[sample_idx]
+        sample_start = torch.tensor([_range.example[0] for _range in ranges[k_shot:]])[sample_idx]
+    #     ans0_idxs=135    # 157
+        print('B,A0 idx', bos_idxs, ans0_idxs)
+        for lidx, hid in enumerate(o.hidden_states):
+            if lidx == LAYER_INDEX:
+                layer = model.transformer.layers[lidx]
+                attn = layer.attention
+                _hid = hid.to(device).half()
+                _hid = layer.input_layernorm(_hid)
+                query,key,value = layer.attention.q_proj(_hid), layer.attention.k_proj(_hid),layer.attention.v_proj(_hid)
+                query = rearrange(query, 'b t (n d)-> b n t d',n=attn.num_heads)
+                key = rearrange(key, 'b t (n d)-> b n t d', n=attn.num_heads)
+                query, key = attn.q_norm(query), attn.k_norm(key)
+    
+                # rotary
+                k_rot = key[:, :, :, : layer.attention.rotary_dim]
+                q_rot = query[:, :, :, : layer.attention.rotary_dim]
+                k_pass = key[:, :, :, layer.attention.rotary_dim :]
+                q_pass = query[:, :, :, layer.attention.rotary_dim :]
+                q_rot, k_rot = apply_rotary_pos_emb(q_rot, k_rot, rotary_emb=layer.attention.rotary_emb)
+                key = torch.cat([k_rot, k_pass], dim=-1)
+                query = torch.cat([q_rot, q_pass], dim=-1)
+                # attn scores
+                attn_scores = bmm_attn_scores(attn, query, key)
+                attn_scores_before_talking = attn_scores
+    
+                pre_proj_dw_args, post_proj_dw_args = layer.attention.dyn_w_proj(_hid,_hid)
+                attn_scores = attn.pre_proj(attn_scores, *pre_proj_dw_args, query_vec=_hid, key_vec=_hid)
+                query_length, key_length = query.size(-2), key.size(-2)
+                causal_mask = attn.bias[:, :, key_length - query_length : key_length, :key_length].bool()
+                mask_value = -1e9
+                mask_value = torch.tensor(mask_value, dtype=attn_scores.dtype).to(attn_scores.device)
+                attn_scores = torch.where(causal_mask.to(attn_scores.device), attn_scores, mask_value)
+                attn_weights = nn.functional.softmax(attn_scores, dim=-1)
+    
+                _qw1, _qw2, _kw1, _kw2, _qdd, _kdd = pre_proj_dw_args if proj_type == 'pre_proj' else post_proj_dw_args
+                qdd = torch.diag_embed(_qdd)
+                kdd = torch.diag_embed(_kdd)
+                qw = _qw1.transpose(-1,-2) @ _qw2 # BTGMN
+                kw = _kw1.transpose(-1,-2) @ _kw2 # BSGMN
+                sw = getattr(layer.attention, proj_type).w[0]
+                qkw = (qw+qdd)[0,:,0].unsqueeze(1)+(kw+kdd)[0,:,0].unsqueeze(0)+ sw + torch.eye(qdd.shape[-1]).to(device)  # TSMN
+                print(qkw.shape, qkw[bos_idxs,ans0_idxs].shape)
+                attn_values_before_talking = attn_scores_before_talking if proj_type == 'pre_proj' else attn_weights #BNTS
+                print('kw1 kw2',_kw1.shape, _kw2.shape)
+                print('sw', sw.shape)
+                print('qw', qw.shape)
+                print('kw', kw.shape)
+                print('qdd', qdd.shape)
+                print('kdd', kdd.shape)
+                bos_logits_or_probs = qkw[bos_idxs,:,:,HEAD_INDEX].float().cpu().T * attn_values_before_talking[0, :, bos_idxs].float().cpu()
+    
+                w_all = qkw[bos_idxs,ans0_idxs].float().cpu() # TSMN-> MN
+                res_all = torch.eye(qdd.shape[-1]).float().cpu() # MN
+                sw_all = sw.float().cpu() #MN
+                qw_all = qw[0,bos_idxs,0,:,:].float().cpu() #BTGMN -> MN
+                kw_all = kw[0,ans0_idxs,0,:,:].float().cpu() #BSGMN -> MN
+                qdd_all = qdd[0,bos_idxs,0,:,:].float().cpu() #BTGMN -> MN
+                kdd_all = kdd[0,ans0_idxs,0,:,:].float().cpu() #BSGMN -> MN
+                print('B->A0 W', w_all.shape)
+    
+                bos_ans0_w = qkw[bos_idxs,:,:,HEAD_INDEX].float().cpu().T[:,ans0_idxs]
+                bos_ans0_residual = torch.eye(qdd.shape[-1])[:,HEAD_INDEX].unsqueeze(0).float().cpu().T[:,0]
+                bos_ans0_sw = sw[:,HEAD_INDEX].unsqueeze(0).float().cpu().T[:,0]
+                bos_ans0_qw = qw[0,bos_idxs,0,:,HEAD_INDEX].unsqueeze(0).float().cpu().T[:,0]
+                bos_ans0_kw = kw[0,:,0,:,HEAD_INDEX].float().cpu().T[:,ans0_idxs]
+                bos_ans0_qdd = qdd[0,bos_idxs,0,:,HEAD_INDEX].unsqueeze(0).float().cpu().T[:,0]
+                bos_ans0_kdd = kdd[0,:,0,:,HEAD_INDEX].float().cpu().T[:,ans0_idxs]
+                bos_ans0_all_w = torch.stack([bos_ans0_w, bos_ans0_residual,bos_ans0_sw,bos_ans0_qw,bos_ans0_qdd,bos_ans0_kw,bos_ans0_kdd])
+    
+                bos_logits_or_probs_residual = torch.eye(qdd.shape[-1])[:,HEAD_INDEX].unsqueeze(0).float().cpu().T * attn_values_before_talking[0, :, bos_idxs].float().cpu()
+                bos_logits_or_probs_sw = sw[:,HEAD_INDEX].unsqueeze(0).float().cpu().T * attn_values_before_talking[0, :, bos_idxs].float().cpu()
+                bos_logits_or_probs_qw = qw[0,bos_idxs,0,:,HEAD_INDEX].unsqueeze(0).float().cpu().T * attn_values_before_talking[0, :, bos_idxs].float().cpu()
+                bos_logits_or_probs_kw = kw[0,:,0,:,HEAD_INDEX].float().cpu().T * attn_values_before_talking[0, :, bos_idxs].float().cpu()
+                bos_logits_or_probs_qdd = qdd[0,bos_idxs,0,:,HEAD_INDEX].unsqueeze(0).float().cpu().T * attn_values_before_talking[0, :, bos_idxs].float().cpu()
+                bos_logits_or_probs_kdd = kdd[0,:,0,:,HEAD_INDEX].float().cpu().T * attn_values_before_talking[0, :, bos_idxs].float().cpu()
+    
+                print('final prob', bos_logits_or_probs[:,ans0_idxs].sum())
+                print('final prob by decomposition', (bos_logits_or_probs_sw+ bos_logits_or_probs_qw+bos_logits_or_probs_kw+bos_logits_or_probs_qdd+bos_logits_or_probs_kdd+bos_logits_or_probs_residual)[:,ans0_idxs].sum())
+                print('prob attribution of residul', bos_logits_or_probs_residual[:,ans0_idxs].sum())
+                print('prob attribution of sw', bos_logits_or_probs_sw[:,ans0_idxs].sum())
+                print('prob attribution of qw', bos_logits_or_probs_qw[:,ans0_idxs].sum())
+                print('prob attribution of kw', bos_logits_or_probs_kw[:,ans0_idxs].sum())
+                print('prob attribution of qdd', bos_logits_or_probs_qdd[:,ans0_idxs].sum())
+                print('prob attribution of kdd', bos_logits_or_probs_kdd[:,ans0_idxs].sum())
+                batch_bos_logits_or_probs += bos_logits_or_probs[:,ans0_idxs]
+                batch_bos_logits_or_probs_residual += bos_logits_or_probs_residual[:,ans0_idxs]
+                batch_bos_logits_or_probs_sw += bos_logits_or_probs_sw[:,ans0_idxs]
+                batch_bos_logits_or_probs_qw += bos_logits_or_probs_qw[:,ans0_idxs]
+                batch_bos_logits_or_probs_qdd += bos_logits_or_probs_qdd[:,ans0_idxs]
+                batch_bos_logits_or_probs_kw += bos_logits_or_probs_kw[:,ans0_idxs]
+                batch_bos_logits_or_probs_kdd += bos_logits_or_probs_kdd[:,ans0_idxs]
+    
+                fig = px.imshow(_kw1[0,:,0,1].float().cpu().T, title='kw1',x=texts,y=list(range(32)))
+                fig.update_layout(height=600,width=1800)
+                px.imshow(_kw2[0,:,0,1].float().cpu().T, title='kw2',x=texts)
+                # px.imshow(sw.float().cpu(), title='static')
+    #             px.imshow(kw.mean(dim=(0,1,2)).float().cpu(), title='kw for all qk pair')
+    #             px.imshow(qw.mean(dim=(0,1,2)).float().cpu(), title='qw for all qk pair')
+    #             px.imshow(qkw.mean(dim=(0,1)).float().cpu(), title='static+eye+qkw for all qk pair')
+    #             px.imshow(qkw[bos_idxs,:,:,HEAD_INDEX].float().cpu().T, title='static+eye+qkw for all bos-k pair')
+                px.imshow(qw[0,:,0,:,HEAD_INDEX].float().cpu().T, title='qw along the sequence')
+                px.imshow(kw[0,:,0,:,HEAD_INDEX].float().cpu().T, title='kw along the sequence')
+                px.imshow(torch.stack([bos_ans0_w, bos_ans0_residual,bos_ans0_sw,
+                                       bos_ans0_qw,bos_ans0_qdd,bos_ans0_kw,bos_ans0_kdd
+                                      ]),  title='weight of total,res,sw,qw,qdd,kw,kdd')
+    
+                bos2ans0_probs_decomp = torch.stack([
+                                       batch_bos_logits_or_probs,
+                                       batch_bos_logits_or_probs_residual,
+                                       batch_bos_logits_or_probs_sw,
+                                       batch_bos_logits_or_probs_qw,
+                                       batch_bos_logits_or_probs_qdd,
+                                       batch_bos_logits_or_probs_kw,
+                                       batch_bos_logits_or_probs_kdd,
+                                       attn_values_before_talking[0, :, bos_idxs,ans0_idxs].float().cpu()
+                                      ])
+                px.imshow(bos2ans0_probs_decomp, title='B->A0 prob of total,res,sw,qw,qdd,kw,kdd,attn_weights')
+                fig_decomp = px.imshow(torch.stack([w_all,res_all,sw_all,qw_all,qdd_all,kw_all,kdd_all]),
+                          facet_col=0,facet_col_wrap=7,
+                          title='B->A0 w_all,res_all,sw_all,qw_all,qdd_all,kw_all,kdd_all')
+                _ = fig_decomp.update_layout(height=600,width=1800)
+                fig_decomp.show()
+    #             px.imshow(torch.stack([
+    #                                    bos_logits_or_probs[:,negative_idx],
+    #                                    bos_logits_or_probs_residual[:,negative_idx],
+    #                                    bos_logits_or_probs_sw[:,negative_idx],
+    #                                    bos_logits_or_probs_qw[:,negative_idx],
+    #                                    bos_logits_or_probs_qdd[:,negative_idx],
+    #                                    bos_logits_or_probs_kw[:,negative_idx],
+    #                                    bos_logits_or_probs_kdd[:,negative_idx],
+    #                                    attn_values_before_talking[0, :, bos_idxs,negative_idx].float().cpu()
+    #                                   ]), title='negative example, prob of total,res,sw,qw,qdd,kw,kdd,attn_weights')
+    #             px.imshow(attn_values_before_talking[0, :, bos_idxs].float().cpu(), title='bos-k pair attn scores/probs for all heads before talking')
+                #             px.imshow(qkw[bos_idxs,ans0_idxs,:,HEAD_INDEX].float().cpu(), title='static+eye+qw for bos-A0')
+                #             px.imshow(bos_logits_or_probs, title='dw * attn_values_before_talking')
+                #             px.imshow(bos_logits_or_probs_sw, title='sw * attn_values_before_talking')
+                #             px.imshow(bos_logits_or_probs_qw, title='qw * attn_values_before_talking')
+                #             px.imshow(bos_logits_or_probs_kw, title='kw * attn_values_before_talking')
+                #             px.imshow(bos_logits_or_probs_qdd, title='qdd * attn_values_before_talking')
+                #             px.imshow(bos_logits_or_probs_kdd, title='kdd * attn_values_before_talking')
+            
+def add_text(ax, text='text', xy=(0,0), fontsize=10):
+    #import matplotlib.pyplot as plt
+    #plt.rcParams['font.family'] = 'DejaVu Sans'
+    _ = ax.annotate(text, xy=xy, xytext=xy, xycoords='figure fraction',textcoords='figure fraction',fontsize=fontsize)
+    
+def add_arrow(ax,start=(0,0),end=(0,0),linestyle='solid',clinestyle="arc3,rad=0.3", color="black"):
+    _ = ax.annotate('', xy=end, xytext=start, xycoords='figure fraction',textcoords='figure fraction',arrowprops=dict(
+        arrowstyle="->", color=color,shrinkA=5, shrinkB=5,
+        patchA=None, patchB=None,
+        connectionstyle=clinestyle,
+        linestyle=linestyle,))
+
+def curly(x,y, scale, fig):
+    import matplotlib.transforms as mtrans
+    from matplotlib.text import TextPath
+    from matplotlib.patches import PathPatch
+    tp = TextPath((0, 0), r"$\mathrm{\}}$", size=1)
+    trans = mtrans.Affine2D().rotate_deg(90) + mtrans.Affine2D().scale(scale, 0.5)  +\
+        mtrans.Affine2D().translate(x,y) + ax.transData 
+    pp = PathPatch(tp, lw=0, fc="k", transform=trans)
+    fig.patches.append(pp)
+
+def plot_prob_decomposition():
+    import seaborn as sns
+    #from matplotlib.patches import Rectangle
+    # fig, axes = plt.subplots(ncols=3, figsize=(12, 12))
+    fig, axes = plt.subplots(1, 7, figsize=(12, 6), width_ratios=[1,2,1.3,2,1,4,1])
+    head_idxs = [2,11,17]
+    cmap='viridis'
+    patch_color = 'red'
+    rotation=0
+    vmax, vmin=0.7,-0.2
+    annot_fontsize=8
+    annot = True
+    square = False
+    ax_p, ax_kw1,ax_low_rank,ax_kw2, ax_kw1_prob, ax_other_prob,ax_p_prime = axes
+    orig_probs = attn_values_before_talking[0, :, bos_idxs,ans0_idxs].float().cpu()
+    composed_probs = w_all.T @ orig_probs
+    decomp_probs = torch.stack([res_all.T @ orig_probs, qw_all.T @ orig_probs, qdd_all.T @ orig_probs, kdd_all.T @ orig_probs]).T
+    _ = sns.heatmap(orig_probs[:,None].round(decimals=2),
+                    vmax=vmax, vmin=vmin,
+                    ax=ax_p,annot_kws={"fontsize":annot_fontsize},cmap=cmap,cbar=False, linewidth=0.5,annot=annot,square=square,xticklabels=[' '],yticklabels=[ i if i in [0,2,11,17,31]  else '' for i in range(32) ])
+    _ = ax_p.set_title('$A_{:,of,burger}$',rotation=rotation)
+    _ = ax_p.add_patch(Rectangle((0, 2), 1, 1, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    _ = ax_p.add_patch(Rectangle((0, 11), 1, 1, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    _ = ax_p.add_patch(Rectangle((0, 17), 1, 1, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    _ = ax_p.tick_params(left=True, bottom=False,labeltop=True, labelbottom=False)
+    
+    _ = sns.heatmap(_kw1[0,ans0_idxs,0].float().cpu().T.round(decimals=2),
+                    vmax=vmax, vmin=vmin,
+                    ax=ax_kw1,annot_kws={"fontsize":annot_fontsize},cmap=cmap,cbar=False, linewidth=0.5,annot=annot,square=square,xticklabels=['col 0','col 1'],yticklabels=[ i if i in [0,2,11,17,31]  else '' for i in range(32) ])
+    _ = ax_kw1.set_title(r'$\mathcal{W}_{k1,burger}$',rotation=rotation)
+    _ = ax_kw1.add_patch(Rectangle((0, 2), 2, 1, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    _ = ax_kw1.add_patch(Rectangle((0, 17), 2, 1, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    _ = ax_kw1.tick_params(left=True, bottom=False,labeltop=True, labelbottom=False)
+    
+    _ = sns.heatmap((_kw1[0,ans0_idxs,0].float().cpu() @ orig_probs).round(decimals=2)[None,:],
+                    vmax=vmax, vmin=vmin,
+                    ax=ax_low_rank,annot_kws={"fontsize":annot_fontsize},cmap=cmap,cbar=False, linewidth=0.5,annot=annot,square=True,
+                    xticklabels=['',''],yticklabels=['']
+                   )
+    _ = ax_low_rank.tick_params(left=False, bottom=False)
+    # _ = ax_low_rank.add_patch(Rectangle((1, 0), 1, 1, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    
+    _ = sns.heatmap(_kw2[0,ans0_idxs,0].float().cpu().T.round(decimals=2),
+                    vmax=vmax, vmin=vmin,
+                    ax=ax_kw2,annot_kws={"fontsize":annot_fontsize},cmap=cmap,cbar=False, linewidth=0.5,annot=annot,square=square,xticklabels=['col 0','col 1'],yticklabels=[ i if i in [0,2,11,17,31]  else '' for i in range(32) ])
+    _ = ax_kw2.set_title(r'$\mathcal{W}_{k2,burger}$',rotation=rotation)
+    _ = ax_kw2.add_patch(Rectangle((0, 11), 2, 1, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    _ = ax_kw2.tick_params(left=True, bottom=False,labeltop=True, labelbottom=False)
+    
+    _ = sns.heatmap((_kw2[0,ans0_idxs,0].float().cpu().T @(_kw1[0,ans0_idxs,0].float().cpu() @ orig_probs)).round(decimals=2)[:,None],
+                    vmax=vmax, vmin=vmin,
+                    ax=ax_kw1_prob,annot_kws={"fontsize":annot_fontsize},cmap=cmap,cbar=False, linewidth=0.5,annot=annot,square=square,xticklabels=[r'$O_{kp}$'],yticklabels=[ i if i in [0,2,11,17,31]  else '' for i in range(32) ])
+    # _ = ax_kw1_prob.set_title(r'$o_kp',rotation=rotation)
+    _ = ax_kw1_prob.add_patch(Rectangle((0, 11), 1, 1, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    _ = ax_kw1_prob.add_patch(Rectangle((0, 2), 1, 1, fill=False, edgecolor='m', lw=2, clip_on=False))
+    _ = ax_kw1_prob.tick_params(left=True, bottom=False,labeltop=True, labelbottom=False)
+    
+    _ = sns.heatmap(decomp_probs.round(decimals=2),
+                    vmax=vmax, vmin=vmin,
+                    ax=ax_other_prob,annot_kws={"fontsize":annot_fontsize},cmap=cmap,cbar=False, linewidth=0.5,annot=annot,square=square,
+                    xticklabels=[r'$A_{:}$',r'$O_{qp}$',r'$O_{qg}$',r'$O_{kg}$'],
+                    yticklabels=[ i if i in [0,2,11,17,31]  else '' for i in range(32) ])
+    # _ = ax_other_prob.set_title( r'$  A_{:}  O_{qp} O_{qg} O_{kg}$',rotation=rotation)
+    _ = ax_other_prob.add_patch(Rectangle((0, 11), 4 , 1, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    _ = ax_other_prob.tick_params(left=True, bottom=False,labeltop=True, labelbottom=False)
+    _ = ax_other_prob.add_patch(Rectangle((2, 2), 1, 1, fill=False, edgecolor='m', lw=2, clip_on=False))
+    
+    cax = sns.heatmap(composed_probs[:,None].round(decimals=2),
+                    vmax=vmax, vmin=vmin,
+                    ax=ax_p_prime,annot_kws={"fontsize":annot_fontsize},cmap=cmap,cbar=False, cbar_kws={'shrink': 1.4, 'aspect': 60}, linewidth=0.5,annot=annot,square=square,xticklabels=[' '],yticklabels=[ i if i in [0,2,11,17,31]  else '' for i in range(32) ])
+    _ = ax_p_prime.set_title(r'$A_{:,of,burger}^{\prime}$',rotation=rotation)
+    _ = ax_p_prime.add_patch(Rectangle((0, 11), 1, 1, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    _ = ax_p_prime.tick_params(left=True, bottom=False,labeltop=True, labelbottom=False)
+    
+    fig.subplots_adjust(top=0.76,bottom=0.12)
+    curly(4.6,5.7,2.,fig)
+    sy = 0.425
+    topy, topy2 = 0.75, 0.845
+    topx2 = 0.538
+    sfontsize = 30
+    add_text(plt,text='T',xy=(0.095,0.75),fontsize=15)
+    add_text(plt,text='T',xy=(0.405,0.75),fontsize=15)
+    add_text(plt,text=r'$\times$',xy=(0.1,sy),fontsize=sfontsize)
+    add_text(plt,text=r'$\to$',xy=(0.218,sy),fontsize=sfontsize)
+    add_text(plt,text=r'$\times$',xy=(0.30,sy),fontsize=sfontsize)
+    add_text(plt,text=r'$=$',xy=(0.405,sy),fontsize=sfontsize)
+    add_text(plt,text=r'$\oplus$',xy=(topx2 ,topy2),fontsize=sfontsize)
+    
+    add_arrow(plt, start=(0.56,topy2+0.02),end=(0.70,topy+0.09), clinestyle="arc3,rad=-0.15",) # plus-> p_prime
+    add_arrow(plt, start=(0.07,0.115),end=(0.6,0.115), clinestyle="arc3,rad=0.15",) # B1235
+    add_arrow(plt, start=(0.07,0.125),end=(0.47,0.115), clinestyle="arc3,rad=0.15",) # B4
+    
+    add_arrow(plt, start=(0.205,0.72),end=(0.275,0.45), linestyle='dashed', clinestyle="arc3,rad=-0.15",) # wk1->lowrank
+    add_arrow(plt, start=(0.205,0.41),end=(0.28,0.422), linestyle='dashed', clinestyle="arc3,rad=0.15",) # wk1->lowrank
+    add_arrow(plt, start=(0.273,0.455),end=(0.325,0.535),linestyle='dashed', clinestyle="arc3,rad=-0.15",) # wk1->lowrank
+    
+    add_text(plt,text='B1,B2,B3,B5',xy=(0.455,0.020),fontsize=14)
+    add_text(plt,text='B4',xy=(0.27,0.065),fontsize=14)
+    
+    fig.subplots_adjust(right=0.8)
+    cbar_ax = fig.add_axes([0.81, 0.12, 0.015, 0.635])
+    cbar = fig.colorbar(cax.collections[0], cax=cbar_ax,shrink=1.,aspect=50)
+    
+    plt.subplots_adjust(wspace=0.8)
+    # plt.savefig('figures/DCMHA_prob_decomposition_without_annot.pdf',format="pdf", bbox_inches="tight")
+
+def plot_attention_patten_kw():
+    fig, axes = plt.subplots(2, 1, figsize=(24, 8), height_ratios=[1,2])
+    ax1, ax3 = axes
+    head_idxs = [2,17,11]
+    cmap='viridis'
+    patch_color = 'red'
+    orig_probs = attn_values_before_talking[0, :, bos_idxs,ans0_idxs].float().cpu()
+    texts = [ tokenizer.decode(t) for t in input_ids[0]][sample_start:bos_idxs+1]
+    colors = ['y','green','c','blue']
+    # Determine bar widths
+    n_series = 4
+    width_cluster = 1
+    width_bar = width_cluster/n_series
+    attn_pattern = attn_values_before_talking[0,:,bos_idxs,sample_start:bos_idxs+1].float().cpu()
+    x = np.array(range(attn_pattern.shape[-1]))
+    annot_fontsize = 14
+    kw_hidx = torch.tensor([0,2,11,17,31])
+    texts[4] = r'$\bf burger$'
+    texts[-1] = r'$\bf of$'
+    xticklabels = texts
+    im = sns.heatmap(_kw1[0,sample_start:bos_idxs+1,0,1,kw_hidx].float().cpu().T,
+                    cmap=cmap, ax=ax1,
+                    cbar=False,
+    #                 cbar_kws={'shrink': 0.6, 'aspect': 60, 'location': 'top',},
+                    linewidth=0.5,
+    #                 vmax=0.5,vmin=0.0,
+                    annot=False,square=False,
+                    annot_kws={"fontsize":annot_fontsize},
+                    xticklabels=xticklabels,
+                    yticklabels=[0,2,11,17,31],
+                   )
+    
+    _ = ax1.add_patch(Rectangle((4, 0), 1, 5, fill=False, edgecolor=patch_color, lw=2, clip_on=False))
+    ax1.tick_params(labelsize=20, labeltop=True,bottom=False, labelbottom=False)
+    _ = ax1.set_xticklabels(xticklabels, rotation=90)
+    cbar = ax1.collections[0].colorbar
+    
+    fig.subplots_adjust(right=0.8)
+    cbar_ax = fig.add_axes([0.81, 0.625, 0.015, 0.25])
+    cbar = fig.colorbar(im.collections[0], cax=cbar_ax,shrink=0.5,aspect=8)
+    
+    tick_font_size = 20
+    cbar.ax.set_yticks([0,0.5,1.,1.5])
+    cbar.ax.tick_params(labelsize=tick_font_size)
+    
+    for n, (hidx,color)  in enumerate(zip(head_idxs+[11],colors)):
+        x_positions = x+(width_bar*n)-width_cluster/2 +2*width_bar
+        if n==3:
+            _ = ax3.bar(x_positions, bos_logits_or_probs.sum(0)[sample_start:bos_idxs+1], width_bar, align='edge',label=f'L16-H{hidx} after comp.',color=color)
+        else:
+            _ = ax3.bar(x_positions, attn_pattern[hidx], width_bar, align='edge',label=f'L16-H{hidx} before comp.',color=color)
+    
+    ax3.legend(fontsize=20)
+    _ = ax3.grid(color='gray', linestyle='dotted',axis='x')
+    _ = ax3.set_ylabel('Attention score',fontsize=30)
+    _ = ax3.set_xticklabels(texts,rotation=90,fontsize=24,va='top',ha='left', position=(0.,0.0))
+    _ = ax3.set_xticks(range(attn_pattern.shape[-1]))
+    _ = ax3.set_yticks([-0.2,-0.1,0.0,0.1,0.2,0.3,0.4])
+    ax3.tick_params('y', labelsize=20, labeltop=True)
+    ax3.set_xlim(0,24)
+    add_text(plt,text=r'$\mathcal{W}_{k1}$',xy=(0.035,0.95),fontsize=30)
+    add_text(plt,text='col 1',xy=(0.037,0.85),fontsize=25)
+    plt.subplots_adjust(hspace=.005)
+    plt.savefig('figures/DCMHA_attn_pattern_and_kw.pdf',format="pdf", bbox_inches="tight")

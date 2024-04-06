@@ -528,7 +528,7 @@ remove_two = [
     ('0, 1, 18, 9, 9, 0, 15, 6, 1', '18, 15, 6'),
     ('0, 17, 4, 8, 4, 10, 1', '0, 17, 8, 10, 1'),
 ]
-
+                
 class Relation(object):
     def __init__(self, name, _dict):
         self.name = name
@@ -840,6 +840,16 @@ class IOIRanges:   # wab
     example: tuple = None
     candidates: list = None
 
+@dataclass    
+class Winograd:  # wab
+    def __init__(self, text_json, word_idx_json):
+        with open(text_json, 'r') as f:
+            self.sentences=json.load(f)
+        with open(word_idx_json, 'r') as f:
+            self.word_idx = json.load(f)
+            if 'candidates' in self.word_idx:  # to be consistent with candidates of examples from generate
+                self.word_idx['candidates'] = [[cand, cand] for cand in self.word_idx['candidates']]
+                
 @dataclass
 class WINORanges:   # wab
     bos: tuple = None
@@ -886,7 +896,7 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False)
     assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
     if substring.strip() in ['->', '?']:
         char_locations = [whole_string.index(substring), whole_string.rindex(substring)]
-    else:
+    else: 
         pattern = r"\b%s(?:s|es)?\b" if not substring.startswith(" ") else r"%s(?:s|es)?"#wab
         try: 
             matches = list(re.finditer(pattern % substring, whole_string))
@@ -1046,7 +1056,7 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
         eos_indices = (input_ids[0] == eos_id).nonzero()[-nrows:].squeeze(1).tolist()
     else:
         # eos_indices = bos_indices[1:] + [input_ids.size(1)]
-        eos_indices = [bos_i + 2 for bos_i in bos_indices]#wab
+        eos_indices = [bos_i + 2 for bos_i in bos_indices]
     labels = torch.ones_like(input_ids) * (-100)
     answers = []
     for bos_i, eos_i in zip(bos_indices, eos_indices):
@@ -1079,7 +1089,7 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_to
 
     if isinstance(examples[0], dict):  # ioi/wino task wab
         answer_indices = [0 for _ in ranges]
-        # def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()
+        # def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()#wab
         # candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]  # ioi task
         candidates = [[tokenizer.encode(i)[1] for i in e['candidates'][-1]] for e in examples]  # wino task
         return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices

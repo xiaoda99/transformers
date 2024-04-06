@@ -25,8 +25,8 @@ import torch
 import torch.nn.functional as F 
 
 from const import *
-from common_utils import join_lists, list_diff, my_isinstance, lget, fn2str
-from openai_utils import query_openai  
+from common_utils_nrk import join_lists, list_diff, my_isinstance, lget, fn2str
+from openai_utils import query_openai
 from LLAMATokenizer import LLAMATokenizer
 from transformers import LlamaTokenizer
 # sys.path.insert(0, '/nas/xd/projects/PyFunctional')
@@ -41,10 +41,46 @@ ordinals = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', '
 digit2cardinal = OrderedDict(zip(digits, cardinals))
 digit2ordinal = OrderedDict(zip(digits, ordinals))
 
+#NEW_LINE = '! \n'
+NEW_LINE = '\n'
+
 # uppercases = [l for l in string.ascii_uppercase if len(_tokenizer.tokenize('%s %s' % (l*2, l*2))) == 2]
 # lowercases = [l for l in string.ascii_lowercase if len(_tokenizer.tokenize('%s %s' % (l.upper()*2, l.upper()*2))) == 2]
 full_vocab = uppercase + digits
 
+boys = [
+    'James', 'David',  'Christopher',  'George',  'Ronald',
+    'John', 'Richard',  'Daniel',  'Kenneth',  'Anthony',
+    'Robert', 'Charles',  'Paul',  'Steven',  'Kevin',
+    'Michael', 'Joseph',  'Mark',  'Edward',  'Jason',
+    'William',  'Thomas',  'Donald',  'Brian',  'Jeff',]
+girls = [
+    'Mary','Jennifer', 'Lisa', 'Sandra', 'Michelle',
+    'Patricia','Maria', 'Nancy', 'Donna', 'Laura',
+    'Linda','Susan', 'Karen', 'Carol', 'Sarah',
+    'Barbara','Margaret', 'Betty', 'Ruth', 'Kimberly',
+    'Elizabeth', 'Dorothy', 'Helen', 'Sharon', 'Deborah',]
+
+def all_persons(tokenizer): 
+    if not hasattr(all_persons, 'boys'):
+        # https://www.verywellfamily.com/top-1000-baby-boy-names-2757618
+        # https://www.verywellfamily.com/top-1000-baby-girl-names-2757832
+        boys = [l.strip() for l in open('boy_names_1000.txt').readlines()]
+        girls = [l.strip() for l in open('girl_names_1000.txt').readlines()]
+
+        girls = [name for name in girls if max(len(tokenizer.tokenize(name)), len(tokenizer.tokenize(' ' + name))) == 1]
+        boys = [name for name in boys if max(len(tokenizer.tokenize(name)), len(tokenizer.tokenize(' ' + name))) == 1]
+        boys = sample(boys, len(girls))
+        all_persons.boys, all_persons.girls = boys, girls
+    return all_persons.boys, all_persons.girls
+
+def persons(tokenizer):
+    boys, girls = all_persons(tokenizer)
+    return boys + girls
+
+def genders_of_persons(): return {'male': boys, 'female': girls}, dict(child='', sibling='a person of the same gender as')
+
+def uppercase_letters(): return uppercase
 
 def types_of_characters(): return {
     'uppercase': uppercase,
@@ -153,6 +189,41 @@ def types_of_things(): return {
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
 }
 
+def kinds_of_things_v2():
+    kinds_of_things_v2.name = 'kinds of things'
+    return {
+    'animal': ['duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig',
+            'monkey', 'rabbit', 'elephant', 'wolf', 'deer', 'fox', 'gorilla', 'squirrel', 'mouse'], # 'chicken', 'bear', 'zebra', 'giraffe', 'kangaroo', 21-5, 15-8
+    'fruit': ['apple', 'banana', 'pear', 'grapes', 'cherries', 'orange', 'peach', 'plum', 'lemon', 'mango', 'blackberries',
+            'blueberries', 'strawberries', 'durian', 'papaya', 'watermelon', 'pineapple', 'kiwi', 'apricot', 'lime'], # may be food too?
+    # 'vegetable': ['spinach', 'broccoli', 'lettuce', 'cabbage', 'tomato'],
+    'drink': ['tea', 'coffee', 'beer', 'wine', 'whiskey', 'vodka', 'soda', 'juice', 'cocktail'],  # some as alcohol, 21-5, 15-8
+    # 'food': ['hamburger', 'burger', 'bread', 'meat', 'pizza', 'cake', 'steak', 'spaghetti',
+    #         # 'biscuits', 'spaghetti', 'chips', 'peanuts', 'nuts', 'pork', 'beef', 'mutton'
+    #         ],  # last three as meat?~L 21-5?~L 15-8
+    'weapon': ['gun', 'handgun', 'shotgun', 'rifle',  'pistol', 'revolver', 'grenade', 'cannon'], #'bomb', 'dagger', 'sword',], # 21-5, 15-8, though latter prefers firearm
+    # 'color': ['white', 'black', 'red', 'yellow', 'blue', 'green', 'purple', 'pink', 'gray'],  # 15-8
+    # 'insect': ['mosquito', 'beetle', 'bee'], #'spider', 'ant', 'wasp', 'butterfly'],  # , 'fly'
+    # 'flower': ['rose', 'tulip', 'lily', 'daisy', 'sunflower'],
+    'vehicle': ['car', 'jeep', 'bus', 'taxi', 'motorcycle'],# 'tractor', 'airplane', 'ship', 'bicycle', 'truck', 'train', 'motorbike', 'helicopter', 'carriage',
+                # 'subway', 'van', 'boat'],  # transportation
+    # 'furniture': ['sofa', 'couch'], #'desk', 'chair', 'table', 'bed', 'bookshelf'],# 'closet', 'wardrobe'],
+    # 'tool': ['hammer', 'spanner', 'awl', 'scissors', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'], #, 'axe' should be weapon?
+    'clothing': ['shirt', 'T-shirt', 'jeans', 'jacket', 'pants', 'trousers', 'shoes', 'sweater', 'jersey', 'underwear', 'costume', 'uniform'],#'dress', 'coat', 'socks', 'hat', 'tie', 'skirt', ],
+    # 'clothing': ['shirt', 'T-shirt', 'jeans', 'jacket', 'pants', 'trousers', 'shoes', 'sweater', 'underwear', 'costume', 'uniform',   'jersey'],  # bad order
+    # 'appliance': ['microwave', 'fridge', 'washer', 'dryer', 'washing machine'],  #, 'oven'
+    # 'fish': [],
+    # 'plant': ['tree', 'grass', 'bush', 'weed', 'vine'],
+    # 'electronic device': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
+    # 'electronic device': ['iPad', 'phone', 'smartphone',    'laptop'],  # bad order
+    'sport': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport or ball?
+    'musical instrument': ['piano', 'violin', 'guitar'],
+    # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
+    # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
+}, dict(child='a kind of', sibling='the thing of the same kind as')
+
+
+
 def things(): return {thing: [thing] for thing in join_lists(types_of_things().values())}
 def word2capitalized(): return {thing: [capitalize(thing)] for thing in join_lists(types_of_things().values()) if not thing[0].isupper()}
 def capitalized_forms_of_words(): return {capitalize(thing): [thing] for thing in join_lists(types_of_things().values()) if not thing[0].isupper()}
@@ -215,20 +286,37 @@ _capabilities_of_things = [ # A x can y.
 #     for thing, cap in _capabilities_of_things: d[cap].append(thing)
 #     return d
 
+# def capabilities_of_things(): return {
+#     'kill': ['dagger', 'knife', 'gun'],
+#     'cook': ['oven', 'pot', 'pan'],
+#     'write': ['pen', 'pencil', 'chalk', 'biro'],
+#     'fly': ['plane', 'glider', 'helicopter'],
+#     'play': ['piano', 'violin', 'guitar'],
+#     'drive': ['car', 'truck', 'jeep'],
+#     'ride': ['bicycle', 'motorcycle', 'horse'],
+#     'communicate': ['phone', 'telephone', 'telegraph', 'radio'], # internet, email
+#     'clean': ['broom', 'mop', 'vacuum cleaner'],
+#     'paint': ['brush', 'palette', 'roller', 'spray'],
+#     'swim': ['swimsuit', 'goggles', 'swim fins'],
+#     'calculate': ['computer', 'calculator', 'abacus'],
+# }
+
 def capabilities_of_things(): return {
-    'kill': ['dagger', 'knife', 'gun'],
-    'cook': ['oven', 'pot', 'pan'],
-    'write': ['pen', 'pencil', 'chalk', 'biro'],
-    'fly': ['plane', 'glider', 'helicopter'],
-    'play': ['piano', 'violin', 'guitar'],
-    'drive': ['car', 'truck', 'jeep'],
-    'ride': ['bicycle', 'motorcycle', 'horse'],
-    'communicate': ['phone', 'telephone', 'telegraph', 'radio'], # internet, email
-    'clean': ['broom', 'mop', 'vacuum cleaner'],
-    'paint': ['brush', 'palette', 'roller', 'spray'],
-    'swim': ['swimsuit', 'goggles', 'swim fins'],
-    'calculate': ['computer', 'calculator', 'abacus'],
+    'killing': ['dagger', 'knife', 'gun'],
+    'cooking': ['oven', 'pot', 'pan'],
+    'writing': ['pen', 'pencil', 'chalk', 'biro'],
+    'flying': ['plane', 'glider', 'helicopter'],
+    'playing': ['piano', 'violin', 'guitar'],
+    'driving': ['car', 'truck', 'jeep'],
+    'riding': ['bicycle', 'motorcycle', 'horse'],
+    'communicating': ['phone', 'telephone', 'telegraph', 'radio'], # internet, email
+    'cleaning': ['broom', 'mop', 'vacuum cleaner'],
+    'painting': ['brush', 'palette', 'roller', 'spray'],
+    'swiming': ['swimsuit', 'goggles', 'swim fins'],
+    'calculating': ['computer', 'calculator', 'abacus'],
 }
+
+
 
 adj2very = [
     ('good', 'excellent'),
@@ -493,7 +581,7 @@ def xxx_be(positive=True):
     return s if s.startswith(",") else " " + s
     
 synonym_dict = {
-    'has': ['owns', 'possesses'], 'have': ['own', 'possesse'],
+    'has': ['owns', 'possesses'], 'have': ['own', 'possess'],
     'wants to go to': ['wants to visit', 'longs for', 'yearns for'], 'want to go to': ['want to visit', 'long for', 'yearn for'],
     'arrived': ['appeared', 'showed up'], 'arrive': ['appear', 'show up'],
 }
@@ -544,7 +632,7 @@ class Relation(object):
     def dom(self, xs=None): return list(self._dict.keys())
     def codom(self, ys=None):
         elems = join_lists(self._dict.values()) if self.name != 'sibling' else list(self._dict.keys())
-        if self.name in ['parent', 'opposite']: elems = list(set(elems))
+        if self.name in ['parent', 'similar', 'opposite']: elems = list(set(elems))
         else: assert len(elems) == len(set(elems)), f'{self.name} {len(elems)} != {len(set(elems))}'
         return elems
 
@@ -628,7 +716,7 @@ class SymSet(Set):
                 for e in similars:
                     self.equal._dict[e] = [e]
                     if len(similars) > 1: self.similar._dict[e] = list_diff(similars, [e])
-                    self.opposite._dict[e] = opposites[:1]
+                    self.opposite._dict[e] = opposites[:]
                     self.sibling._dict[e] = list_diff(similars, [e]) + opposites  # used by neg_equal
         self.opposite._inv_dict, self.similar._inv_dict = self.opposite._dict, self.similar._dict
         self.equal._inv_dict = self.equal._dict
@@ -653,6 +741,7 @@ class TreeSet(Set):
     def __init__(self, data):
         super().__init__(data, ['child', 'parent', 'sibling', 'equal'])
         data = data()
+        if isinstance(data,tuple): data=data[0] #因为老师修改了gender_of_person等一系列代码，加入了sibling，使代码发生了较大变化，为了防止影响本代码，故加此行 nrk
         for parent, children in data.items():
             self.child._dict[parent] = children
             # self.equal._dict[parent] = [parent]
@@ -697,27 +786,47 @@ def swap(l, dst, src=0):
     if dst != src: l[dst], l[src] = l[src], l[dst]
     return l
 
-def distractive_sample(cxt_len, rel, ans_i=0):
+# def distractive_sample(cxt_len, rel, ans_i=0):
+#     query = choice(rel.dom()) 
+#     siblings = rel.sibling.f(query) if rel.name == 'neg_equal' and hasattr(rel, 'sibling') else []
+#     ans = choice(list_diff(rel.f(query), siblings))
+#     distractors = list_diff(rel.codom(), rel.f(query) + ([query] if rel.name == 'sibling' else []))
+#     k = cxt_len - 1
+#     # neg_xxx or parent rel may have only one distractor
+#     assert len(distractors) >= k or len(distractors) == 1, \
+#         f'{rel.name}, query = {query}, f(query) = {rel.f(query)}, distractors = {distractors}'
+#     distractors = sample(distractors, k) if len(distractors) >= k else distractors * k
+#     # TODO: rel.inv_f(x)[0] -> choice(rel.inv_f(x)). check not equivalent for sibling
+#     distractors0 = [choice(rel.inv_f(x)) for x in distractors]
+#     # print(f"IN distractive_sample: distractors0 = {distractors0}")
+#     candidates = [[query] + distractors0, [ans] + distractors]
+#     # print(f"IN distractive_sample: candidates = {candidates}")
+#     if rel.skip_inv_f and rel.x_f is None: rel.x_f = lambda x: x
+#     if rel.x_f: candidates[0] = [rel.x_f(c) for c in candidates[int(rel.skip_inv_f)]]
+#     if rel.y_f: candidates[1] = [rel.y_f(c) for c in candidates[1]]
+#     return tuple([swap(l, ans_i) for l in candidates])
+
+def distractive_sample(cxt_len, rel, n_answers=1):
     query = choice(rel.dom())
-    # print("query:",query)
     siblings = rel.sibling.f(query) if rel.name == 'neg_equal' and hasattr(rel, 'sibling') else []
-    ans = choice(list_diff(rel.f(query), siblings))
-    # print("ans:",ans)
+    answers = sample(list_diff(rel.f(query), siblings), n_answers)
     distractors = list_diff(rel.codom(), rel.f(query) + ([query] if rel.name == 'sibling' else []))
-    k = cxt_len - 1
+    k = cxt_len - n_answers
     # neg_xxx or parent rel may have only one distractor
     assert len(distractors) >= k or len(distractors) == 1, \
         f'{rel.name}, query = {query}, f(query) = {rel.f(query)}, distractors = {distractors}'
     distractors = sample(distractors, k) if len(distractors) >= k else distractors * k
     # TODO: rel.inv_f(x)[0] -> choice(rel.inv_f(x)). check not equivalent for sibling
     distractors0 = [choice(rel.inv_f(x)) for x in distractors]
-    candidates = [[query] + distractors0, [ans] + distractors]
+    candidates = [[query] * n_answers + distractors0, answers + distractors]
+    assert len(candidates[0]) == len(candidates[0]), f'{len(candidates[0])} != {len(candidates[0])}'
     if rel.skip_inv_f and rel.x_f is None: rel.x_f = lambda x: x
     if rel.x_f: candidates[0] = [rel.x_f(c) for c in candidates[int(rel.skip_inv_f)]]
     if rel.y_f: candidates[1] = [rel.y_f(c) for c in candidates[1]]
-    return tuple([swap(l, ans_i) for l in candidates])
+    return candidates
+    # return tuple([swap(l, ans_i) for l in candidates])
 
-def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   #example_gen_fn
+def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   # example_gen_fn
     rels = [s.relations for s in vocabs]
     candidates = OrderedDict()
     fixed_query = query is not None
@@ -725,7 +834,6 @@ def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   #example_gen_f
     position_relevant = getattr(cxt_sample_fn, '__name__', None) == 'enumerate_sample'
     
     hop = 0; rel = rels[hop][0]
-    # print("rel:",rel)
     candidates[hop - 1], candidates[hop] =  distractive_sample(cxt_len, rel) \
         if not fixed_query else cxt_sample_fn(cxt_len, rel)
     # if not fixed_query: query = candidates[hop - 1][0]
@@ -736,7 +844,6 @@ def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   #example_gen_f
         else (candidates[hop - 1].copy(), [choice(rel.inv_f(x)) for x in candidates[hop - 1]])
 
     tuples = list(zip(*candidates.values()))
-
     i = 0 if query is None else list(candidates.values())[0].index(query)
     if query is not None: assert tuples[i][0] == query, f'{tuples[i]}[0] != {query}'
     query, *ans_chain = tuples[i]; ans_chain = tuple(ans_chain)
@@ -746,8 +853,63 @@ def MlM_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None):   #example_gen_f
 
     if fixed_query: cxt, query = [x[1:] for x in cxt], None
     if not has_local_hop: cxt = [x[0] for x in cxt]
-    
     return cxt, query, candidates, ans_chain
+
+def rlr_gen(vocabs, cxt_len=3, cxt_sample_fn=None, query=None, use_numpy=False, dict_candidates=False):
+    rels = [v.relations[0] for v in vocabs]
+    fixed_query = query is not None
+    has_local_hop = vocabs[0].data != vocabs[1].data
+    position_relevant = getattr(cxt_sample_fn, '__name__', None) == 'enumerate_sample'
+    
+    sample_fn = distractive_sample if not fixed_query else cxt_sample_fn
+    candidates = sample_fn(cxt_len, rels[0]) # hop0: query_cands, tgt_cands
+    cand_keys = ['query', 'tgt']
+    candidates += distractive_sample(cxt_len, rels[1])[::-1] if has_local_hop \
+        else (candidates[-1].copy(), [choice(rels[1].inv_f(x)) for x in candidates[-1]])  # hop2: ans0_cands, ans_cands
+    cand_keys += ['ans0', 'ans']
+    if len(vocabs[1].relations) > 1:
+        assert not use_numpy
+        for r in vocabs[1].relations[1:]:  # typically opposite
+            def cat(a, b): return a + (b,) if isinstance(a, tuple) else (a, b)
+            candidates[-1] = [cat(c, choice(r.inv_f(x))) for x, c in
+                              zip(candidates[-2], candidates[-1])]
+    i = 0 if query is None else candidates[0].index(query)
+    if use_numpy: candidates = np.array(candidates)  # # -> 4 * cxt_len array
+    else: tuples = list(zip(*candidates))  # row -> col
+
+    query, *ans_chain = tuples[i] # candidates[:, i]
+    ans_chain = tuple(ans_chain)
+    if not position_relevant:
+        if use_numpy: candidates = candidates[:, np.random.permutation(cxt_len)]
+        else: shuffle(tuples)
+    if use_numpy:
+        cxt = list(map(tuple, candidates[int(not fixed_query):3].T))  # hop1: tgt_cands, ans0_cands
+        candidates = candidates.tolist()
+    else:
+        cxt = [t[int(not fixed_query):3] for t in tuples]  # hop1: tgt_cands, ans0_cands
+        candidates = [list(c) for c in zip(*tuples)]  # col -> row
+
+    if fixed_query: cxt, query = [x[1:] for x in cxt], None
+    if not has_local_hop: cxt = [x[0] for x in cxt]
+    if dict_candidates:
+        _rel_hops = [('query', 'tgt'), ('ans', 'ans0')]  # hop0/2
+        candidates = OrderedDict(zip(['_rel_hops'] + cand_keys,
+                                     [_rel_hops] + candidates))
+    return cxt, query, candidates, ans_chain
+
+def rlrlr_gen(rels, circled=False, cxt_len=3):
+    rels = [s.relations[0] for s in rels]
+    candidates = distractive_sample(cxt_len, rels[0], n_answers=1+int(circled)) # hop0: query_cands, tgt_cands
+    (ans1, _), ans2_cands = distractive_sample(cxt_len - 1, rels[1])  # hop2: ans1 + ans2_cands
+    candidates.append([ans1] + ans2_cands)
+    candidates += candidates[:2:][::-1]  # hop4: tgt_cands, query_cands
+    candidates = np.array(candidates)  # 5 * cxt_len
+
+    query, *ans_chain = tuple(candidates[:3, 0]) + tuple(candidates[int(circled):3, 1])[::-1] # query,tgt1,ans1,ans2,tgt2,query2
+    ans_chain = tuple(ans_chain)
+    candidates = candidates[:, np.random.permutation(cxt_len)]  # shuffle cols
+    cxt = list(map(tuple, candidates[1:3].T))  # hop1/3: tgt_cands, ans_cands
+    return cxt, query, candidates.tolist(), ans_chain
 
 def MlMlM_gen(rels, cxt_len=3):
     rels = [s.relations for s in rels]
@@ -775,6 +937,23 @@ def MlMlM_gen(rels, cxt_len=3):
         ans = rel2.f(ans)[0]; chain += (ans,)
         return chain
     return cxt, query, candidates, transform_fn(cxt, query)
+def candidates2dict(candidates, is_cls=False, names=['query', 'tgt', 'ans0', 'ans']):
+    if isinstance(candidates, OrderedDict): return candidates
+    assert len(candidates) in [4, 5, 6, 7], f'len({candidates}) == {len(candidates)}'
+    if len(candidates) <= 5:  # rlr
+        names = ['query', 'tgt', 'ans0', 'ans'] 
+        _rel_hops = [('query', 'tgt'), ('ans', 'ans0')]
+    else: # rlrlr
+        names = ['query', 'tgt', 'ans12', 'parent', 'ans0', 'ans']
+        _rel_hops = [('query', 'tgt'), ('parent', 'ans12'), ('ans', 'ans0')]
+    if len(candidates) in [5, 7]:  # g2c: 4 + 1 （rlr）or 6 + 1 (rlrlr)
+        assert len(candidates[-1]) == 2, str(candidates[-1])
+        is_cls = True
+        names = names + ['cls']
+    return OrderedDict(zip(['_rel_hops'] + names, [_rel_hops] + candidates))
+
+def get_rel_candidates(candidates, use_codom=False):
+    return [candidates[rh[int(use_codom)]] for rh in candidates['_rel_hops']]
 
 def _str(l, vocab=None, sep=' '):
     if l is None: return ''
@@ -787,7 +966,6 @@ def options2str(options): return '[' + ' | '.join(options) + ']'  # ' or '.join(
 
 def make_examples(task, nrows=4, vocab_for_each_row=False, **kwargs):
     vocab_fn, example_gen_fn = task[:2]
-
     vocabs, examples = [], []
     qa_set = set() # for dedup
     if any(v.__class__.__name__ == 'PoSet' for v in vocab_fn()):
@@ -802,7 +980,24 @@ def make_examples(task, nrows=4, vocab_for_each_row=False, **kwargs):
             vocabs.append(vocab)
             examples.append([cxt, query, candidates, ans_chain, *a])
         if len(examples) == nrows: break
-    
+    return vocabs, examples
+
+def make_examples_Counterexample(task, nrows=4, vocab_for_each_row=False, **kwargs):
+    vocab_fn, example_gen_fn = task[:2]
+    vocabs, examples = [], []
+    qa_set = set() # for dedup
+    if any(v.__class__.__name__ == 'PoSet' for v in vocab_fn()):
+        vocab_for_each_row = True
+    if not vocab_for_each_row: vocab = vocab_fn()
+    for i in range(nrows):
+        if vocab_for_each_row: vocab = vocab_fn()
+        for example in example_gen_fn(vocab, **kwargs):
+            cxt, query, candidates, ans_chain, *a = example
+            if isinstance(query, list): query = tuple(query)
+            if (tuple(cxt), query, ans_chain) not in qa_set:
+                qa_set.add((tuple(cxt), query, ans_chain))
+                vocabs.append(vocab)
+                examples.append([cxt, query, candidates, ans_chain, *a])
     return vocabs, examples
 
 def _item2str(item, vocab=None): #, reverse=False):
@@ -818,10 +1013,13 @@ def empty_cxt2str(cxt, **kwargs): return ''
 class Ranges:
     bos: tuple = None
     ans: tuple = None
+    cls: tuple = None
     ans0: tuple = None
-    query0: tuple = None
-    query1: tuple = None
+    query: tuple = None
+    query_name: tuple = None
     tgt: tuple = None
+    dans0: tuple = None
+    dtgt: tuple = None
     rel: tuple = None
     sep: tuple = None
     ans0s: list = None
@@ -839,35 +1037,61 @@ class IOIRanges:   # wab
     ans0s: list = None
     example: tuple = None
 
+@dataclass    
+class Winograd:  # wab
+    def __init__(self, text_json, word_idx_json):
+        with open(text_json, 'r') as f:
+            self.sentences=json.load(f)
+        with open(word_idx_json, 'r') as f:
+            self.word_idx = json.load(f)
+            if 'candidates' in self.word_idx:  # to be consistent with candidates of examples from generate
+                self.word_idx['candidates'] = [[cand, cand] for cand in self.word_idx['candidates']]
+                
 @dataclass
-class mathlogicRanges:  #nrk
+class WINORanges:   # wab
+    bos: tuple = None
+    op: tuple = None
+    ans: tuple = None
+    preans: tuple = None
+    postans: tuple = None
+    ans0: tuple = None
+    nans0: tuple = None
+    ansright: tuple =None
+    s1: tuple = None
+    s2: tuple = None
+    ans0s: list = None
+    example: tuple = None
+    inter: tuple = None
+    rel: tuple = None
+    candidates: list = None
+    io: tuple = None
+    relation: tuple = None
+
+@dataclass
+class mathlogicRanges:
     bos: tuple = None
     ans: tuple = None
     ans0: tuple = None
     ans1: tuple = None
-    ans2: tuple = None
     query0: tuple = None
     query1: tuple = None
     tgt0: tuple = None
     tgt1: tuple = None
-    tgt2: tuple = None
     rel: tuple = None
     sep: tuple = None
     ans0s: list = None
-    tgts: list = None
     ntgts: list = None
     nans0s: list = None
     example: tuple = None
 
 
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
-def locate(whole_string, tokens, substring, return_last=False, return_all=False, return_middle = False): #add return_middle nrk  TODO
-    # print("whole_string:tokens",whole_string,tokens)
+def locate(whole_string, tokens, substring, return_last=False, return_all=False):
     if substring is None: return None
     substring = substring.lower() 
     substring = strip_a(substring)
     assert substring in whole_string, f'{tokens}\n{substring} not in {whole_string}'
-    if substring.strip() in ['->', '?']:
+    if substring.strip() in ['->', '?', ':']:
         char_locations = [whole_string.index(substring), whole_string.rindex(substring)]
     else:
         pattern = r"\b%s(?:s|es)?\b" if not substring.startswith(" ") else r"%s(?:s|es)?\b"
@@ -876,7 +1100,6 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False,
         assert len(matches) > 0, f'{tokens}\n{substring} not match {whole_string}'
         char_locations = [m.span()[0] for m in matches]
     if not return_all: char_locations = [char_locations[-int(return_last)]]
-    if return_middle: assert len(char_locations) <= 2; char_locations = [char_locations[1:-1]]   #add by nrk
     ranges = []
     for char_loc in char_locations:
         loc = 0; tok_start, tok_end = None, None
@@ -899,7 +1122,37 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False,
     return ranges
 
 def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=False):
-    if 'IO' in example:  # ioi task
+    if 'relation' in example: # wino task wab
+        # cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
+        io,op,ans0,nans0,preans,postans,ansright,s1,s2,inter,candidates,relation=example['IO'],example['op'], example['ans0'],example['nans0'],example['preans'],example['postans'],example['ansright'],example['S'],example['S2'],example['inter'],example['candidates'],example['relation']
+        if trimmed:
+            ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
+            ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
+            return ranges
+        if not case_sensitive: tokens = [t.lower() for t in tokens]
+        whole_string = "".join(t for t in tokens)
+        rel_word = None # 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
+        # if ' not ' in whole_string: rel_word = 'not'
+        ranges = WINORanges(
+            io = locate(whole_string, tokens, io, return_last=True),
+            op = locate(whole_string, tokens, op, return_last=True),
+            bos = locate(whole_string, tokens, bos_token, return_last=True),
+            inter = locate(whole_string, tokens, inter, return_last=True),
+            ans0 = locate(whole_string, tokens, ans0),
+            nans0 = locate(whole_string, tokens, nans0),
+            preans = locate(whole_string, tokens, preans),
+            postans = locate(whole_string, tokens, postans),
+            ansright = locate(whole_string, tokens, ansright),
+            s1 = locate(whole_string, tokens, s1, return_last=True),# if not case_sensitive else False), #mqy
+            s2 = locate(whole_string, tokens, s2),
+            relation = locate(whole_string, tokens, relation),
+            rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word is not None and rel_word in whole_string else None,
+            example = (0, len(tokens))
+        )
+        ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
+        if ' not ' in whole_string: rel_word = 'not'
+        return ranges
+    elif 'IO' in example:  # ioi task
         e = example
         ranges = IOIRanges(
             bos = (e['end'].item(), e['end'].item()+1),
@@ -912,8 +1165,8 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         ranges.example = (0, ranges.ans[-1])  # XD
         return ranges
 
-    cxt, query0, candidates, (*_, query1), ans = example
-    #cxt, query, candidates, (tgt, *_, ans0, ans), *cls = example
+    cxt, query, candidates, (tgt, *others, ans0, ans), *cls = example
+    cls = cls[0] if len(cls) > 0 else None
     if trimmed:
         ranges = Ranges(bos = locate(tokens, bos_token, return_last=True))
         ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
@@ -923,61 +1176,38 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
     rel_word = None # 'capital'  # TODO: systematic treatment of rel_word, must be lowercase
     if ' capital ' in whole_string: rel_word = 'capital'
     elif ' not ' in whole_string: rel_word = 'not'
-    # if isinstance(ans0,tuple) or ans0 is None:  #by nrk
-    #     ranges = mathlogicRanges(
-    #         bos = locate(whole_string, tokens, bos_token),
-    #         ans = locate(whole_string, tokens, ans),
-    #         ans0 = locate(whole_string, tokens, ans0[0]) if ans0 != None and len(ans0) > 0 else (len(tokens)-1,len(tokens)),  # nrk Must be present ans0, if not, set to last position (can't be followed)
-    #         ans1 = locate(whole_string, tokens, ans0[1], return_last=True) if len(ans0) > 1 else None,
-    #         ans2 = locate(whole_string, tokens, ans0[2], return_last=True) if len(ans0) > 2 else None,
-    #         query0 = locate(whole_string, tokens, query[0],return_last=True),
-    #         query1 = locate(whole_string, tokens, query[1],return_last=True) if len(query)>1 else None,
-    #         tgt0 = locate(whole_string, tokens, tgt[0]) if len(tgt) > 0 else None,
-    #         tgt1 = locate(whole_string, tokens, tgt[1]) if len(tgt) > 1 else None,
-    #         tgt2 = locate(whole_string, tokens, tgt[2]) if len(tgt) > 2 else None,
-    #         example = (0, len(tokens))
-            
-    #     )
-        
-    #     if candidates is not None:
-    #         max_i = (ranges.query0[0],ranges.query1[0])[ranges.query0[0] > ranges.query1[0] if ranges.query1 != None else False]
-    #         ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True))))),
-    #         ranges.ans0s = ranges.ans0s[0] if len(ranges.ans0s[0])!=0 else None
-    #         ranges.nans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2] if a0 not in ans0], dedup=True))))),
-    #         ranges.nans0s = ranges.nans0s[0] if len(ranges.nans0s[0])!=0 else None
-    #         ranges.tgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, t, return_all=True) for t in candidates[1]], dedup=True)))))
-    #         ranges.ntgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists([locate(whole_string, tokens, t, return_all=True) for t in candidates[1] if t not in tgt], dedup=True)))))
-    #         ranges.ntgts = ranges.ntgts if len(ranges.ntgts)!=0 else None
-    #     if ranges.tgt0 is not None and '.' in tokens[ranges.tgt0[1]:]:  
-    #         sep_i = tokens.index('.', ranges.tgt0[1])
-    #         ranges.sep = (sep_i, sep_i + 1)
-    #     return ranges
     
-    if True:
-        ranges = Ranges(
-            bos = locate(whole_string, tokens, bos_token, return_last=True),
-            ans = locate(whole_string, tokens, ans, return_last=True),
-            ans0 = None,
-            query0 = locate(whole_string, tokens, query0, return_last=True),
-            query1 = locate(whole_string, tokens, query1, return_last=True),
-            tgt = None,
-            rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word is not None and rel_word in whole_string else None,
-            example = (0, len(tokens))
-        )
-    
-    # ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
-    # if candidates is not None:
-    #     max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
-    #     ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
-    #         [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2]], dedup=True)))))
-    #     ranges.nans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
-    #         [locate(whole_string, tokens, a0, return_all=True) for a0 in candidates[-2] if a0 != ans0], dedup=True)))))
-    #     ranges.ntgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
-    #         [locate(whole_string, tokens, t, return_all=True) for t in candidates[1] if t != tgt], dedup=True)))))
+    ranges = Ranges(
+        bos = locate(whole_string, tokens, bos_token, return_last=True),
+        ans = locate(whole_string, tokens, ans, return_last=True),
+        cls = locate(whole_string, tokens, cls, return_last=True),
+        ans0 = locate(whole_string, tokens, ans0),
+        query = locate(whole_string, tokens, query, return_last=True),# if not case_sensitive else False), #mqy
+        tgt = locate(whole_string, tokens, tgt),
+        rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word is not None and rel_word in whole_string else None,
+        example = (0, len(tokens)),
+    )
+    if len(others) > 0:
+        assert len(others) == 2, str(others)
+        dtgt, dans0 = others
+        ranges.dtgt = locate(whole_string, tokens, dtgt)
+        ranges.dans0 = locate(whole_string, tokens, dans0)
+    ranges.bos = (ranges.bos[1] - 1, ranges.bos[1])
+    if len(cxt) == 0: return ranges  # for nrk g2c tasks
+    if candidates is not None:
+        ans0s = candidates[-2] if cls is None else candidates[-3]  # XD
+        max_i = ranges.query[0] if ranges.query is not None else ranges.ans[0]
+        ranges.ans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
+            [locate(whole_string, tokens, a0, return_all=True) for a0 in ans0s], dedup=True)))))
+        ranges.nans0s = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(
+            [locate(whole_string, tokens, a0, return_all=True) for a0 in ans0s if a0 != ans0], dedup=True)))))
+        ranges.ntgts = tuple(map(np.array, zip(*filter(lambda x: x[0] < max_i, join_lists(    
+            [locate(whole_string, tokens, t, return_all=True) for t in candidates[1] if t != tgt], dedup=True)))))
+    sep = len(tokens) - 1 - tokens[::-1].index('.',2) #add by nrk: Redefine sep to be the first '.' occurring after '>' 
+    ranges.sep = (sep, sep+1)
     # if ranges.tgt is not None and '.' in tokens[ranges.tgt[1]:]:  # TODO: debug
     #     sep_i = tokens.index('.', ranges.tgt[1])
     #     ranges.sep = (sep_i, sep_i + 1)
-    # if ' not ' in whole_string: rel_word = 'not'
     return ranges
 
 def move_ranges(r, offset): 
@@ -987,11 +1217,11 @@ def move_ranges(r, offset):
     return r
 
 def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
-
     assert len(examples) == len(example_strs)
     ranges = []
     use_llama_tokenizer = my_isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer))
     newline_token = '<0x0A>' if use_llama_tokenizer else '\n' #tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同  <0x0A>llama换行符
+    if isinstance(tokenizer, LLAMATokenizer): newline_token = NEW_LINE.replace(' \n', '')
     if use_llama_tokenizer:  # add by lxy
         # tokenizer.decode will strip leading '__'
         all_tokens_llama = [tokenizer.convert_ids_to_tokens(id).replace('▁', ' ') for id in input_ids]
@@ -1012,9 +1242,9 @@ def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token):
             [tokenizer.decode(id) for id in tokenizer.encode(e_str)] # lxy: LLAMATokenizer decode不出单词前面的空格
         assert ''.join(tokens) == e_str, f"{tokens} -> {''.join(tokens)} != {e_str}"
         r = example2ranges(e, tokens, bos_token[i] if isinstance(bos_token, (tuple, list)) else bos_token)
-        
         ranges.append(move_ranges(r, len(all_tokens)))
         all_tokens += tokens + [newline_token]
+
     return ranges
 
 abstract_bos_token = ' ->'
@@ -1046,16 +1276,14 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
 # bos_token='▁is'; eos_token='</s>' for s2s
 # bos_token='Ġ->', eos_token='Ċ' for gpt
 def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
+    #if isinstance(tokenizer, LLAMATokenizer): text = text.replace('\n', '\ \n') # mqy
     input_ids = tokenizer.encode(text, return_tensors='pt')
-    example_strs = text.strip('\n').split('\n')  # strip the trailing '\n'
-
+    example_strs = text.strip('\n').split(NEW_LINE)  # strip the trailing '\n'
     ranges = locate_ranges(examples, example_strs, tokenizer, input_ids[0].tolist(), bos_token)
-
     # by lxy: when bos is tokenized into multiple tokens, e.g. 'likes' -> ['__lik', 'es'] in LLaMA, use last token's index
     bos_indices = [r.bos[-1] - 1 for r in ranges]  # [r.bos[0] for r in ranges]
     bos_indices, eos_indices, answers, labels = locate_answers(
         input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
-
     if s2s:  # for t5 models
         bos_i, eos_i = bos_indices[-1], eos_indices[-1]
         assert eos_i == input_ids.size(1) - 1, f'{eos_i} != {input_ids.size()}[1] - 1'
@@ -1066,22 +1294,22 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_to
         bos_indices, eos_indices = [bos_i - bos_i], [eos_i - bos_i]
     else:
         labels[:, :bos_indices[k_shot]] = -100  # 只算k_shot个示例后的loss
-    
+
     candidates, answer_indices = None, None
-    cxt, query, cands, *_ = examples[0]
-
-    if isinstance(examples[0], dict):  # ioi task
-        def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()
-        candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]
+    if isinstance(examples[0], dict):  # ioi/wino task wab
         answer_indices = [0 for _ in ranges]
-
-    elif cands is not None and len(cands[-1]) > 1:  # cxt_len > 1
+        # def get_id(r, name): return input_ids[0][getattr(r, name)[0]].item()
+        # candidates = [[get_id(r, name) for name in ['ans0', 's1']] for r in ranges]  # ioi task
+        candidates = [[tokenizer.encode(i)[1] for i in e['candidates'][-1]] for e in examples]  # wino task
+        return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices
+    
+    cxt, query, cands, *_ = examples[0]
+    if cands is not None and len(cands[-1]) > 1:  # cxt_len > 1
         prefix, encode = ('', partial(tokenizer.encode, add_special_tokens=False)) \
             if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else (' ', partial(tokenizer.encode))
         candidates = [[encode(prefix + token)[0] for token in cands[-1]]
                     for cxt, query, cands, *_ in examples]
         answer_indices = [get_answer_index(e) for e in examples]
-    # print(input_ids, labels, ranges, example_strs, "bos",bos_indices, "eos",eos_indices,"ans", answers, candidates, "ansin",answer_indices)
     return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices
 
 def query2wh(vocab, query2str):
@@ -1129,6 +1357,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         bos_token, ans2str = abstract_bos_token, _str
     else:
         cxt2str, query2str, bos_token, ans2str = [lget(task, i, '' if i == 4 else _str) for i in range(2, 6)]
+        
         if isinstance(cxt2str, types.FunctionType) and cxt2str.__name__ == 'empty_cxt2str':
             examples = [(cxt, query, None, (None, None, ans), *cls)
                 for cxt, query, candidates, (tgt, ans0, ans), *cls in examples]
@@ -1140,34 +1369,35 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         s = ' '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
         _bos_token = bos_token
         if bos_token == '': query_str = strs[1]; _bos_token = rsplit_bos(query_str)
-        if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
+        # if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
+        if len(cls) > 0: _bos_token = ':'; s += '? Answer' + _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
     example_strs, bos_tokens = zip(*[example2str(v, e) for v, e in zip(vocabs, examples)])
-    text = '\n'.join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
+    text = (NEW_LINE +' ').join(example_strs) + '\n' if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else \
         '\n' + '\n'.join(example_strs) + '\n'  # prepend '\n' to act as bos for tokenizer without bos
     return examples, text, bos_tokens
 
-def get_answer_index(example): 
+def get_answer_index(example):
     cxt, query, cands, (*_, ans), *cls = example
-    if ans not in cands[-1]:   #modify by nrk
-        return None
-    return cands[-1].index(ans)
+    # if len(cxt) <= 1: return 0  # for cxt_len==1 + ~has_local_hop + g2c
+    return cands[-1].index(ans if len(cls) == 0 else cls[0])
 
 class InvalidTransException(Exception): pass
 
 def choose_rels(task, rel_indices):
-    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    vocab_fn, gen_fn, *a = task
     vocabs = vocab_fn()
     for hop, rel_i in enumerate(rel_indices):
-        if rel_i >= len(vocabs[hop].relations): return None
+        if isinstance(rel_i, int) and rel_i >= len(vocabs[hop].relations): return None
 
     def new_vocab_fn():
         vocabs = vocab_fn()
         for hop, rel_i in enumerate(rel_indices):
-            vocabs[hop].relations = vocabs[hop].relations[rel_i: rel_i + 1]
+            vocabs[hop].relations = vocabs[hop].relations[rel_i: rel_i + 1] \
+                if not isinstance(rel_i, Iterable) else [vocabs[hop].relations[i] for i in rel_i]
         return vocabs
     
-    task = new_vocab_fn, gen_fn, cxt2str, query2str, *a
+    task = new_vocab_fn, gen_fn, *a
     return task
 
 def decorate_rel(task, hop, kwargs):
@@ -1182,9 +1412,18 @@ def decorate_rel(task, hop, kwargs):
     task = new_vocab_fn, gen_fn, cxt2str, query2str, *a
     return task
 
-def get_wh_and_the(vocab):
+# def get_wh_and_the(vocab):
+#     data_name, rel_name = vocab.data.__name__, vocab.relations[0].name
+#     wh = 'who' if data_name in ['persons', 'genders_of_persons'] else 'which'
+#     the = ' the' if data_name == 'genders_of_persons' and rel_name == 'child' or \
+#         data_name == 'capabilities_of_things' and rel_name != 'child' or \
+#         data_name == 'types_of_things' and rel_name != 'child' else ''
+#     return wh, the
+
+def get_wh_and_the(q, vocab):  #redefine by nrk
     data_name, rel_name = vocab.data.__name__, vocab.relations[0].name
-    wh = 'who' if data_name in ['persons', 'genders_of_persons'] else 'which'
+    wh = f'the thing used for {q} belongs to' if data_name in ['persons', 'genders_of_persons'] else 'which'
+    # wh = f'the {q} belongs to' if data_name in ['persons', 'genders_of_persons'] else 'which'
     the = ' the' if data_name == 'genders_of_persons' and rel_name == 'child' or \
         data_name == 'capabilities_of_things' and rel_name != 'child' or \
         data_name == 'types_of_things' and rel_name != 'child' else ''
@@ -1195,7 +1434,8 @@ def verbalize_relation(vocab):
     _rel_name = rel_name.split('neg_')[-1]
     r2v = {'genders_of_persons': ('', 'one'),
         'types_of_things': (' a kind of', 'one'),
-        'capabilities_of_things': (' the thing that can', 'one'),
+        # 'capabilities_of_things': (' the thing that can', 'one'),
+        'capabilities_of_things': (' the thing used for', 'one'),
         'countries_of_cities': (' the city in', 'city'), 
         'country2capital': (' the capital of', 'city'), 
         'word2capitalized': (' the capitalized form of', 'word'), 
@@ -1227,7 +1467,8 @@ def swap_qa(task):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
     if isinstance(gen_fn, partial) and 'query' in gen_fn.keywords:
         raise InvalidTransException(f"invalid swap_qa with fixed_query = {gen_fn.keywords['query']}")
-    def new_vocab_fn(): return vocab_fn()[::-1]  # would cause infinite recursion bug if use same name
+    def new_vocab_fn(): 
+        return vocab_fn()[::-1]  # would cause infinite recursion bug if use same name
     new_cxt2str = cxt2str
     if isinstance(cxt2str, partial) and 'item2str' in cxt2str.keywords:
         item2str = cxt2str.keywords['item2str']
@@ -1235,9 +1476,13 @@ def swap_qa(task):
         new_cxt2str = deepcopy(cxt2str)
         new_cxt2str.keywords['item2str'] = swapped_item2str
 
-    def new_query2str(q, v):
-        wh, the = get_wh_and_the(v[1])
-        return f'{query2str(wh, v)} {q}?'.replace("who's", "whose") + capitalize(the)
+    # def new_query2str(q, v):
+    #     wh, the = get_wh_and_the(q, v[1])
+    #     return f'{query2str(wh, v)} {q}?'.replace("who's", "whose") + capitalize(the)
+    def new_query2str(q, v): #redefine by nrk
+        wh, the = get_wh_and_the(q, v[1])
+        index = query2str(wh, v).index(wh) + len(wh)
+        return f'{query2str(wh, v)}'[:index].replace("who's", "whose") + the #capitalize(the)
     task = (new_vocab_fn, gen_fn, new_cxt2str, new_query2str, *a)
     return task
 
@@ -1337,39 +1582,85 @@ def remove_query(task):
     task = vocab_fn, new_gen_fn, cxt2str, new_query2str, *a
     return task
 
-def _g2c(g_fn, cls_labels=['Yes', 'No']):
+def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
     def wrapped(*args,**kwargs):
-        cxt, query, candidates, (*a, ans0, ans) = g_fn(*args,**kwargs)
+        cxt, query, candidates, (tgt, *a, ans0, ans) = g_fn(*args,**kwargs)
+        _candidates = candidates2dict(candidates)
         vocabs = args[0]
         has_local_hop = vocabs[0].data != vocabs[1].data
         rel1 = vocabs[1].relations[0]
-        if random() < 0.5:
+        if len(vocabs[1].relations) > 1:
+            assert isinstance(ans, tuple)
+            assert len(vocabs[1].relations) == len(ans) == 2
+            label, _ans = (cls_labels[0], ans[0]) if random() < 0.5 else (cls_labels[1], ans[1])
+            _ans0, _dtgt, _dans0 = ans0, tgt, ans0
+        elif random() < 0.5:
             label = cls_labels[0]
             _ans0, _ans = ans0, ans
+            _dtgt, _dans0 = tgt, ans0
         else:
             label = cls_labels[1]
-            if not has_local_hop and len(cxt) == 1:
+            if not has_local_hop and len(cxt) == 1:  # for nrk g2c tasks, e.g. John is a boy? Yes
                 _ans = choice(list_diff(rel1.dom(), [ans]))
-                _ans0 = choice(rel1.f(_ans))
+                # _ans0 = choice(rel1.f(_ans)) # ans0 does not occur in example_str
             else:
-                _ans0, _ans = choice([(c0, c) for q, *_, c0, c in zip(*candidates)
-                                    if c != ans and (query is None or q != query)])
+                _dtgt, _dans0, _ans = choice([(t, c0, c) for q, t, c0, c in zip(
+                    *[_candidates[k] for k in ['query', 'tgt', 'ans0', 'ans']])
+                    if c != ans and (query is None or q != query)])
+            _ans0 = ans0
         # (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
         #     (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
-        return cxt, query, candidates, (*a, _ans0, _ans), label
+        if not has_local_hop and len(cxt) == 1:
+            cxt, tgt, _ans0 = [], None, None
+            _dtgt, _dans0 = None, None
+        if isinstance(candidates, OrderedDict): candidates['cls'] = cls_labels
+        else: candidates = candidates + [cls_labels]  # XD MlM_gen(cls_labels,) -> rlr_gen
+        return cxt, query, candidates, (tgt, _dtgt, _dans0, *a, _ans0, _ans), label
     wrapped.__name__ = f'g2c[{fn2str(g_fn)}]'
     return wrapped
 
-def g2c(task):
+def _g2c_Counterexample(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
+    def wrapped(*args,**kwargs):
+        cxt, query, candidates, (tgt, *a, ans0, ans) = g_fn(*args,**kwargs)
+        # print("In _g2c:",cxt)
+        vocabs = args[0]
+        has_local_hop = vocabs[0].data != vocabs[1].data
+        rel1 = vocabs[1].relations[0]
+        label = cls_labels[0]
+        _ans0, _ans = ans0, ans
+        _dtgt, _dans0 = tgt, ans0
+        label_antonymy = cls_labels[1]
+        if not has_local_hop and len(cxt) == 1:  # for nrk g2c tasks, e.g. John is a boy? Yes
+            _ans_antonymy = choice(list_diff(rel1.dom(), [ans]))
+            _dtgt_antonymy, _dans0_antonymy = None, None
+            # _ans0 = choice(rel1.f(_ans)) # ans0 does not occur in example_str
+        else:
+            _dtgt_antonymy, _dans0_antonymy, _ans_antonymy = choice([(t, c0, c) for q, t, c0, c in zip(*candidates)
+                                if c != ans and (query is None or q != query)])
+        _ans0 = ans0
+        # (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
+        #     (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
+        if not has_local_hop and len(cxt) == 1:
+            cxt, tgt, _ans0 = [], None, None
+            _dtgt, _dans0 = None, None
+        candidates = candidates + [cls_labels,]
+        return ([cxt, query, candidates, (tgt, _dtgt, _dans0, _ans0, _ans), label],[cxt, query, candidates, (tgt, _dtgt_antonymy, _dans0_antonymy, _ans0, _ans_antonymy), label_antonymy])
+    wrapped.__name__ = f'g2c[{fn2str(g_fn)}]'
+    return wrapped
+
+def g2c(task, Counterexample = True):
     vocab_fn, gen_fn, *a = task
-    task = (vocab_fn, _g2c(gen_fn), *a)
+    if Counterexample == True:
+        task = (vocab_fn, _g2c_Counterexample(gen_fn), *a)
+    else:
+        task = (vocab_fn, _g2c(gen_fn), *a)
     return task
 
 def has_local_hop(task):
     vocab_fn, *a = task; vocabs = vocab_fn()
     return vocabs[0].data != vocabs[1].data
 
-def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
+def transform_and_validate_task(task, Counterexample = True, rel0_i=None, rel1_i=None,
                 rel0_kwargs=None, rel1_kwargs=None, do_swap_qa=False, do_negate=False,
                 do_rm_query=False, do_g2c=False,
                 cxt_len=3, rev_item2str=False, abstract=False):
@@ -1386,7 +1677,7 @@ def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
         if do_negate: task = negate(task)
         if not has_local_hop(task): task = remove_local_hop(task, do_swap_qa, do_rm_query, do_g2c, cxt_len)
         if do_rm_query: task = remove_query(task)
-        if do_g2c: task = g2c(task)
+        if do_g2c: task = g2c(task, Counterexample = Counterexample)
     except InvalidTransException as e:
         print(f'\ntransform_task failed: {e} ({args2str(args)})')
         return None
@@ -1419,10 +1710,12 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
     conditions = [True, ]
     while any(conditions):
         vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
-        # print('In generate: example =', examples[0])
         ans_counts = Counter([ans for cxt, query, cands, (*_, ans), *cls in examples]).most_common()
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
+        cxt, query, candidates, (tgt, *_, ans0, ans), *cls = examples[0]
+        # print(f"In generate: examples[0] = {examples[0]}")
+        if len(cls) > 0: break
         conditions = [
             not position_relevant and len(ind_counts) > 1 and (len(ind_counts) < cxt_len 
                                     or ind_counts[0][1] > ind_counts[-1][1] * 3),
@@ -1446,6 +1739,61 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
         if len(tokenizer.tokenize(text)) >= max_length:
             return generate(task, nrows - 1, cxt_len, rev_item2str, abstract, plot, verbose, max_length, tokenizer)
     return examples, text, bos_token
+
+def split_examples(examples):
+    assert len(examples) % 2 == 0
+    nrows = len(examples) // 2
+    pairs = [[examples[i * 2], examples[i * 2 + 1]] for i in range(nrows)]
+    k_shot = nrows - 1
+    k_shot_examples = [choice(p) for p in pairs[:k_shot]]
+    return k_shot_examples + [pairs[-1][0]], k_shot_examples + [pairs[-1][1]]
+    # number = choice([0, 1])
+    # return ([examples[number],examples[2]],[examples[number],examples[3]])
+
+def generate_Counterexample(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
+            tokenizer=None, max_length=512, plot=True, verbose=True):
+    vocab_fn, gen_fn, cxt2str, query2str, *a = task
+    position_relevant = isinstance(gen_fn, partial) and \
+        'cxt_sample_fn' in gen_fn.keywords and 'query' in gen_fn.keywords and \
+        gen_fn.keywords['cxt_sample_fn'].__name__ == 'enumerate_sample'
+
+    # ans_counts = [('a', nrows)]; ind_counts = [(0, 9), (1, 1)]
+    i = 0
+    conditions = [True, ]
+    vocabs, examples = make_examples_Counterexample(task, nrows=nrows, cxt_len=cxt_len)
+    splited_examples = split_examples(examples)
+    for examples in splited_examples:
+        while any(conditions):
+            ans_counts = Counter([ans for cxt, query, cands, (*_, ans), *cls in examples]).most_common()
+            answer_indices = [get_answer_index(e) for e in examples]
+            ind_counts = Counter(answer_indices).most_common()
+            cxt, query, candidates, (tgt, *_, ans0, ans), *cls = examples[0]
+            # print(f"In generate: examples[0] = {examples[0]}")
+            if len(cls) > 0: break
+            conditions = [
+                not position_relevant and len(ind_counts) > 1 and (len(ind_counts) < cxt_len 
+                                        or ind_counts[0][1] > ind_counts[-1][1] * 3),
+                len(ans_counts) == 1,
+                len(ans_counts) > 2 and ans_counts[0][1] > max(2, nrows / 3),
+                len(ans_counts) == 2 and ans_counts[0][1] >= ans_counts[1][1] * 2,
+            ]
+            i += 1
+            assert i < 40, str(conditions) + '\n'.join(f'{e[0]}\t{e[1]}\t{e[3]}' for e in examples[:]) + \
+                '\n' + str(ind_counts) + '\n' + str(ans_counts)  #原 i<35，改为了40  nrk
+        if i > 10: print('In generate: i =', i, task2str(task))
+        if cxt_len > 1 and plot:
+            print(Counter(answer_indices).most_common())
+            label_probs = F.one_hot(torch.LongTensor(answer_indices))
+            _ = plt.figure(figsize=(10, 0.7))
+            _ = sns.heatmap(label_probs.T, cbar=False); plt.show()
+        examples, text, bos_token = make_input_str(task, vocabs, examples,
+            rev_item2str=rev_item2str, abstract=abstract, tokenizer=tokenizer)
+        if verbose: print(text)
+        if my_isinstance(tokenizer, LLAMATokenizer):  # add by lxy  avoid  len(text) > max_length
+            if len(tokenizer.tokenize(text)) >= max_length:
+                return generate(task, nrows - 1, cxt_len, rev_item2str, abstract, plot, verbose, max_length, tokenizer)
+        yield examples, text, bos_token
+    
 
 def task2str(task):
     vocab_fn, gen_fn, *_ = task
