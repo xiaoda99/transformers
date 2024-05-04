@@ -31,7 +31,7 @@ from transformers import LlamaTokenizer
 # sys.path.insert(0, '/nas/xd/projects/PyFunctional')
 # from functional import seq
 # from functional.pipeline import Sequence
-
+print('import finish')
 uppercase = list(string.ascii_uppercase)
 lowercase = list(string.ascii_lowercase)
 digits = list(string.digits[1:])
@@ -127,6 +127,8 @@ Types of fruits: apple, grape, pear, banana, orange
 Types of animals: dog, cat, horse, rabbit, pig'''
 def kinds_of_things(): 
     kinds_of_things.name = 'kinds of things'
+    kinds_of_things.wh = 'which'
+    kinds_of_things.sub_wh = 'the thing which'
     return {
     'animal': ['duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig',
             'monkey', 'rabbit', 'elephant', 'wolf', 'deer', 'fox', 'gorilla', 'squirrel', 'mouse'], # 'chicken', 'bear', 'zebra', 'giraffe', 'kangaroo', 21-5, 15-8
@@ -161,6 +163,8 @@ def kinds_of_things():
 
 def kinds_of_things_v2():
     kinds_of_things_v2.name = 'kinds of things'
+    kinds_of_things.wh = 'which'
+    kinds_of_things.sub_wh = 'the thing which'
     return {
     'animal': ['duck', 'goose', 'dog', 'lion', 'cow', 'donkey', 'horse', 'sheep', 'goat', 'tiger', 'cat', 'pig',
             'monkey', 'rabbit', 'elephant', 'wolf', 'deer', 'fox', 'gorilla', 'squirrel', 'mouse'], # 'chicken', 'bear', 'zebra', 'giraffe', 'kangaroo', 21-5, 15-8
@@ -347,7 +351,11 @@ _country2capital = [ #The capital of Germany is Berlin.
 def country2capital(): return {country: [capital] for country, capital in _country2capital}
 def capitals_of_countries(): return {capital: [country] for country, capital in _country2capital}
 
-def countries_of_cities(): return {
+def countries_of_cities(): 
+    countries_of_cities.name = 'countries of cities'
+    countries_of_cities.wh = 'which country'
+    countries_of_cities.sub_wh = 'the country which'
+    return {
     'China': ['Beijing', 'Shanghai', 'Guangzhou'],
     'Japan': ['Tokyo', 'Osaka', 'Kyoto'],
     'the United Kingdom': ['London', 'Manchester', 'Birmingham'],  # England
@@ -356,7 +364,7 @@ def countries_of_cities(): return {
     'Australia': ['Canberra', 'Sydney', 'Brisbane'],
     'France': ['Paris', 'Marseille', 'Lyon'],
     'Italy': ['Rome', 'Milan', 'Florence', 'Venice'],
-    'German': ['Berlin', 'Hamburg', 'Munich'],
+    'Germany': ['Berlin', 'Hamburg', 'Munich'],
     'Spain': ['Madrid', 'Barcelona', 'Valencia'],
     'Switzerland': ['Bern', 'Zurich', 'Geneva'],
     'Brazil': ['Brasília', 'Sao Paulo', 'Rio de Janeiro'],
@@ -892,7 +900,8 @@ def candidates2dict(candidates, is_cls=False, names=['query', 'tgt', 'ans0', 'an
     return OrderedDict(zip(['_rel_hops'] + names, [_rel_hops] + candidates))
 
 def get_rel_candidates(candidates, use_codom=False):
-    return [candidates[rh[int(use_codom)]] for rh in candidates['_rel_hops']]
+    def try_join(l): return join_lists(l) if isinstance(l[0], tuple) else l # for len(vocabs[1].relations) > 1 in rlr_gen
+    return [try_join(candidates[rh[int(use_codom)]]) for rh in candidates['_rel_hops']]
 
 def _str(l, vocab=None, sep=' '):
     if l is None: return ''
@@ -913,6 +922,7 @@ def make_examples(task, nrows=4, vocab_for_each_row=False, **kwargs):
     for i in range(nrows * 2):
         if vocab_for_each_row: vocab = vocab_fn()
         cxt, query, candidates, ans_chain, *a = example_gen_fn(vocab, **kwargs)
+        # print("In make_examples: context:",cxt,"query:",query,"candidates:",candidates,"ans_chain:",ans_chain)  # mgy debug
         if isinstance(query, list): query = tuple(query)
         if (tuple(cxt), query, ans_chain) not in qa_set:
             qa_set.add((tuple(cxt), query, ans_chain))
@@ -1003,7 +1013,6 @@ class mathlogicRanges:
     ntgts: list = None
     nans0s: list = None
     example: tuple = None
-
 
 # adapted from find_token_range in https://github.com/kmeng01/rome/blob/main/experiments/causal_trace.py
 def locate(whole_string, tokens, substring, return_last=False, return_all=False):
@@ -1139,16 +1148,19 @@ def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token, instr
     assert len(examples) == len(example_strs)
     ranges = []
     use_llama_tokenizer = my_isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer))
-    newline_token = '<0x0A>' if use_llama_tokenizer else '\n' #tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同  <0x0A>llama换行符
+    is_yi_tokenizer = 'Yi-34B' in tokenizer.name_or_path
+    newline_token = '<0x0A>' if use_llama_tokenizer and not is_yi_tokenizer else '\n' #tokenizer.tokenize('\n')[0]  # 'Ċ' \n两者表示方法不同  <0x0A>llama换行符
     if isinstance(tokenizer, LLAMATokenizer): newline_token = NEW_LINE.replace(' \n', '')
     if use_llama_tokenizer:  # add by lxy
         # tokenizer.decode will strip leading '__'
         all_tokens_llama = [tokenizer.convert_ids_to_tokens(id).replace('▁', ' ') for id in input_ids]
-        assert all_tokens_llama[0] == tokenizer.bos_token, str(all_tokens_llama)
-        all_tokens = [tokenizer.bos_token]
-        assert all_tokens_llama[1].startswith(' '), all_tokens_llama[1]
-        all_tokens_llama[1] = all_tokens_llama[1][1:]
-        all_tokens_llama = all_tokens_llama[1:]  # treat leading bos as prefix_token and remove it from all_tokens_llama
+        all_tokens = []
+        if not is_yi_tokenizer:  #nrk
+            assert all_tokens_llama[0] == tokenizer.bos_token, str(all_tokens_llama)
+            all_tokens = [tokenizer.bos_token]
+            assert all_tokens_llama[1].startswith(' '), all_tokens_llama[1]
+            all_tokens_llama[1] = all_tokens_llama[1][1:]
+            all_tokens_llama = all_tokens_llama[1:]  # treat leading bos as prefix_token and remove it from all_tokens_llama
         # split all_tokens_llama using newline_token as delimiter
         # https://stackoverflow.com/questions/15357830/splitting-a-list-based-on-a-delimiter-word
         sep_tokens = [list(y) for x, y in itertools.groupby(all_tokens_llama, lambda z: z == newline_token) if not x]
@@ -1268,7 +1280,7 @@ def _rel_cands2str(rel_candidates, vocabs, i=1, verb='include'):
     return f"{capitalize(vocab.data.name)} {verb} {join_fn(rel_cands)}." \
         if hasattr(vocab.data, 'name') else ''
 
-def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, options_position=None, tokenizer = None):
+def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, options_position=None, tokenizer=None):
     # Randomized transformations here are per input basis, i.e. each example in an input are the same,
     # while each input in a task's batch may be different. It is finer-grained than transform_task which are per task basis.
     # Hierarchy: task >= batch > input > example
@@ -1291,6 +1303,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         instruction, cxt2str, query2str, bos_token, ans2str = \
             [lget(task, i, '' if i in [2, 5] else _str) for i in range(2, 7)]
         if isinstance(instruction, tuple): instruction, rel_cands2str = instruction
+        elif vocabs[0][1].relations[0].name == 'child': rel_cands2str = _rel_cands2str
         else: rel_cands2str = None
         if isinstance(cxt2str, types.FunctionType) and cxt2str.__name__ == 'empty_cxt2str':
             examples = [(cxt, query, None, (None, None, ans), *cls)
@@ -1356,10 +1369,11 @@ def decorate_rel(task, hop, kwargs):
 
 def get_wh_and_the(vocab):
     data_name, rel_name = vocab.data.__name__, vocab.relations[0].name
-    wh = 'who' if data_name in ['persons', 'genders_of_persons'] else 'which'
-    the = ' the' if data_name == 'genders_of_persons' and rel_name == 'child' or \
-        data_name == 'capabilities_of_things' and rel_name != 'child' or \
-        data_name == 'kinds_of_things' and rel_name != 'child' else ''
+    if hasattr(vocab.data, 'wh'): wh = vocab.data.wh
+    else: wh = 'who' if data_name in ['persons', 'genders_of_persons'] else 'which'
+    the = '' # ' the' if data_name == 'genders_of_persons' and rel_name == 'child' or \
+        # data_name == 'capabilities_of_things' and rel_name != 'child' or \
+        # data_name == 'kinds_of_things' and rel_name != 'child' else ''
     return wh, the
 
 def verbalize_relation(vocab):
@@ -1386,7 +1400,7 @@ def verbalize_relation(vocab):
     # elif _rel_name == 'sibling': rel_str = f' the same {r2v[data_name][1]} as'
     elif _rel_name == 'prev': rel_str = f' the {temporal_word} just before'
     elif _rel_name == 'next': rel_str = f' the {temporal_word} just after'
-    elif _rel_name == 'opposite': rel_str = ' the opposite of'
+    # elif _rel_name == 'opposite': rel_str = ' the opposite of'  # debug
     else: rel_str = ''
     return rel_str
 
@@ -1394,8 +1408,9 @@ def refine_query2str(task, do_swap_qa=False):
     vocab_fn, gen_fn, inst, cxt2str, query2str, *a = task
     if query2str is None: return task
     def new_query2str(q, vocabs):
-        # Tricky: new_query2str called and v passed AFTER swap_qa, so v has been swapped
-        vocab0, vocab1 = vocabs if not do_swap_qa else vocabs[::-1]
+        # refine_query2str.q2s is called BEFORE swap_qa.q2s, but transformed vocab_fn is called before ALL q2s.
+        # So vocabs may have already been swapped by do_swap_qa and need not be swapped again here
+        vocab0, vocab1 = vocabs #if not do_swap_qa else vocabs[::-1]
         return query2str((verbalize_relation(vocab0) + ' ' + q).strip(), vocabs) + verbalize_relation(vocab1)
     task = (vocab_fn, gen_fn, inst, cxt2str, new_query2str, *a)
     return task
@@ -1418,7 +1433,18 @@ def swap_qa(task):
     task = (new_vocab_fn, gen_fn, inst, new_cxt2str, new_query2str, *a)
     return task
 
-def negate_sent(s):  # TODO: a more principled way of negating a sentence
+def try_wh_question2statement(s, vocab):  # convert wh-questions brought by swap_qa to statement
+    if not hasattr(vocab.data, 'wh'): return s
+    wh, sub_wh = vocab.data.wh + ' ', vocab.data.sub_wh + ' '
+    if wh in s and sub_wh not in s:
+        assert '?' in s, s
+        return s.replace(wh, sub_wh).replace('?', ' is')
+    return s
+
+def negate_sent(s, vocabs):  # TODO: need better way of negating a sentence
+    if s.startswith('So '): s = s[3:]
+    s = try_wh_question2statement(s, vocabs[1])
+    return 'It is not the case that ' + s
     s00 = s0 = s
     n_replaced = 0
     for old, new in [
@@ -1451,7 +1477,7 @@ def negate(task):
         vocabs = vocab_fn()
         return [vocabs[0].negate_used(), vocabs[1]]
 
-    new_query2str = (lambda q, v: negate_sent(query2str(q, v))) \
+    new_query2str = (lambda q, v: negate_sent(query2str(q, v), v)) \
         if query2str is not None else None
 
     task = (new_vocab_fn, gen_fn, inst, cxt2str, new_query2str, *a)
@@ -1514,13 +1540,13 @@ def remove_query(task):
     task = vocab_fn, new_gen_fn, inst, cxt2str, new_query2str, *a
     return task
 
-def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
+def _g2c(g_fn, cls_labels=['Yes', 'No', 'Maybe'][:2]):
     def wrapped(*args,**kwargs):
         cxt, query, candidates, (tgt, *a, ans0, ans) = g_fn(*args,**kwargs)
         _candidates = candidates2dict(candidates)
         vocabs = args[0]
         has_local_hop = vocabs[0].data != vocabs[1].data
-        rel1 = vocabs[1].relations[0]
+        rel0, rel1 = [v.relations[0] for v in vocabs]
         if len(vocabs[1].relations) > 1:
             assert isinstance(ans, tuple)
             assert len(vocabs[1].relations) == len(ans) == 2
@@ -1535,6 +1561,11 @@ def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
             if not has_local_hop and len(cxt) == 1:  # for nrk g2c tasks, e.g. John is a boy? Yes
                 _ans = choice(list_diff(rel1.dom(), [ans]))
                 # _ans0 = choice(rel1.f(_ans)) # ans0 does not occur in example_str
+                cxt, tgt, _ans0 = [], None, None
+                _dtgt, _dans0 = None, None
+            elif len(cxt) == 1:  # e.g. John has an apple. So Tom has a kind of fruit? No
+                query = choice(list_diff(rel0.dom(), [query]))
+                _dtgt, _dans0, _ans = tgt, ans0, ans
             else:
                 _dtgt, _dans0, _ans = choice([(t, c0, c) for q, t, c0, c in zip(
                     *[_candidates[k] for k in ['query', 'tgt', 'ans0', 'ans']])
@@ -1542,9 +1573,6 @@ def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
             _ans0 = ans0
         # (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
         #     (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
-        if not has_local_hop and len(cxt) == 1:
-            cxt, tgt, _ans0 = [], None, None
-            _dtgt, _dans0 = None, None
         if isinstance(candidates, OrderedDict): candidates['cls'] = cls_labels
         else: candidates = candidates + [cls_labels]  # XD MlM_gen(cls_labels,) -> rlr_gen
         return cxt, query, candidates, (tgt, _dtgt, _dans0, *a, _ans0, _ans), label
@@ -1552,8 +1580,32 @@ def _g2c(g_fn, cls_labels=['Yes', 'No', 'True', 'False'][:2]):
     return wrapped
 
 def g2c(task):
-    vocab_fn, gen_fn, *a = task
-    task = (vocab_fn, _g2c(gen_fn), *a)
+    vocab_fn, gen_fn, inst, cxt2str, query2str, *a = task
+
+    if not isinstance(cxt2str, partial):  # tasks_r, remove_local_hop
+        def new_query2str(q, v): return 'Answer with Yes or No. ' + capitalize(query2str(q, v))
+        task = (vocab_fn, _g2c(gen_fn), inst, cxt2str, new_query2str, *a)
+        return task
+    
+    new_cxt2str = deepcopy(cxt2str)
+    new_cxt2str.keywords['prefix'] = 'Premise: < '  # cxt > 1
+    # new_cxt2str.keywords['prefix'], new_cxt2str.keywords['suffix'] = 'Premise: ', ''  # cxt == 1
+    
+    def new_query2str(q, v):
+        s = query2str(q, v).replace('So ', '')
+        s = try_wh_question2statement(s, v[1])
+        # return 'Answer with Yes, No. Can it be inferred from the premise that ' + s
+        # return 'Answer with No or Maybe. Can it be inferred from the premise that ' + s  # 0.53 0.75 / 0.89 0.625
+        # return 'Answer with Yes, No or Maybe. So is it likely that ' + s  # 0.52 0.68 / 0.60 0.66
+        # return 'Answer with No or Maybe. So may it be possible that ' + s  # better
+        return 'Answer with Yes or No. So is it possible that ' + s  # better
+        # return 'Answer with No or Maybe. So can it be true that ' + s  # 0.43 0.75 / 0.55 0.718
+        # return 'Answer with No or Maybe. Given the premise, can it be true that ' + s
+        # return 'Answer with No or Maybe. So ' + s
+        # return 'Answer with No or Maybe. So is it true that ' + s  #  / 0.60 0.718
+        # return 'Answer with No or Maybe. So, ' + s  0.43 0.68 / 0.51 0.625
+    
+    task = (vocab_fn, _g2c(gen_fn), inst, new_cxt2str, new_query2str, *a)
     return task
 
 def has_local_hop(task):
@@ -1570,10 +1622,10 @@ def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
         if task is None: return None
         if rel0_kwargs is not None: task = decorate_rel(task, 0, rel0_kwargs)
         if rel1_kwargs is not None: task = decorate_rel(task, 1, rel1_kwargs)
-        task = refine_query2str(task, do_swap_qa=do_swap_qa)
         # if not has_local_hop(task) and do_swap_qa:
         #     raise InvalidTransException("invalid transformation rm_local_hop + swap_qa")
         if do_swap_qa: task = swap_qa(task)
+        task = refine_query2str(task, do_swap_qa=do_swap_qa)
         if do_negate: task = negate(task)
         if not has_local_hop(task): task = remove_local_hop(task, do_swap_qa, do_rm_query, do_g2c, cxt_len)
         if do_rm_query: task = remove_query(task)
@@ -1693,445 +1745,13 @@ def single(x): return x[0]
 def to_rand_letter(x): return choice(uppercases + lowercases)
 def to_rand_digit(x): return choice(digits)
 
-
-def inc(token):
-    assert len(token) == 1 or token in ['->'], token
-    if token.isalpha(): return chr(ord(token) + 1)
-    elif token.isdigit(): return str(int(token) + 1)
-    else: return token
-
-def identity(x): return x
-def upper(x): return x.upper()
-def lower(x): return x.lower()
-def x10(x): return x + '0'
-def d10(x): return x[0]
-def prepend(token): return lambda x: token + x
-
-def to_cardinal(x): return digit2cardinal[x]
-def to_ordinal(x): return digit2ordinal[x]
-def to_digit(word):
-    for d, w in digit2cardinal.items():
-        if w == word: return d
-    for d, w in digit2ordinal.items():
-        if w == word: return d
-
-def double(x): return x.upper() * 2
-def single(x): return x[0]
-
-def to_rand_letter(x): return choice(uppercases + lowercases)
-def to_rand_digit(x): return choice(digits)
-
 inverse_fns = {
     identity.__name__: identity, lower.__name__: upper, upper.__name__: lower, 
     double.__name__: single, x10.__name__: d10,
     to_cardinal.__name__: to_digit, to_ordinal.__name__: to_digit}
 inverse_fns.keys()
 
-
 """
-from type import * 
-
-class Task(object):
-    def __init__(self, name, request, examples, features=None, cache=False):
-        '''request: the type of this task
-        examples: list of tuples of (input, output). input should be a tuple, with one entry for each argument
-        cache: should program evaluations be cached?
-        features: list of floats.'''
-        self.cache = cache
-        self.features = features
-        self.request = request
-        self.name = name
-        self.examples = examples
-        if len(self.examples) > 0:
-            assert all(len(xs) == len(examples[0][0])
-                       for xs, _ in examples), \
-                "(for task %s) FATAL: Number of arguments varies." % name
-
-    def __str__(self):
-        if self.supervision is None:
-            return self.name
-        else:
-            return self.name + " (%s)"%self.supervision
-
-    def __repr__(self):
-        return "Task(name={self.name}, request={self.request}, examples={self.examples}"\
-            .format(self=self)
-
-    def __eq__(self, o): return self.name == o.name
-
-    def __ne__(self, o): return not (self == o)
-
-    def __hash__(self): return hash(self.name)
-
-    def describe(self):
-        description = ["%s : %s" % (self.name, self.request)]
-        for xs, y in self.examples:
-            if len(xs) == 1:
-                description.append("f(%s) = %s" % (xs[0], y))
-            else:
-                description.append("f%s = %s" % (xs, y))
-        return "\n".join(description)
-
-    def predict(self, f, x):
-        for a in x:
-            f = f(a)
-        return f
-
-    @property
-    def supervision(self):
-        if not hasattr(self, 'supervisedSolution'): return None
-        return self.supervisedSolution
-
-    def check(self, e, timeout=None):
-        if timeout is not None:
-            def timeoutCallBack(_1, _2): raise EvaluationTimeout()
-        try:
-            signal.signal(signal.SIGVTALRM, timeoutCallBack)
-            signal.setitimer(signal.ITIMER_VIRTUAL, timeout)
-
-            try:
-                f = e.evaluate([])
-            except IndexError:
-                # free variable
-                return False
-            except Exception as e:
-                eprint("Exception during evaluation:", e)
-                return False
-
-            for x, y in self.examples:
-                if self.cache and (x, e) in EVALUATIONTABLE:
-                    p = EVALUATIONTABLE[(x, e)]
-                else:
-                    try:
-                        p = self.predict(f, x)
-                    except BaseException:
-                        p = None
-                    if self.cache:
-                        EVALUATIONTABLE[(x, e)] = p
-                if p != y:
-                    if timeout is not None:
-                        signal.signal(signal.SIGVTALRM, lambda *_: None)
-                        signal.setitimer(signal.ITIMER_VIRTUAL, 0)
-                    return False
-
-            return True
-        # except e:
-            # eprint(e)
-            # assert(False)
-        except EvaluationTimeout:
-            eprint("Timed out while evaluating", e)
-            return False
-        finally:
-            if timeout is not None:
-                signal.signal(signal.SIGVTALRM, lambda *_: None)
-                signal.setitimer(signal.ITIMER_VIRTUAL, 0)
-
-    def logLikelihood(self, e, timeout=None):
-        if self.check(e, timeout):
-            return 0.0
-        else:
-            return NEGATIVEINFINITY
-
-    @staticmethod
-    def featureMeanAndStandardDeviation(tasks):
-        dimension = len(tasks[0].features)
-        averages = [sum(t.features[j] for t in tasks) / float(len(tasks))
-                    for j in range(dimension)]
-        variances = [sum((t.features[j] -
-                          averages[j])**2 for t in tasks) /
-                     float(len(tasks)) for j in range(dimension)]
-        standardDeviations = [v**0.5 for v in variances]
-        for j, s in enumerate(standardDeviations):
-            if s == 0.:
-                eprint(
-                    "WARNING: Feature %d is always %f" %
-                    (j + 1, averages[j]))
-        return averages, standardDeviations
-
-    def as_json_dict(self):
-        return {
-            "name": self.name,
-            "request": str(self.request),
-            "examples": [{"inputs": x, "output": y} for x, y in self.examples]
-        }
-
-def lcs(u, v):
-    # t[(n,m)] = length of longest common string ending at first
-    # n elements of u & first m elements of v
-    t = {}
-
-    for n in range(len(u) + 1):
-        for m in range(len(v) + 1):
-            if m == 0 or n == 0:
-                t[(n, m)] = 0
-                continue
-
-            if u[n - 1] == v[m - 1]:
-                t[(n, m)] = 1 + t[(n - 1, m - 1)]
-            else:
-                t[(n, m)] = 0
-    l, n, m = max((l, n, m) for (n, m), l in t.items())
-    return u[n - l:n]
-    
-def guessConstantStrings(task):
-    if task.request.returns() == tlist(tcharacter):
-        examples = task.examples
-        guesses = {}
-        N = 10
-        T = 2
-        for n in range(min(N, len(examples))):
-            for m in range(n + 1, min(N, len(examples))):
-                y1 = examples[n][1]
-                y2 = examples[m][1]
-                l = ''.join(lcs(y1, y2))
-                if len(l) > 2:
-                    guesses[l] = guesses.get(l, 0) + 1
-
-        task.stringConstants = [g for g, f in guesses.items()
-                                if f >= T]
-    else:
-        task.stringConstants = []
-                    
-
-    task.BIC = 1.
-    task.maxParameters = 1
-
-    task.specialTask = ("stringConstant",
-                        {"maxParameters": task.maxParameters,
-                         "stringConstants": task.stringConstants})
-
-def loadPBETasks(directory="PBE_Strings_Track"):
-    '''
-    Processes sygus benchmarks into task objects
-    For these benchmarks, all of the constant strings are given to us.
-    In a sense this is cheating
-    Returns (tasksWithoutCheating, tasksWithCheating).
-    NB: Results in paper are done without "cheating"
-    '''
-    import os
-    from sexpdata import loads, Symbol
-
-    def findStrings(s):
-        if isinstance(s, list):
-            return [y
-                    for x in s
-                    for y in findStrings(x)]
-        if isinstance(s, str):
-            return [s]
-        return []
-
-    def explode(s):
-        return [c for c in s]
-
-    tasks = []
-    cheatingTasks = []
-    for f in os.listdir(directory):
-        if not f.endswith('.sl'):
-            continue
-        with open(directory + "/" + f, "r") as handle:
-            message = "(%s)" % (handle.read())
-
-        expression = loads(message)
-
-        constants = []
-        name = f
-        examples = []
-        declarative = False
-        for e in expression:
-            if len(e) == 0:
-                continue
-            if e[0] == Symbol('constraint'):
-                e = e[1]
-                assert e[0] == Symbol('=')
-                inputs = e[1]
-                assert inputs[0] == Symbol('f')
-                inputs = inputs[1:]
-                output = e[2]
-                examples.append((inputs, output))
-            elif e[0] == Symbol('synth-fun'):
-                if e[1] == Symbol('f'):
-                    constants += findStrings(e)
-                else:
-                    declarative = True
-                    break
-        if declarative: continue
-        
-        examples = list({(tuple(xs), y) for xs, y in examples})
-
-        task = Task(name, arrow(*[tstr] * (len(examples[0][0]) + 1)),
-                    [(tuple(map(explode, xs)), explode(y))
-                     for xs, y in examples])
-        cheat = task
-
-        tasks.append(task)
-        cheatingTasks.append(cheat)
-
-    for p in tasks:
-        guessConstantStrings(p)
-    return tasks, cheatingTasks
-
-def retrieveJSONTasks(filename, features=False):
-    '''
-    For JSON of the form:
-        {"name": str,
-         "type": {"input" : bool|int|list-of-bool|list-of-int,
-                  "output": bool|int|list-of-bool|list-of-int},
-         "examples": [{"i": data, "o": data}]}
-    '''
-    with open(filename, "r") as f:
-        loaded = json.load(f)
-    TP = {
-        "bool": tbool,
-        "int": tint,
-        "list-of-bool": tlist(tbool),
-        "list-of-int": tlist(tint),
-    }
-    return [Task(
-        item["name"],
-        arrow(TP[item["type"]["input"]], TP[item["type"]["output"]]),
-        [((ex["i"],), ex["o"]) for ex in item["examples"]],
-        features=(None if not features else list_features(
-            [((ex["i"],), ex["o"]) for ex in item["examples"]])),
-        cache=False,
-    ) for item in loaded]
-
-vocab = list(string.ascii_uppercase) #+ ['_'] * 16
-# vocab = list(string.digits)[1:]
-query_vocab = list(string.ascii_uppercase)
-nrows, ncols = 12, 6
-has_query, query_first = False, True
-has_output = True
-def map_fn(x): return x.lower()
-
-old_stdout = sys.stdout
-sys.stdout = mystdout = StringIO()
-try:
-    for _ in range(nrows):
-#         input_tokens = sample(vocab, ncols)
-        input_tokens = [choice(vocab)] * ncols
-        i = random.randint(2, len(input_tokens) - 1)
-        input_tokens[i] = choice(list(set(vocab) - {input_tokens[i]})) #'*' + input_tokens[i]
-    #     input_tokens[-1] = input_tokens[0]
-    #     special = choice(vocab)
-    #     input_tokens = [choice(vocab).lower()] * (ncols - 1) + [special]
-    #     shuffle(input_tokens)
-        if not query_first: print(' '.join(input_tokens), end='')
-        if has_query:
-    #         query_tokens = sample(input_tokens, ncols - 1)
-    #         query_tokens = input_tokens.copy()
-            i = random.randint(0, len(input_tokens) - 2)
-            query_tokens = [input_tokens[i]]
-    #         query_tokens[i] = choice(vocab)
-    #         query_tokens = [t.lower() for t in query_tokens]
-#             print(',', ' '.join(query_tokens), end='')
-            print('After', ' '.join(query_tokens), end=', ')
-        if query_first: print(' '.join(input_tokens), end='')
-        print(' -> ', end='')
-        if has_output:
-            ans_fn = identity #upper
-            output_tokens = ans_fn(input_tokens[i])
-    #         output_tokens = special.lower()
-    #         output_tokens = choice(input_tokens)
-    #         output_tokens = list(set(input_tokens) - set(query_tokens))
-    #         output_tokens = map(map_fn, input_tokens)
-    #         output_tokens = reverse(input_tokens)
-    #         output_tokens = query_tokens[i].lower()
-            print(''.join(output_tokens), end='')
-        print()
-finally: sys.stdout = old_stdout
-example = mystdout.getvalue()
-print(example)
-texts['tmp'] = '\n' + example[:-1]
-if has_query: ncols += 3
-
-
-
-def vocab_fn(mix=False): return ''.join([v[0] for v in vocabs]) if mix else choice([v[0] for v in vocabs])
-
-def input_fn(vocab, ncols):
-    if vocab is None: vocab = vocab_fn()
-    return sample(vocab, ncols)
-#     return [choice(string.ascii_uppercase)] * ncols
-def i_fn(ncols, i_range=[0, 0]):
-    return choice(range(0 + i_range[0], ncols + i_range[1])) if type(i_range) in [list] else i_range
-
-def get_tgt(token, tgt_vocab, tgt_fn=identity):
-    if tgt_vocab is None: return tgt_fn(token)
-    return choice(tgt_vocab)
-#     return choice(list(set(tgt_vocab) - {token}))
-
-def update_input(input_tokens, i, tgt, updates=[]):
-    for offset, val in updates: input_tokens[i + offset] = val
-
-def gen_query(input_tokens, i):
-    return None, None
-    return [token for j, token in enumerate(input_tokens) if j != i], None
-    return [input_tokens[i - 1]], None
-
-def get_ans_fn(vocab):
-    return identity
-    fns = []
-    vocab = set(vocab)
-    if vocab.issubset(set(string.ascii_uppercase)): fns += [double]#, lower]
-    if vocab.issubset(set(string.ascii_lowercase)): fns += [double]#, upper]
-    if vocab.issubset(set(string.digits)):
-#         fns += [prepend('0'), prepend('1'), double, x10]
-        fns += [to_word, to_ordinal]
-    if len(fns) == 0: fns =[identity]
-    return choice(fns)
-
-task_configs = {
-    'ith': {'i_range': 1},
-    'after bracket': {'i_range': [1, 0], 'updates': [(-1, '(')]},
-    'in brackets': {'i_range': [1, -1], 'updates': [(-1, '('), (1, ')')]},
-    'special type': {'vocab': vocabs[0][0], 'tgt_vocab': vocabs[1][0], 'ans_fn': upper},
-    'special': {'i_range': [2, 0], 'use_extended_vocab': True, 'vocab_per_row': True}
-}
-
-def gen_example(nrows=16, ncols=3, use_extended_vocab=False, vocab_per_row=False,
-                vocab=None, tgt_vocab=None, tgt_fn=identity, ans_fn=identity, 
-                i_range=[0, 0], updates=[]):
-    old_stdout = sys.stdout
-    sys.stdout = mystdout = StringIO()
-    try:
-#         vocab = vocab_fn()
-        ans_fn = ans_fn or get_ans_fn(tgt_vocab)
-        if use_extended_vocab and not vocab_per_row:
-            vocab, tgt_fn, ans_fn = get_extended_vocab_and_fns(base_vocab=None, fn=None, tgt_fn1=None)#, ans_fn=None)
-        for _ in range(nrows):
-            if use_extended_vocab and vocab_per_row:
-                vocab, tgt_fn, ans_fn = get_extended_vocab_and_fns(base_vocab=None, fn=None, tgt_fn1=None)#, ans_fn=None)
-#             random.seed(datetime.now())
-            input_tokens = input_fn(vocab, ncols)
-            i = i_fn(ncols, i_range=i_range)
-            tgt = get_tgt(input_tokens[i], tgt_vocab, tgt_fn=tgt_fn)
-            input_tokens[i] = tgt
-            update_input(input_tokens, i, tgt, updates=updates)
-            ans = ans_fn(tgt)
-            query = gen_query(input_tokens, i)
-            if query[0]: print(' '.join(query[0]), end=', ')
-    #         print()
-            print(' '.join(input_tokens), end='')
-            if query[1]: print(',\n' + ' '.join(query[1]), end='')
-            print(' ->', end=' ')
-            print(ans)
-    finally: sys.stdout = old_stdout
-    return mystdout.getvalue(), ans_fn
-
-task_name = 'after bracket'
-# task_name = 'in brackets'
-task_name = 'ith'
-# task_name = 'special type'
-configs = task_configs[task_name]
-# configs = list(task_configs.items())[-1][1]
-nrows, ncols = 12, 4
-vocab = None or upper_letters
-tgt_fn, ans_fn = identity, identity
-# tgt_fn, ans_fn = lower, upper
-example, ans_fn = gen_example(nrows=nrows, ncols=ncols, 
-                              vocab=upper_letters, 
-                              tgt_fn=tgt_fn, ans_fn=ans_fn,
-                              **configs)
-print(example)
-texts['tmp'] = '\n' + example[:-1]
+# from DreamCoder https://github.com/ellisk42/ec
 """
+print('666')

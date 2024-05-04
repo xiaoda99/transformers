@@ -41,7 +41,10 @@ def persons(tokenizer):
     boys, girls = all_persons(tokenizer)
     return boys + girls
 
-def genders_of_persons(): return {'boy': boys, 'girl': girls}, dict(child='', sibling='a person of the same gender as')
+def genders_of_persons():
+    genders_of_persons.wh = 'who'
+    genders_of_persons.sub_wh = 'the one who'
+    return {'a boy': boys, 'a girl': girls}, dict(child='', sibling='a person of the same gender as')
 
 verb_form =[
     ('sleep','slept'),

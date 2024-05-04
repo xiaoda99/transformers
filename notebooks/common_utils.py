@@ -53,6 +53,7 @@ def topk_md(tensor, k, largest=True, transpose=False):
         values, indices = tensor.topk(k, largest=largest)
         return indices.numpy(), values.numpy()
     values, indices = tensor.flatten().topk(k, largest=largest)
+    values, indices = values.cpu(), indices.cpu()
     # https://stackoverflow.com/questions/64241325/top-k-indices-of-a-multi-dimensional-tensor
     rows, cols = np.unravel_index(indices.numpy(), tensor.shape)
     return (rows, cols, values.numpy()) if not transpose else list(zip(rows, cols, values.numpy()))
@@ -265,6 +266,7 @@ def fisher_discriminant_ratio(x, y, labels=['▁Yes', '▁No'], plot=True):
     y0 = y[x == labels[0]]; y1 = y[x == labels[1]]
     m0 = y0.mean(0); m1 = y1.mean(0)
     fdr = np.square(m0 - m1).sum() / (np.var(y0, axis=0).sum() + np.var(y1, axis=0).sum())
+    title = f'ratio = {fdr:.2f}'
     if plot:
         if y.ndim == 1:
             # plt.hist([Y0, Y1], label=labels)
@@ -273,12 +275,13 @@ def fisher_discriminant_ratio(x, y, labels=['▁Yes', '▁No'], plot=True):
         elif y.ndim == 2:
             plt.plot(y0[:, 0], y0[:, 1], 'gx', alpha=0.5, label=labels[0]);
             plt.plot(y1[:, 0], y1[:, 1], 'rx', alpha=0.5, label=labels[1]);
-            # print('gx', y0[:, 1])  # nrk debug
-            # print('rx', y1[:, 1])
+            print('gx', y0[:, 1]); print('rx', y1[:, 1])  # nrk debug
             line_range = [min(np.min(y[:, 0]), np.min(y[:, 1])), max(np.max(y[:, 0]), np.max(y[:, 1]))]
             plt.plot(line_range, line_range, color='k', linestyle='-', alpha=0.2)
+            logits_diff = np.concatenate([y0[:, 1] - y0[:, 0], y1[:, 0] - y1[:, 1]]).mean()
+            title += f' logits_diff = {logits_diff:.2f}'
         plt.legend(loc='best')  # upper right
-        plt.title(f'ratio = {fdr}')
+        plt.title(title)
         plt.show()
     return fdr
 

@@ -23,6 +23,10 @@ import matplotlib.pyplot as plt
 # from sklearn.manifold import TSNE, MDS
 # from sklearn.decomposition import PCA
 # from sklearn.cluster import KMeans
+import pandas as pd
+from pandas import read_parquet
+from sklearn import preprocessing
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -38,12 +42,15 @@ from transformers.models.gpt_neo.modeling_gpt_neo import GPTNeoSelfAttention, GP
 from transformers.models.gptj.modeling_gptj import GPTJAttention, GPTJBlock, GPTJModel, GPTJForCausalLM
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention, GPTNeoXLayer, GPTNeoXModel, GPTNeoXForCausalLM
 from transformers.models.xglm.modeling_xglm import XGLMForCausalLM, XGLMAttention, XGLMDecoderLayer
-from transformers.models.llama.modeling_llama import LlamaForCausalLM, LlamaAttention, LlamaDecoderLayer, LlamaModel
+from transformers.models.llama.modeling_llama import LlamaForCausalLM, LlamaRotaryEmbedding, LlamaAttention, LlamaDecoderLayer, LlamaModel
+from transformers.models.qwen2.modeling_qwen2 import Qwen2ForCausalLM, Qwen2Model, Qwen2DecoderLayer, Qwen2Attention
+
+from talking_heads_pythia_aligned import GPTNeoXTalkingConfig, GPTNeoXForCausalLMTalking, GPTNeoXLayerTalking, GPTNeoXAttentionTalking 
 
 sys.path.insert(0, './pptree')
 from pptree import Node, print_tree
 
-from common_utils_nrk import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, topi_md, \
+from common_utils import numpy, einsum, my_isinstance, convert_ids_to_tokens, show_topk, topk_md, topi_md, \
     equal, join_lists, iterable, pad, Timer, maybe_map, reduce_objects, mr, maybe_mr, list_get, fn2str, Printer, lget, \
     fisher_discriminant_ratio
 
@@ -164,14 +171,14 @@ def unify(model):
         model.transformer = model.model
         model.model.h = model.model.layers
         model.model.ln_f = model.model.layer_norm
-    elif my_isinstance(model, GPTNeoXForCausalLM):
+    elif my_isinstance(model, GPTNeoXForCausalLM) or my_isinstance(model, GPTNeoXForCausalLMTalking):
         model.transformer = model.gpt_neox
         model.lm_head = model.embed_out
         model.transformer.wte = model.transformer.embed_in
         model.transformer.h = model.transformer.layers
         model.transformer.ln_f = model.transformer.final_layer_norm
         model.transformer.drop = nn.Dropout(0)
-    elif my_isinstance(model, LlamaForCausalLM):
+    elif my_isinstance(model, (LlamaForCausalLM, Qwen2ForCausalLM)):
         model.transformer = model.model
         model.transformer.wte = model.transformer.embed_tokens
         model.transformer.h = model.transformer.layers
@@ -188,12 +195,12 @@ def unify(model):
         elif my_isinstance(block, GPTJBlock):
             block.ln_2 = block.ln_1
             block.parallel_mlp = True
-        elif my_isinstance(block, GPTNeoXLayer):
+        elif my_isinstance(block, GPTNeoXLayer) or my_isinstance(block, GPTNeoXLayerTalking):
             block.attn = block.attention
             block.ln_1 = block.input_layernorm
             block.ln_2 = block.post_attention_layernorm
             block.parallel_mlp = True
-        elif my_isinstance(block, LlamaDecoderLayer):
+        elif my_isinstance(block, (LlamaDecoderLayer, Qwen2DecoderLayer)):
             block.attn = block.self_attn
             block.ln_1 = block.input_layernorm
             block.ln_2 = block.post_attention_layernorm
@@ -218,7 +225,7 @@ def unify(model):
             self.resid_dropout = nn.Dropout(0)
         elif my_isinstance(self, GPTJAttention):
             self.num_heads = self.num_attention_heads
-        elif my_isinstance(self, GPTNeoXAttention):
+        elif my_isinstance(self, GPTNeoXAttention) or my_isinstance(self, GPTNeoXAttentionTalking):
             for old_name, new_name in [('num_attention_heads', 'num_heads'), ('hidden_size', 'embed_dim'),
                         ('head_size', 'head_dim'), ('rotary_ndims', 'rotary_dim'), ('dense', 'out_proj')]:
                 setattr(self, new_name, getattr(self, old_name))
@@ -237,17 +244,20 @@ def unify(model):
                     proj.weight = nn.Parameter(rearrange(w, 'n d e -> (n d) e'))
                     proj.bias = nn.Parameter(rearrange(b, 'n d -> (n d)'))
                     setattr(self, proj_name, proj)
-        elif my_isinstance(self, LlamaAttention):
-            device = self.q_proj.weight.device
-            max_positions = model.config.max_position_embeddings
-            self.register_buffer(
-                "bias",
-                torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
-                    1, 1, max_positions, max_positions
-                ).to(device),
-                persistent=False,
-            )
-            self.register_buffer("masked_bias", torch.tensor(-1e9).to(device), persistent=False)
+        elif my_isinstance(self, (LlamaAttention, Qwen2Attention)):
+            if my_isinstance(self, LlamaAttention) and not \
+                (hasattr(self.q_proj, '_buffers') and 'qweight' in self.q_proj._buffers):
+                device = self.q_proj.weight.device if my_isinstance(self, LlamaAttention) \
+                    else self.q_proj._buffers['qweight'].device  # WQLinear_GEMM
+                max_positions = model.config.max_position_embeddings
+                self.register_buffer(
+                    "bias",
+                    torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
+                        1, 1, max_positions, max_positions
+                    ).to(device),
+                    persistent=False,
+                )
+                self.register_buffer("masked_bias", torch.tensor(-1e9).to(device), persistent=False)
 
             self.attn_dropout = nn.Dropout(0)
             self.resid_dropout = nn.Dropout(0)
@@ -427,7 +437,12 @@ def apply_rotary_pos_emb_half(x, sincos, offset=0): # x: bnir
 def apply_rotary_pos_emb(query_rot, key_rot, offset=0, rotary_emb=None):
     sincos_fn, apply_fn = (fixed_pos_embedding, apply_rotary_pos_emb_every_two) \
         if rotary_emb is None else (rotary_emb, apply_rotary_pos_emb_half)  # gpt-neox
-    sincos = sincos_fn(key_rot, seq_len=key_rot.size(2))  # (bnjd')[2]->j
+    if isinstance(sincos_fn, LlamaRotaryEmbedding) and hasattr(sincos_fn, 'cos_cached'):
+        seq_len=key_rot.size(2)
+        sincos = (sincos_fn.cos_cached[:seq_len].to(dtype=key_rot.dtype),
+            sincos_fn.sin_cached[:seq_len].to(dtype=key_rot.dtype))
+    else:
+        sincos = sincos_fn(key_rot, seq_len=key_rot.size(2))  # (bnjd')[2]->j
     if rotary_emb is not None:
         cos, sin = sincos
         # GPTNeoXRotaryEmbedding already moves to device but LlamaRotaryEmbedding doesn't, so move here 
@@ -1243,6 +1258,7 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
     if by_head is None: by_head = ['value', 'attn_out']
     input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
         text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
+
     if outputs is not None:
         assert isinstance(tokenizer, LLAMATokenizer)
         o = outputs
@@ -1370,7 +1386,6 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
                 all_bos_tokens.append([dataset.word_idx['end'][i] for i in indices] if 'end' in dataset.word_idx else None)
         else:
             if Counterexample == True:
-                #生成反例用下面的注释 #nrk debug
                 generate_obj = [list(generate_Counterexample(task, nrows=nrows, tokenizer=tokenizer,
                     plot=False, verbose=False, **gen_args)) for i in range(batch_size)]
                 all_examples, texts, all_bos_tokens = zip(*[sub for sublist in generate_obj for sub in sublist])
@@ -2179,12 +2194,12 @@ attn_patterns_by_step = {
         'bos->tgt+',
         'bos->tgt',
         ],
-    1: ['ans]->ans0]', 'ans]->ans0+', 'ans]->ans-', 'query->tgt','query->tgt+', 'query->ans0', 'tgt->ans0',
-        'ans]->query','ans]->query^', 'ans]->ans+^', 'ans]->query+', 'sep->ans0', 'sep+->ans0', 'sep-->ans0','sep+->sep',
-        'ans+->query', 'ans+->ans]', 'ans+->ans+^', 'ans]->query',  'ans]->dans0]', 'dans0]->dtgt]|dtgt+',  # 'ans+->query-|ans+', # g2c tasks
-        'ans0+->ans0',  'query->ans]^','ans]->bos^', 'query->sep+', 'rel->query','query->dans0',
-         'query->ans0+', 'query->query-', 'query-->ans]', 'query+->query]',
-        'sep+->ans+^', 'sep+->ans]^', 'tgt->ans0+','tgt->dans0',
+    1: ['ans]->ans0]', 'ans]->ans0+', 'query->tgt','query->tgt+', 'query->ans0]', 'tgt->ans0]',
+        'ans]->query','ans]->query^', 'ans]->ans+^', 'ans]->query+', 'sep->ans0]', 'sep+->ans0', 'sep-->ans0]','sep+->sep',
+        'ans+->query', 'ans+->ans]', 'ans+->ans+^', 'ans]->query',  'ans]->dans0]', 'dans0]->dtgt+','dans0]->dtgt]|dtgt+','dans0]->dtgt]',  # 'ans+->query-|ans+', # g2c tasks
+        'ans0+->ans0]','ans0+->tgt]',  'query->ans]^','ans]->bos^', 'query->sep+', 'rel->query','query->dans0',
+         'query->ans0+', 'query->query-', 'query+->query]','query+->ans0]','query+->tgt',
+        'sep+->ans+^', 'sep+->ans]^', 'tgt->ans0+','tgt->dans0','ans->query+',
         'cls->ans', 'cls->query', 'ans->query','query->sep-','ans]->query_name',
         ], # mqy add 'ans0+->ans0', 'sep+->sep', 'query->ans]^','query->sep+', 'rel->query'
     2: ['ans0]->tgt', 'ans0]->tgt+',   'ans0]->tgt]', 'ans0]->tgt+', 'ans0]->tgt]|tgt+'],   # g2c tasks
@@ -3086,3 +3101,182 @@ def gen_detach_heads_tuples(module, exit_module, kept_layer, kept_head):
 # gm = torch.autograd.grad(y.unbind(), m)[0]
 # gm.mean(0)
 # x.sum(0).log_softmax(-1)
+
+# def find_max_loc(loc_start, sub_matrix):
+#     max_index_sub = np.argmax(sub_matrix)
+#     max_index_sub_2d = np.unravel_index(max_index_sub, sub_matrix.shape)
+#     max_index_original = (max_index_sub_2d[0] + loc_start, max_index_sub_2d[1] + 1)
+#     return max_index_original
+
+def index_to_2d(index, H):  #从一维列表位置转为二维的位置
+    return (index // H, index % H)
+
+def write_sentence_dataset(path, i=0): #用于Snli数据集，将数据改写成问答形式
+    texts = []
+    count = 0
+    data = read_parquet(path)
+    answers = {0: 'Yes', 1: 'Unknown', 2: 'No' }
+    for j in range(i*3):
+        try:
+            ans = answers.get(data['label'][j])
+            assert ans != 'Unknown'
+            texts +=  ['Premise: '+(data['premise'][j] if data['premise'][j].endswith('.') else data['premise'][j]+'.')+
+#                   ' Hypothesis: '+(data['hypothesis'][j] if data['hypothesis'][j].endswith('.') else data['hypothesis'][j]+'.')+
+                      f" Please answer with Yes or No. Can it be inferred from the premise that {data['hypothesis'][j][:-1] if data['hypothesis'][j].endswith('.') else data['hypothesis'][j]}? "+' Answer: '+ans]
+            count += 1
+            if count == i: return texts
+        except:
+            pass
+#             print(j,data['premise'][j],data['hypothesis'][j],ans)
+    return texts
+
+def del_first(matrix): #删除矩阵第一列，对后面所有列取softmax
+    for i,j in enumerate(matrix):
+        if i != 0:
+            matrix[i][0] = 0
+            Sum = sum(j)-j[0]
+            for t in range(len(matrix[0])):
+                matrix[i][t]/=Sum
+    return matrix
+
+def plot_picture(layer, head, i=0, texts=None, y_token=None, x_token=None, data_tuples=None, show=False,  pattern='auto'): #pattern='manual/auto',texts is a list
+    assert i%3 == 0
+    punctuation_set = {'.', ',', '!', '?', ';', ':','▁Hyp','▁an','▁to','▁for','▁Yes','▁No',
+                       '▁in','▁with','▁on','▁a','▁of','▁and','▁or','▁A','▁while'}  #标点符号表, 介词等无意义词表
+    if data_tuples != None:
+        texts = [r.data_tuples[i][0]]+[r.data_tuples[i+1][0]]
+    else:
+        texts = texts
+    if texts == None: return
+
+    for index,text in zip(range(i,i+3),texts): #一次看三句，因为snli同一个样例一般有0，1，2三种情况
+#         print(text)  
+        ids = torch.tensor(tokenizer.encode_plus(text).input_ids).unsqueeze(0).to(device)
+        output = model(ids, output_attentions = True)
+        attention_matrix = output.attentions[layer][0][head].cpu().detach().numpy()
+        token = tokenizer.tokenize(text)
+        token.insert(0,'<s>')
+        try:
+            loc_Hyp = token.index('▁Hyp')+4  #从":"后的词开始关注
+            loc_please = token.index('▁Please')-1 #从please前的"."位置结束关注，即仅看hypothesis部分句子的注意力。
+        except:
+            loc_Hyp = 0
+            loc_please = -1
+        if pattern != 'auto': #手动设置关注
+            score = 0
+            ax = plt.gca()
+            plt.xticks(np.arange(len(token)), labels=token, 
+                                 rotation=90, fontsize=8)
+            plt.yticks(np.arange(len(token)), labels=token, fontsize=8)    
+            if y_token != None and x_token != None:
+                locy = r.data_tuples[index][3][-1].ans[1] - 1 if y_token == None else (len(token) - 1 - token[::-1].index(y_token))
+                locx = r.data_tuples[index][3][-1].query[1] - 1 if x_token == None else (len(token) - 1 - token[::-1].index(x_token))
+                score = attention_matrix[locy][locx]
+                ax.axvline(x=locx, color='white', linestyle='--',linewidth=0.5)
+                # 添加水平线
+                ax.axhline(y=locy, color='white', linestyle='--',linewidth=0.5)
+                # attention_matrix = del_first(attention_matrix)
+            else:
+                xticks = ax.get_xticks()
+                yticks = ax.get_yticks()
+                offset = 0.5
+                for tick in xticks:
+                    ax.axvline(tick + offset, color='grey', linestyle='-', linewidth=1)
+                for tick in yticks:
+                    ax.axhline(tick + offset, color='grey', linestyle='-', linewidth=1)
+            plt.title(f"attention_in({layer},{head}),'A->Q'score = {score}")
+
+            attention_matrix = attention_matrix
+            plt.imshow(attention_matrix)
+            plt.colorbar()
+            
+            plt.tight_layout()
+            plt.show()
+        else: #自动关注
+            show = show #控制图片打印，全部打印就把这里设为True，部分打印在下面设置
+            results = []
+            for col, row in enumerate(attention_matrix[loc_Hyp:loc_please], start=loc_Hyp):  
+                if token[col] in punctuation_set: continue
+                #阈值设置 （> sum(1:-1)/2 and > 0.1） or >0.2
+                threshold = max((1 - row[0]) / 2, 0.1)
+                indices = np.where(row[1:] > threshold)[0]
+                indices = np.append(indices,np.where(row[1:] > 0.2)[0])
+                # 排除对标点符号和“假设”的关注，确保每个关注是有意义的
+                punctuation_positions = np.array([pos for pos in indices if token[pos+1] in punctuation_set]) #找到标点位置，因为循环是从row[1:]开始的，所以pos需要+1
+                indices = np.setdiff1d(indices, punctuation_positions) #清除
+                #如果有有效关注，存入results
+                if len(indices) > 0: 
+                    values = row[indices + 1]  
+                    results.append((col, list(zip(indices + 1, values))))
+            try:
+                if len(results)>0:
+                    correct_num[t:=token[-2].replace('▁','')] += 1
+#                     if t!='known': show = True  #设置部分打印条件
+            except:
+                pass
+            
+            if show == True:
+                print(text)
+                for rows, columns in results:
+                    for column in columns:
+                        locy = rows
+                        locx = column[0]
+                        # attention_matrix = del_first(attention_matrix)
+                        plt.xticks(np.arange(len(token)), labels=token, 
+                                             rotation=90, fontsize=8)
+                        plt.yticks(np.arange(len(token)), labels=token, fontsize=8)    
+                        plt.title(f"attention_in({layer},{head})")
+                        attention_matrix = attention_matrix
+                        plt.imshow(attention_matrix)
+                        ax = plt.gca()
+                        # 绘制竖线到交叉点
+                        ax.plot([locx, locx], [len(token)-0.5, locy], color="white", linestyle="--", linewidth=0.5)
+                        # 绘制横线到交叉点
+                        ax.plot([-0.5, locx], [locy, locy], color="white", linestyle="--", linewidth=0.5)
+            
+                try:         
+                    plt.colorbar()   
+                except:
+                    pass
+                plt.tight_layout()
+                plt.show()
+
+def create_mask(self, H, head, seqlen, locs):  #mask attn矩阵
+    if getattr(self, "mask", None) is None:
+        mask = np.ones([H, seqlen])
+        mask[head, locs] = 0
+        return torch.tensor(mask)
+    else:
+        mask = self.mask.clone().detach()
+        mask[head, locs] = 0
+        return mask
+
+def forward_output(model, tokenizer, text, device):
+    ids = tokenizer.encode_plus(
+        text,
+        add_special_tokens=True,  
+        max_length=512,            # 最大长度，根据模型限制设定
+        truncation=True,           # 启用截断
+        padding='max_length',      # 填充至 max_length 设定的长度
+        return_tensors='pt'
+    ).input_ids.to(device)
+    output = model(ids, output_attentions = True)
+    return output
+
+def find_top_KL_divergence(tokenizer, index, token_list, logits1, logits2, deviation, ans_id):
+    # epsilon = 1e-10
+    # logits1 += epsilon
+    # logits2 += epsilon
+    log_probs1 = F.log_softmax(logits1, dim=1)  # 对第二维应用 log_softmax (1,seq_len,dic_len)
+    log_probs2 = F.log_softmax(logits2, dim=1)
+    probs1 = torch.exp(log_probs1)
+    probs2 = torch.exp(log_probs2)
+    logits_diff_with_ans = max(logits2[0,deviation-1])-logits2[0,deviation-1, ans_id]
+    # 计算 KL 散度
+    kl_divergence_per_word = torch.sum(probs2 * (log_probs2 - log_probs1), dim=-1)
+    top_k_values, top_k_indices = kl_divergence_per_word.topk(10, dim=-1)
+    ans = [token_list[i] if i<len(token_list) else '[PAD]' for i in top_k_indices[0]]
+    now_ans = tokenizer.convert_ids_to_tokens(torch.argmax(logits2[0][deviation-1]).item())
+    top_k = {(index,deviation, now_ans, logits_diff_with_ans.item()): list(zip(ans, top_k_values[0].tolist()))}
+    return top_k
+
