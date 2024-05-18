@@ -258,19 +258,38 @@ _capabilities_of_things = [ # A x can y.
 #     for thing, cap in _capabilities_of_things: d[cap].append(thing)
 #     return d
 
-def capabilities_of_things(): return {
-    'kill': ['dagger', 'knife', 'gun'],
-    'cook': ['oven', 'pot', 'pan'],
-    'write': ['pen', 'pencil', 'chalk', 'biro'],
-    'fly': ['plane', 'glider', 'helicopter'],
-    'play': ['piano', 'violin', 'guitar'],
-    'drive': ['car', 'truck', 'jeep'],
-    'ride': ['bicycle', 'motorcycle', 'horse'],
-    'communicate': ['phone', 'telephone', 'telegraph', 'radio'], # internet, email
-    'clean': ['broom', 'mop', 'vacuum cleaner'],
-    'paint': ['brush', 'palette', 'roller', 'spray'],
-    'swim': ['swimsuit', 'goggles', 'swim fins'],
-    'calculate': ['computer', 'calculator', 'abacus'],
+# def capabilities_of_things(): return {
+#     'kill': ['dagger', 'knife', 'gun'],
+#     'cook': ['oven', 'pot', 'pan'],
+#     'write': ['pen', 'pencil', 'chalk', 'biro'],
+#     'fly': ['plane', 'glider', 'helicopter'],
+#     'play': ['piano', 'violin', 'guitar'],
+#     'drive': ['car', 'truck', 'jeep'],
+#     'ride': ['bicycle', 'motorcycle', 'horse'],
+#     'communicate': ['phone', 'telephone', 'telegraph', 'radio'], # internet, email
+#     'clean': ['broom', 'mop', 'vacuum cleaner'],
+#     'paint': ['brush', 'palette', 'roller', 'spray'],
+#     'swim': ['swimsuit', 'goggles', 'swim fins'],
+#     'calculate': ['computer', 'calculator', 'abacus'],
+# },dict(child='', sibling='')
+
+def capabilities_of_things():  #nrk add
+    capabilities_of_things.name = 'capabilities of things'
+    capabilities_of_things.wh = 'which is used for'
+    capabilities_of_things.sub_wh = 'the thing is used for'
+    return { #nrk debug
+    'killing': ['dagger', 'knife', 'gun'],
+    'cooking': ['oven', 'pot', 'pan'],
+    'writing': ['pen', 'pencil', 'chalk', 'biro'],
+    'flying': ['plane', 'glider', 'helicopter'],
+    'playing': ['piano', 'violin', 'guitar'],
+    'driving': ['car', 'truck', 'jeep'],
+    'riding': ['bicycle', 'motorcycle', 'horse'],
+    'communicating': ['phone', 'telephone', 'telegraph', 'radio'], # internet, email
+    'cleaning': ['broom', 'mop', 'vacuum cleaner'],
+    'painting': ['brush', 'palette', 'roller', 'spray'],
+    'swiming': ['swimsuit', 'goggles', 'swim fins'],
+    'calculating': ['computer', 'calculator', 'abacus'],
 },dict(child='', sibling='')
 
 adj2very = [
@@ -348,8 +367,12 @@ _country2capital = [ #The capital of Germany is Berlin.
     ('Greece', 'Athens'),
 ]
 
-def country2capital(): return {country: [capital] for country, capital in _country2capital}
-def capitals_of_countries(): return {capital: [country] for country, capital in _country2capital}
+def country2capital(): return {country: [capital] for country, capital in _country2capital}, dict(child='the capital of')
+def capitals_of_countries():
+    capitals_of_countries.name = 'capitals of cities'
+    capitals_of_countries.wh = 'which country'
+    capitals_of_countries.sub_wh = 'the country which'
+    return {capital: [country] for country, capital in _country2capital}, dict(child='the capital of')
 
 def countries_of_cities(): 
     countries_of_cities.name = 'countries of cities'
@@ -540,10 +563,11 @@ def xxx_be(positive=True):
     return s if s.startswith(",") else " " + s
     
 synonym_dict = {
-    'has': ['owns', 'possesses'], 'have': ['own', 'possess'],
-    'wants to go to': ['wants to visit', 'longs for', 'yearns for'], 'want to go to': ['want to visit', 'long for', 'yearn for'],
+    # 'has': ['owns', 'possesses'], 'have': ['own', 'possess'],
+    #'wants to go to': ['wants to visit', 'longs for', 'yearns for'], 'want to go to': ['want to visit', 'long for', 'yearn for'],  # nrk debug
     'arrived': ['appeared', 'showed up'], 'arrive': ['appear', 'show up'],
 }
+
 synonym_dict = {k: [k] + v for k, v in synonym_dict.items()}
 
 def sampled_synonym_dict(): return {k: choice(v) for k, v in synonym_dict.items()}
@@ -908,27 +932,42 @@ def _str(l, vocab=None, sep=' '):
     if isinstance(l, str) or not isinstance(l, Iterable): l = [l]
     # l = [e for e in l if not my_isinstance(e, Sequence)] #type(e).__name__ != 'Sequence']
     if isinstance(l, (dict, OrderedDict)): l = [f'{k}: {v}' for k, v in l.items()]
+    print(sep.join(str(i) for i in l))
     return sep.join(str(i) for i in l)
 
 def options2str(options): return '[' + ' | '.join(options) + ']'  # ' or '.join(options) + '?'
 
-def make_examples(task, nrows=4, vocab_for_each_row=False, **kwargs):
+def split_examples(examples):
+    assert len(examples) % 2 == 0
+    nrows = len(examples) // 2
+    pairs = [[examples[i * 2], examples[i * 2 + 1]] for i in range(nrows)]
+    k_shot = nrows - 1
+    k_shot_examples = [choice(p) for p in pairs[:k_shot]]
+    return k_shot_examples + [pairs[-1][0]], k_shot_examples + [pairs[-1][1]]
+
+def make_examples(task, nrows=4, vocab_for_each_row=False, counter_paired=False, **kwargs):
     vocab_fn, example_gen_fn = task[:2]
     vocabs, examples = [], []
     qa_set = set() # for dedup
     if any(v.__class__.__name__ == 'PoSet' for v in vocab_fn()):
         vocab_for_each_row = True
     if not vocab_for_each_row: vocab = vocab_fn()
-    for i in range(nrows * 2):
+    for i in range(nrows * (1 + int(not(counter_paired)))):
         if vocab_for_each_row: vocab = vocab_fn()
-        cxt, query, candidates, ans_chain, *a = example_gen_fn(vocab, **kwargs)
-        # print("In make_examples: context:",cxt,"query:",query,"candidates:",candidates,"ans_chain:",ans_chain)  # mgy debug
-        if isinstance(query, list): query = tuple(query)
-        if (tuple(cxt), query, ans_chain) not in qa_set:
-            qa_set.add((tuple(cxt), query, ans_chain))
+        example_or_pair = example_gen_fn(vocab, **kwargs)
+        if counter_paired:  # example_or_pair is a pair
+            examples += example_or_pair
             vocabs.append(vocab)
-            examples.append([cxt, query, candidates, ans_chain, *a])
-        if len(examples) == nrows: break
+        else:  # example_or_pair is an example
+            cxt, query, candidates, ans_chain, *a = example_or_pair
+            # print("In make_examples: context:",cxt,"query:",query,"candidates:",candidates,"ans_chain:",ans_chain)  # mgy debug
+            if isinstance(query, list): query = tuple(query)
+            if (tuple(cxt), query, ans_chain) not in qa_set:
+                qa_set.add((tuple(cxt), query, ans_chain))
+                vocabs.append(vocab)
+                examples.append([cxt, query, candidates, ans_chain, *a])
+            if len(examples) == nrows: break
+    if counter_paired: vocabs, examples = [vocabs] * 2, split_examples(examples)
     return vocabs, examples
 
 def _item2str(item, vocab=None): #, reverse=False):
@@ -1023,7 +1062,8 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False)
     if substring.strip() in ['->', '?', ':']:
         char_locations = [whole_string.index(substring), whole_string.rindex(substring)]
     else:
-        pattern = r"\b%s(?:s|es)?\b" if not substring.startswith(" ") else r"%s(?:s|es)?\b"
+        pattern = r"\b%s(?:s|es)?" if not substring.startswith(" ") else r"%s(?:s|es)?"
+        if substring[-1] not in ['.']: pattern = pattern + r"\b"
         try: matches = list(re.finditer(pattern % substring, whole_string))
         except Exception: print(f'sub = {substring}, whole = {whole_string}'); raise
         assert len(matches) > 0, f'{tokens}\n{substring} not match {whole_string}'
@@ -1363,7 +1403,6 @@ def decorate_rel(task, hop, kwargs):
         rel = vocabs[hop].relations[0]
         for k, v in kwargs.items(): setattr(rel, k, v)
         return vocabs
-
     task = new_vocab_fn, gen_fn, *a
     return task
 
@@ -1427,9 +1466,12 @@ def swap_qa(task):
         new_cxt2str = deepcopy(cxt2str)
         new_cxt2str.keywords['item2str'] = swapped_item2str
 
-    def new_query2str(q, v):
-        wh, the = get_wh_and_the(v[1])
-        return f'{query2str(wh, v)} {q}?'.replace("who's", "whose") + capitalize(the)
+    if isinstance(query2str, tuple):
+        new_query2str = query2str[1]
+    else:
+        def new_query2str(q, v):
+            wh, the = get_wh_and_the(v[1])
+            return f'{query2str(wh, v)} {q}?'.replace("who's", "whose") + capitalize(the) 
     task = (new_vocab_fn, gen_fn, inst, new_cxt2str, new_query2str, *a)
     return task
 
@@ -1438,20 +1480,24 @@ def try_wh_question2statement(s, vocab):  # convert wh-questions brought by swap
     wh, sub_wh = vocab.data.wh + ' ', vocab.data.sub_wh + ' '
     if wh in s and sub_wh not in s:
         assert '?' in s, s
-        return s.replace(wh, sub_wh).replace('?', ' is')
+        s = s.replace(wh, sub_wh)  # who has apple? -> the one who has apple?
+        for old, new in [('who is', "who's"), ('what is', "who's")]: s = s.replace(old, new)
+        assert ' is ' not in s, s  # avoid two "is" in sent, which would cause bug in negate_sent
+        s = s.replace('?', ' is')  # the one who has apple? -> the one who has apple is
+        return s
     return s
 
 def negate_sent(s, vocabs):  # TODO: need better way of negating a sentence
     if s.startswith('So '): s = s[3:]
     s = try_wh_question2statement(s, vocabs[1])
-    return 'It is not the case that ' + s
+    # return 'It is not the case that ' + s
     s00 = s0 = s
     n_replaced = 0
     for old, new in [
         # (" likes", " does not like"), (" owns", " does not own"), (" possesses", " does not possess"),
+        (r"\bis\b", "is not"),(r"\bhas\b", "does not have"),(r"\bowns\b", "does not own"), 
         (" wants ", " does not want "), #(" wanna ", " does not want to "),
-        (" arrived", " did not arrive"),
-        (r"\bis\b", "is not"), (r"\bhas\b", "does not have")]:
+        (" arrived", " did not arrive")]:
         if r"\b" in old: s = re.sub(old, new, s0)
         else: s = s0.replace(old, new)
         if s != s0:
@@ -1540,51 +1586,52 @@ def remove_query(task):
     task = vocab_fn, new_gen_fn, inst, cxt2str, new_query2str, *a
     return task
 
-def _g2c(g_fn, cls_labels=['Yes', 'No', 'Maybe'][:2]):
+def _g2c(g_fn, cls_labels=['Yes', 'No', 'Maybe'][:2], counter_paired=False):
     def wrapped(*args,**kwargs):
         cxt, query, candidates, (tgt, *a, ans0, ans) = g_fn(*args,**kwargs)
-        _candidates = candidates2dict(candidates)
         vocabs = args[0]
         has_local_hop = vocabs[0].data != vocabs[1].data
         rel0, rel1 = [v.relations[0] for v in vocabs]
-        if len(vocabs[1].relations) > 1:
-            assert isinstance(ans, tuple)
-            assert len(vocabs[1].relations) == len(ans) == 2
-            label, _ans = (cls_labels[0], ans[0]) if random() < 0.5 else (cls_labels[1], ans[1])
-            _ans0, _dtgt, _dans0 = ans0, tgt, ans0
-        elif random() < 0.5:
-            label = cls_labels[0]
-            _ans0, _ans = ans0, ans
-            _dtgt, _dans0 = tgt, ans0
-        else:
-            label = cls_labels[1]
-            if not has_local_hop and len(cxt) == 1:  # for nrk g2c tasks, e.g. John is a boy? Yes
-                _ans = choice(list_diff(rel1.dom(), [ans]))
-                # _ans0 = choice(rel1.f(_ans)) # ans0 does not occur in example_str
-                cxt, tgt, _ans0 = [], None, None
-                _dtgt, _dans0 = None, None
-            elif len(cxt) == 1:  # e.g. John has an apple. So Tom has a kind of fruit? No
-                query = choice(list_diff(rel0.dom(), [query]))
-                _dtgt, _dans0, _ans = tgt, ans0, ans
+
+        def _gen(is_positive):
+            _query = query  # avoid iterative modifications to query
+            if len(vocabs[1].relations) > 1:
+                assert isinstance(ans, tuple)
+                assert len(vocabs[1].relations) == len(ans) == 2
+                label, _ans = (cls_labels[0], ans[0]) if is_positive else (cls_labels[1], ans[1])
+                _dtgt, _dans0 = tgt, ans0
+            elif is_positive:
+                label = cls_labels[0]
+                _ans = ans
+                _dtgt, _dans0 = tgt, ans0
             else:
-                _dtgt, _dans0, _ans = choice([(t, c0, c) for q, t, c0, c in zip(
-                    *[_candidates[k] for k in ['query', 'tgt', 'ans0', 'ans']])
-                    if c != ans and (query is None or q != query)])
-            _ans0 = ans0
-        # (_ans0, _ans), label = ((ans0, ans), cls_labels[0]) if random() < 0.5 else \
-        #     (choice([(c0, c) for q, *_, c0, c in zip(*candidates) if c != ans and (query is None or q != query)]), cls_labels[1])
-        if isinstance(candidates, OrderedDict): candidates['cls'] = cls_labels
-        else: candidates = candidates + [cls_labels]  # XD MlM_gen(cls_labels,) -> rlr_gen
-        return cxt, query, candidates, (tgt, _dtgt, _dans0, *a, _ans0, _ans), label
+                label = cls_labels[1]
+                if not has_local_hop and len(cxt) == 1:  # for nrk g2c tasks, e.g. John is a boy? Yes
+                    _ans = choice(list_diff(rel1.dom(), [ans]))
+                    # _ans0 = choice(rel1.f(_ans)) # ans0 does not occur in example_str
+                    # cxt, tgt = [], None
+                    _dtgt, _dans0 = None, None
+                elif len(cxt) == 1:  # e.g. John has an apple. So Tom has a kind of fruit? No
+                    _query = choice(list_diff(rel0.dom(), [query]))
+                    _dtgt, _dans0, _ans = tgt, ans0, ans
+                else:
+                    _dtgt, _dans0, _ans = choice([(t, c0, c) for q, t, c0, c in zip(
+                        *[candidates2dict(candidates)[k] for k in ['query', 'tgt', 'ans0', 'ans']])
+                        if c != ans and (query is None or q != query)])
+            _candidates = deepcopy(candidates)  # avoid in-place or iterative modifications to candidates
+            if isinstance(_candidates, OrderedDict): _candidates['cls'] = cls_labels
+            else: _candidates = _candidates + [cls_labels]  # XD MlM_gen(cls_labels,) -> rlr_gen
+            return cxt, _query, _candidates, (tgt, _dtgt, _dans0, *a, ans0, _ans), label
+        return (_gen(True), _gen(False)) if counter_paired else _gen(random() < 0.5)
     wrapped.__name__ = f'g2c[{fn2str(g_fn)}]'
     return wrapped
 
-def g2c(task):
+def g2c(task, counter_paired=False):
     vocab_fn, gen_fn, inst, cxt2str, query2str, *a = task
 
     if not isinstance(cxt2str, partial):  # tasks_r, remove_local_hop
         def new_query2str(q, v): return 'Answer with Yes or No. ' + capitalize(query2str(q, v))
-        task = (vocab_fn, _g2c(gen_fn), inst, cxt2str, new_query2str, *a)
+        task = (vocab_fn, _g2c(gen_fn, counter_paired=counter_paired), inst, cxt2str, new_query2str, *a)
         return task
     
     new_cxt2str = deepcopy(cxt2str)
@@ -1592,20 +1639,31 @@ def g2c(task):
     # new_cxt2str.keywords['prefix'], new_cxt2str.keywords['suffix'] = 'Premise: ', ''  # cxt == 1
     
     def new_query2str(q, v):
-        s = query2str(q, v).replace('So ', '')
-        s = try_wh_question2statement(s, v[1])
-        # return 'Answer with Yes, No. Can it be inferred from the premise that ' + s
-        # return 'Answer with No or Maybe. Can it be inferred from the premise that ' + s  # 0.53 0.75 / 0.89 0.625
-        # return 'Answer with Yes, No or Maybe. So is it likely that ' + s  # 0.52 0.68 / 0.60 0.66
-        # return 'Answer with No or Maybe. So may it be possible that ' + s  # better
-        return 'Answer with Yes or No. So is it possible that ' + s  # better
-        # return 'Answer with No or Maybe. So can it be true that ' + s  # 0.43 0.75 / 0.55 0.718
-        # return 'Answer with No or Maybe. Given the premise, can it be true that ' + s
-        # return 'Answer with No or Maybe. So ' + s
-        # return 'Answer with No or Maybe. So is it true that ' + s  #  / 0.60 0.718
-        # return 'Answer with No or Maybe. So, ' + s  0.43 0.68 / 0.51 0.625
+        s = query2str(q, v)
+        if s.startswith('But '):
+            s = s.replace('But ', '')
+            s = try_wh_question2statement(s, v[1])
+            # return 'Answer with Yes or No. ' + s
+            return 'Answer with Yes or No. Is it possible that ' + s
+            # return 'Answer with Yes, No or Unknown. Is it true that ' + s
+            # return 'Answer with Yes or No. Does the premise contradict the statement that ' + s
+        else:
+            s = s.replace('So ', '')
+            s = try_wh_question2statement(s, v[1])
+            return 'Answer with Yes or No. Can it be inferred from the premise that ' + s
+            # return 'Answer with No or Maybe. Can it be inferred from the premise that ' + s  # 0.53 0.75 / 0.89 0.625
+            # return 'Answer with Yes, No or Maybe. So is it likely that ' + s  # 0.52 0.68 / 0.60 0.66
+            # return 'Answer with No or Maybe. So may it be possible that ' + s  # better
+            # return 'Answer with Yes or No. So is it possible that ' + s  # better
+            # return 'Answer with No or Maybe. So can it be true that ' + s  # 0.43 0.75 / 0.55 0.718
+            # return 'Answer with No or Maybe. Given the premise, can it be true that ' + s
+            # return 'Answer with No or Maybe. So ' + s
+            # return 'Answer with No or Maybe. So is it true that ' + s  #  / 0.60 0.718
+            # return 'Answer with No or Maybe. So, ' + s  0.43 0.68 / 0.51 0.625
     
-    task = (vocab_fn, _g2c(gen_fn), inst, new_cxt2str, new_query2str, *a)
+    cls_labels=['No', 'Yes'] if query2str('Q', vocab_fn()).startswith('But ') else ['Yes', 'No']
+    task = (vocab_fn, _g2c(gen_fn, cls_labels=cls_labels, counter_paired=counter_paired),
+            inst, new_cxt2str, new_query2str, *a)
     return task
 
 def has_local_hop(task):
@@ -1629,7 +1687,7 @@ def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
         if do_negate: task = negate(task)
         if not has_local_hop(task): task = remove_local_hop(task, do_swap_qa, do_rm_query, do_g2c, cxt_len)
         if do_rm_query: task = remove_query(task)
-        if do_g2c: task = g2c(task)
+        if do_g2c: task = g2c(task, counter_paired=do_g2c == 'counter_paired')
     except InvalidTransException as e:
         print(f'\ntransform_task failed: {e} ({args2str(args)})')
         return None
@@ -1650,7 +1708,7 @@ def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
         return None
     return task
 
-def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
+def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, counter_paired=False,
             tokenizer=None, max_length=512, plot=True, verbose=True):
     vocab_fn, gen_fn, cxt2str, query2str, *a = task
     position_relevant = isinstance(gen_fn, partial) and \
@@ -1660,13 +1718,14 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
     # ans_counts = [('a', nrows)]; ind_counts = [(0, 9), (1, 1)]
     i = 0
     conditions = [True, ]
-    while any(conditions):
-        vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len)
+    while (i == 0 or nrows >= 4) and any(conditions):
+        vocabs, examples = make_examples(task, nrows=nrows, cxt_len=cxt_len, counter_paired=counter_paired)
+        if counter_paired: break  # avoid balance checking for g2c tasks
+        cxt, query, candidates, (tgt, *_, ans0, ans), *cls = examples[0]
+        if len(cls) > 0: break  # avoid balance checking for g2c tasks
         ans_counts = Counter([ans for cxt, query, cands, (*_, ans), *cls in examples]).most_common()
         answer_indices = [get_answer_index(e) for e in examples]
         ind_counts = Counter(answer_indices).most_common()
-        cxt, query, candidates, (tgt, *_, ans0, ans), *cls = examples[0]
-        if len(cls) > 0: break
         conditions = [
             not position_relevant and len(ind_counts) > 1 and (len(ind_counts) < cxt_len 
                                     or ind_counts[0][1] > ind_counts[-1][1] * 3),
@@ -1683,14 +1742,18 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0,
         label_probs = F.one_hot(torch.LongTensor(answer_indices))
         _ = plt.figure(figsize=(10, 0.7))
         _ = sns.heatmap(label_probs.T, cbar=False); plt.show()
-    examples, text, bos_token = make_input_str(task, vocabs, examples,
-        rev_item2str=rev_item2str, abstract=abstract, tokenizer=tokenizer)
-    if verbose: print(text)
-    if my_isinstance(tokenizer, LLAMATokenizer):  # add by lxy  avoid  len(text) > max_length
-        if len(tokenizer.tokenize(text)) >= max_length:
-            return generate(task, nrows - 1, cxt_len, rev_item2str, abstract, plot, verbose, max_length, tokenizer)
-    return examples, text, bos_token
-
+    all_vocabs, all_examples = (vocabs, examples) if counter_paired else ([vocabs], [examples])
+    ret = []
+    for vocabs, examples in zip(all_vocabs, all_examples):
+        examples, text, bos_token = make_input_str(task, vocabs, examples,
+            rev_item2str=rev_item2str, abstract=abstract, tokenizer=tokenizer)
+        if verbose: print(text)
+        if my_isinstance(tokenizer, LLAMATokenizer):  # add by lxy  avoid  len(text) > max_length
+            if len(tokenizer.tokenize(text)) >= max_length:
+                return generate(task, nrows - 1, cxt_len, rev_item2str, abstract, plot, verbose, max_length, tokenizer)
+        ret.append((examples, text, bos_token))
+    return ret if counter_paired else ret[0]
+        
 def task2str(task):
     vocab_fn, gen_fn, *_ = task
     return f"{fn2str(gen_fn)}[{','.join(str(v) for v in vocab_fn())}]"
@@ -1754,4 +1817,3 @@ inverse_fns.keys()
 """
 # from DreamCoder https://github.com/ellisk42/ec
 """
-print('666')
