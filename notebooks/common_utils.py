@@ -27,7 +27,7 @@ import torch.nn.functional as F
 
 def join_lists(x, dedup=False):
     l = list(chain.from_iterable(x))
-    if dedup: l = list(set(l))
+    if dedup: l = list(OrderedDict.fromkeys(l)) # list(set(l)) # to keep order
     return l
 
 def list_diff(l1, l2):  # will preserve order of elements in l1 compared to list(set(l1) - set(l2))
@@ -275,7 +275,7 @@ def fisher_discriminant_ratio(x, y, labels=['▁Yes', '▁No'], plot=True):
         elif y.ndim == 2:
             plt.plot(y0[:, 0], y0[:, 1], 'gx', alpha=0.5, label=labels[0]);
             plt.plot(y1[:, 0], y1[:, 1], 'rx', alpha=0.5, label=labels[1]);
-            print('gx', y0[:, 1]); print('rx', y1[:, 1])  # nrk debug
+            # print('gx', y0[:, 1]); print('rx', y1[:, 1])  # nrk debug
             line_range = [min(np.min(y[:, 0]), np.min(y[:, 1])), max(np.max(y[:, 0]), np.max(y[:, 1]))]
             plt.plot(line_range, line_range, color='k', linestyle='-', alpha=0.2)
             logits_diff = np.concatenate([y0[:, 1] - y0[:, 0], y1[:, 0] - y1[:, 1]]).mean()

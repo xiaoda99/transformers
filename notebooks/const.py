@@ -5,7 +5,7 @@ from dataclasses import dataclass
 # from nltk.corpus import cmudict  # nltk.download('cmudict')
  
 # from common_utils import Timer
-# from transformers import AutoTokenizer
+from transformers import LlamaTokenizer
 # cache_dir = f'/nas/xd/.cache/torch/transformers/'  # use symlink to unify to /nas on different machines
 # with Timer('In const.py: Loading tokenizer'):
 #     tokenizer = AutoTokenizer.from_pretrained('EleutherAI/gpt-j-6B', local_files_only=True, cache_dir=cache_dir)
@@ -31,8 +31,9 @@ def all_persons(tokenizer):
         boys = [l.strip() for l in open('boy_names_1000.txt').readlines()]
         girls = [l.strip() for l in open('girl_names_1000.txt').readlines()]
 
-        girls = [name for name in girls if max(len(tokenizer.tokenize(name)), len(tokenizer.tokenize(' ' + name))) == 1]
-        boys = [name for name in boys if max(len(tokenizer.tokenize(name)), len(tokenizer.tokenize(' ' + name))) == 1]
+        wp = '' if isinstance(tokenizer, LlamaTokenizer) else ' '
+        girls = [name for name in girls if max(len(tokenizer.tokenize(name)), len(tokenizer.tokenize(wp + name))) == 1]
+        boys = [name for name in boys if max(len(tokenizer.tokenize(name)), len(tokenizer.tokenize(wp + name))) == 1]
         boys = sample(boys, len(girls))
         all_persons.boys, all_persons.girls = boys, girls
     return all_persons.boys, all_persons.girls
@@ -41,10 +42,14 @@ def persons(tokenizer):
     boys, girls = all_persons(tokenizer)
     return boys + girls
 
-def genders_of_persons():
+def genders_of_persons(tokenizer=None):
     genders_of_persons.wh = 'who'
     genders_of_persons.sub_wh = 'the one who'
-    return {'a boy': boys, 'a girl': girls}, dict(child='', sibling='a person of the same gender as')
+    genders_of_persons.bos = {'child': ' the'}
+    _boys, _girls = all_persons(tokenizer) if tokenizer is not None else (boys, girls)
+    return {'the boy': boys, 'the girl': girls}, dict(child='', sibling='a person of the same gender as') 
+    # return {'boy': _boys, 'girl': _girls}, dict(child='', sibling='a person of the same gender as')  
+    # return {'a male person': boys, 'a female person': girls}, dict(child='', sibling='a person of the same gender as')
 
 verb_form =[
     ('sleep','slept'),

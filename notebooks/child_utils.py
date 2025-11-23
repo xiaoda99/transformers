@@ -16,7 +16,7 @@ import traceback
 import time
 import re
 import numpy as np
-
+import inspect
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -148,7 +148,7 @@ def kinds_of_things():
                 # 'subway', 'van', 'boat'],  # transportation
     # 'furniture': ['sofa', 'couch'], #'desk', 'chair', 'table', 'bed', 'bookshelf'],# 'closet', 'wardrobe'],
     # 'tool': ['hammer', 'spanner', 'awl', 'scissors', 'saw', 'shovel', 'screwdriver', 'wrench', 'drill', 'pliers'], #, 'axe' should be weapon?
-    'clothing': ['shirt', 'T-shirt', 'jeans', 'jacket', 'pants', 'trousers', 'shoes', 'sweater', 'jersey', 'underwear', 'costume', 'uniform'],#'dress', 'coat', 'socks', 'hat', 'tie', 'skirt', ],
+    'clothes': ['shirt', 'T-shirt', 'jeans', 'jacket', 'pants', 'trousers', 'shoes', 'sweater', 'jersey', 'underwear', 'costume', 'uniform'],#'dress', 'coat', 'socks', 'hat', 'tie', 'skirt', ],
     # 'clothing': ['shirt', 'T-shirt', 'jeans', 'jacket', 'pants', 'trousers', 'shoes', 'sweater', 'underwear', 'costume', 'uniform',   'jersey'],  # bad order
     # 'appliance': ['microwave', 'fridge', 'washer', 'dryer', 'washing machine'],  #, 'oven'
     # 'fish': [],
@@ -156,7 +156,7 @@ def kinds_of_things():
     # 'electronic device': ['laptop', 'iPad', 'phone', 'smartphone'], #'computer', 'television', 'camera', 'printer'],
     # 'electronic device': ['iPad', 'phone', 'smartphone',    'laptop'],  # bad order
     'sport': ['football', 'basketball', 'baseball'],# 'volleyball'],  # 'sport or ball?
-    'musical instrument': ['piano', 'violin', 'guitar'],
+    'instrument': ['piano', 'violin', 'guitar'],  # musical instrument
     # 'utensil': ['spoon', 'fork', 'knife', 'plate', 'cup', 'bowl', 'pot'],
     # 'stationery': ['pen', 'pencil', 'paper', 'eraser', 'notebook', 'book', 'ruler', 'ink', 'stapler', 'rubber'],
 }, dict(child='a kind of', sibling='the thing of the same kind as')
@@ -288,7 +288,7 @@ def capabilities_of_things():  #nrk add
     'communicating': ['phone', 'telephone', 'telegraph', 'radio'], # internet, email
     'cleaning': ['broom', 'mop', 'vacuum cleaner'],
     'painting': ['brush', 'palette', 'roller', 'spray'],
-    'swiming': ['swimsuit', 'goggles', 'swim fins'],
+    'swimming': ['swimsuit', 'goggles', 'swim fins'],
     'calculating': ['computer', 'calculator', 'abacus'],
 },dict(child='', sibling='')
 
@@ -410,6 +410,15 @@ def city2resident():
     return {capital: city2resident.demonyms[country.replace('the ', '')] for country, capital in _country2capital}
 
 from child_frames import adjs
+
+def filter_1token(data_fn, tokenizer):
+    def new_data_fn():
+        data, verbalizers = data_fn()
+        wp = '' if isinstance(tokenizer, LlamaTokenizer) else ' '
+        def filter_fn(l): return [x for x in l if len(tokenizer.tokenize(wp + x)) == 1]
+        return {k: filter_fn(v) for k, v in data.items()}, verbalizers
+    return new_data_fn
+
 def a_(noun):  # prepend indefinite article a/an if possible
     if noun[0].isupper() or noun in temporal_words + adjs:
         return noun
@@ -616,7 +625,7 @@ class Relation(object):
     def dom(self, xs=None): return list(self._dict.keys())
     def codom(self, ys=None):
         elems = join_lists(self._dict.values()) if self.name != 'sibling' else list(self._dict.keys())
-        if self.name in ['parent', 'similar', 'opposite']: elems = list(set(elems))
+        if self.name in ['parent', 'similar', 'opposite']: elems = list(dict.fromkeys(elems))
         else: assert len(elems) == len(set(elems)), f'{self.name} {len(elems)} != {len(set(elems))}'
         return elems
 
@@ -695,7 +704,7 @@ class PoSet(Set):
 class SymSet(Set):
     def __init__(self, data):
         super().__init__(data, ['similar', 'opposite', 'sibling', 'equal'])
-        data = data()
+        data, verbalizers = data()
         for pair in data:
             for similars, opposites in [(pair[0], pair[1]), (pair[1], pair[0])]:
                 for e in similars:
@@ -932,7 +941,6 @@ def _str(l, vocab=None, sep=' '):
     if isinstance(l, str) or not isinstance(l, Iterable): l = [l]
     # l = [e for e in l if not my_isinstance(e, Sequence)] #type(e).__name__ != 'Sequence']
     if isinstance(l, (dict, OrderedDict)): l = [f'{k}: {v}' for k, v in l.items()]
-    print(sep.join(str(i) for i in l))
     return sep.join(str(i) for i in l)
 
 def options2str(options): return '[' + ' | '.join(options) + ']'  # ' or '.join(options) + '?'
@@ -967,7 +975,8 @@ def make_examples(task, nrows=4, vocab_for_each_row=False, counter_paired=False,
                 vocabs.append(vocab)
                 examples.append([cxt, query, candidates, ans_chain, *a])
             if len(examples) == nrows: break
-    if counter_paired: vocabs, examples = [vocabs] * 2, split_examples(examples)
+    if counter_paired:
+        vocabs, examples = [vocabs] * 2, split_examples(examples)
     return vocabs, examples
 
 def _item2str(item, vocab=None): #, reverse=False):
@@ -1062,7 +1071,7 @@ def locate(whole_string, tokens, substring, return_last=False, return_all=False)
     if substring.strip() in ['->', '?', ':']:
         char_locations = [whole_string.index(substring), whole_string.rindex(substring)]
     else:
-        pattern = r"\b%s(?:s|es)?" if not substring.startswith(" ") else r"%s(?:s|es)?"
+        pattern = r"(?<!-)\b%s(?:s|es)?" if not substring.startswith(" ") else r"%s(?:s|es)?"  #nrk add(?<!-) To prevent matching '-shirt' when matching 'shirt'
         if substring[-1] not in ['.']: pattern = pattern + r"\b"
         try: matches = list(re.finditer(pattern % substring, whole_string))
         except Exception: print(f'sub = {substring}, whole = {whole_string}'); raise
@@ -1156,6 +1165,10 @@ def example2ranges(example, tokens, bos_token, case_sensitive=False, trimmed=Fal
         rel = locate(whole_string, tokens, rel_word, return_last=True) if rel_word is not None and rel_word in whole_string else None,
         example = (0, len(tokens))
     )
+    #****nrk debug enforce ans[0] = bos[1]
+    if cls is None:
+        ranges.ans = tuple([ranges.bos[1], ranges.ans[1]])
+    #****
     if len(others) > 0 and cls is not None:
         assert len(others) in [2, 4], str(others) # len(others) == 4 for rlrlr
         dtgt, dans0 = others[:2]
@@ -1224,8 +1237,44 @@ def locate_ranges(examples, example_strs, tokenizer, input_ids, bos_token, instr
 
 abstract_bos_token = ' ->'
 
-def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_token='Ċ',
+def locate_bos(tokens, bos_token):
+    bos_indices = []
+    found_in_example = False
+    for i, token in reversed(list(enumerate(tokens))):
+        if token == bos_token and not found_in_example:
+            bos_indices.insert(0, i)
+            found_in_example = True
+        elif token == '\n':
+            found_in_example = False
+    return bos_indices
+
+def locate_answers(input_ids, tokenizer, bos_indices=None, bos_tokens=None, eos_tokens=None,
         space_token='Ġ', nrows=None):
+    if bos_tokens is not None:
+        assert all(t == bos_tokens[0] for t in bos_tokens)
+        bos_token = bos_tokens[-1]
+    if isinstance(tokenizer, types.FunctionType):  # api models
+        def pad(l): return [None] * (nrows - 1) + l
+        if tokenizer.is_chat:
+            input_ids, answer = split_answer(input_ids, bos_token)
+            _, logits = tokenizer(input_ids)
+            return pad([-1]), pad([1]), pad([[answer]]), logits # sue labels to pass logits
+        tokens, logits = tokenizer(input_ids)
+        assert bos_tokens is not None
+        if bos_token not in tokens: # e.g. bos_token=owns (got by rsplit_bos), tokens=[own, s]. Use api tokenizer to get the correct bos.
+            input_without_ans, answer = split_answer(input_ids, bos_token)
+            bos_token = tokenizer(input_without_ans)[0][-1]
+        assert bos_token in tokens, f"bos_token = {bos_token}, tokens = {tokens}"
+        bos_indices = locate_bos(tokens, bos_token)
+        if len(bos_indices) != nrows:
+            assert len(bos_indices) == nrows + 1, f'{len(bos_indices)} > {nrows}'
+            bos_indices = bos_indices[-nrows:]
+
+        eos_indices = [bos_i + 2 for bos_i in bos_indices]
+        answers = [tokens[bos_i + 1: eos_i] for bos_i, eos_i in zip(bos_indices, eos_indices)]
+        # labels = torch.ones((1, len(tokens)), dtype=torch.long) * (-100)
+        # return pad(bos_indices), pad(eos_indices), pad(answers), labels
+        return bos_indices, eos_indices, answers, logits  # use labels to pass logits
     assert input_ids.size(0) == 1  # bsz == 1
     if bos_indices is None:
         bos_id = tokenizer.convert_tokens_to_ids(bos_token.replace(' ', space_token))
@@ -1234,8 +1283,9 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
         assert nrows == len(bos_indices)
     else:
         nrows = len(bos_indices)
-    if eos_token is not None:
-        eos_id = tokenizer.convert_tokens_to_ids(eos_token)
+    if eos_tokens is not None:
+        assert all(t == eos_tokens[0] for t in eos_tokens)
+        eos_id = tokenizer.convert_tokens_to_ids(eos_tokens[0])
         eos_indices = (input_ids[0] == eos_id).nonzero()[-nrows:].squeeze(1).tolist()
     else:
         # eos_indices = bos_indices[1:] + [input_ids.size(1)]
@@ -1248,28 +1298,38 @@ def locate_answers(input_ids, tokenizer, bos_indices=None, bos_token=None, eos_t
         answers.append(ans_ids.numpy())
     return bos_indices, eos_indices, answers, labels
 
+def split_answer(text, bos_token):
+    i = text.rindex(bos_token) + len(bos_token)
+    return text[:i], text[i:].strip()
+
 # bos_token='▁is'; eos_token='</s>' for s2s
 # bos_token='Ġ->', eos_token='Ċ' for gpt
-def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_token=None, s2s=False):
+def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_tokens=None, eos_tokens=None, s2s=False):
     #if isinstance(tokenizer, LLAMATokenizer): text = text.replace('\n', '\ \n') # mqy
-    input_ids = tokenizer.encode(text, return_tensors='pt')
+    use_api = isinstance(tokenizer, types.FunctionType)
+    if not use_api: input_ids = tokenizer.encode(text, return_tensors='pt')
+    else: input_ids = text
+    # elif not tokenizer.is_chat: input_ids = text
+    # else: input_ids, answer = split_answer(text, bos_tokens[-1])
     example_strs = text.strip('\n').split(NEW_LINE)  # strip the trailing '\n'
     if len(example_strs) == len(examples): instruction = None
     else: assert len(example_strs) == len(examples) + 1; instruction, *example_strs = example_strs
-    ranges = locate_ranges(examples, example_strs, tokenizer, input_ids[0].tolist(), bos_token, instruction=instruction)
-    # by lxy: when bos is tokenized into multiple tokens, e.g. 'likes' -> ['__lik', 'es'] in LLaMA, use last token's index
-    bos_indices = [r.bos[-1] - 1 for r in ranges]  # [r.bos[0] for r in ranges]
-    bos_indices, eos_indices, answers, labels = locate_answers(
-        input_ids, tokenizer, bos_indices=bos_indices, eos_token=eos_token)
+    ranges, bos_indices = None, None
+    if not use_api:
+        ranges = locate_ranges(examples, example_strs, tokenizer, input_ids[0].tolist(), bos_tokens, instruction=instruction)
+        # by lxy: when bos is tokenized into multiple tokens, e.g. 'likes' -> ['__lik', 'es'] in LLaMA, use last token's index
+        bos_indices = [r.bos[-1] - 1 for r in ranges]  # [r.bos[0] for r in ranges]
+    bos_indices, eos_indices, answers, labels = locate_answers(input_ids, tokenizer,
+        bos_indices=bos_indices, bos_tokens=bos_tokens, eos_tokens=eos_tokens, nrows=len(examples))
     if s2s:  # for t5 models
         bos_i, eos_i = bos_indices[-1], eos_indices[-1]
         assert eos_i == input_ids.size(1) - 1, f'{eos_i} != {input_ids.size()}[1] - 1'
-        assert tokenizer.convert_ids_to_tokens(input_ids[0, -1].item()) == eos_token == '</s>', \
+        assert tokenizer.convert_ids_to_tokens(input_ids[0, -1].item()) == eos_tokens == '</s>', \
             f"{tokenizer.convert_ids_to_tokens(input_ids[0, -1].item())} != '</s>'"
         input_ids = torch.cat([input_ids[:, : bos_i + 1], input_ids[:, -1:]], dim=1) # append trailing '</s>'
         answers, labels = answers[-1:], labels[:, bos_i: eos_i - 1]
         bos_indices, eos_indices = [bos_i - bos_i], [eos_i - bos_i]
-    else:
+    elif not use_api:
         labels[:, :bos_indices[k_shot]] = -100  # 只算k_shot个示例后的loss
 
     candidates, answer_indices = None, None
@@ -1283,10 +1343,15 @@ def make_data_tuple(text, examples, tokenizer, k_shot=3, bos_token=' ->', eos_to
     cxt, query, cands, *_ = examples[0]
     cands = candidates2dict(cands)
     if cands is not None and len(list(cands.values())[-1]) > 1:  # cxt_len > 1
-        prefix, encode = ('', partial(tokenizer.encode, add_special_tokens=False)) \
-            if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else (' ', partial(tokenizer.encode))
-        candidates = [[encode(prefix + token)[0] for token in list(candidates2dict(cands).values())[-1]]
-                    for cxt, query, cands, *_ in examples]
+        if use_api:
+            prefix = ' ' if answers[-1][0].startswith(' ') else ''
+            candidates = [[prefix + token for token in list(candidates2dict(cands).values())[-1]]
+                        for cxt, query, cands, *_ in examples]
+        else:
+            prefix, encode = ('', partial(tokenizer.encode, add_special_tokens=False)) \
+                if isinstance(tokenizer, (LLAMATokenizer, LlamaTokenizer)) else (' ', partial(tokenizer.encode))
+            candidates = [[encode(prefix + token)[0] for token in list(candidates2dict(cands).values())[-1]]
+                        for cxt, query, cands, *_ in examples]
         answer_indices = [get_answer_index(e) for e in examples]
     return input_ids, labels, ranges, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices
 
@@ -1316,6 +1381,7 @@ def multi_replace(s, pairs):
 
 def _rel_cands2str(rel_candidates, vocabs, i=1, verb='include'):
     rel_cands, vocab = rel_candidates[i], vocabs[i]
+    rel_cands = sample(rel_cands, len(rel_cands))
     def join_fn(cands): return ', '.join(cands[:-1]) + ' and ' + cands[-1]
     return f"{capitalize(vocab.data.name)} {verb} {join_fn(rel_cands)}." \
         if hasattr(vocab.data, 'name') else ''
@@ -1343,7 +1409,7 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         instruction, cxt2str, query2str, bos_token, ans2str = \
             [lget(task, i, '' if i in [2, 5] else _str) for i in range(2, 7)]
         if isinstance(instruction, tuple): instruction, rel_cands2str = instruction
-        elif vocabs[0][1].relations[0].name == 'child': rel_cands2str = _rel_cands2str
+        elif vocabs[0][1].relations[0].name in ['child', 'similar', 'opposite']: rel_cands2str = _rel_cands2str
         else: rel_cands2str = None
         if isinstance(cxt2str, types.FunctionType) and cxt2str.__name__ == 'empty_cxt2str':
             examples = [(cxt, query, None, (None, None, ans), *cls)
@@ -1351,11 +1417,18 @@ def make_input_str(task, vocabs, examples, rev_item2str=False, abstract=False, o
         query2str = post_compose(query2str, partial(multi_replace, pairs=sampled_synonym_dict()))
     def example2str(vocab, example):
         cxt, query, candidates, (*_, ans), *cls = example
-        strs = [cxt2str(cxt, vocab=vocab, rev_item2str=rev_item2str), capitalize(query2str(query, vocab))]
+        cxt_str = cxt2str(cxt, vocab=vocab, rev_item2str=rev_item2str)
+        query_str, ans_str = capitalize(query2str(query, vocab)), ans2str(ans)
+        strs = [cxt_str, query_str]
         if options_position is not None: assert False # strs.insert(options_position, options2str([c[-1] for c in candidates]))  # TODO: bug?
-        s = ' '.join(s for s in strs if s != '') + bos_token + ' ' + ans2str(ans)
+        s = ' '.join(s for s in strs if s != '') + bos_token + ' ' + ans_str
         _bos_token = bos_token
-        if bos_token == '': query_str = strs[1]; _bos_token = rsplit_bos(query_str)
+        if bos_token == '':
+            data, rel_name = vocab[1].data, vocab[1].relations[0].name
+            # TODO: data.bos is unnecessary. If bos is the, it's better to put it in data()[1]['child]
+            # so that we could always get it by rsplit_bos(query_str)
+            # _bos_token = rsplit_bos(query_str)
+            _bos_token = data.bos[rel_name] if hasattr(data, 'bos') and rel_name in data.bos else rsplit_bos(query_str)
         # if len(cls) > 0: _bos_token = '?'; s += _bos_token + ' ' + _str(cls[0]) # g2c
         if len(cls) > 0: _bos_token = ':'; s += '? Answer' + _bos_token + ' ' + _str(cls[0]) # g2c
         return s, _bos_token
@@ -1666,13 +1739,28 @@ def g2c(task, counter_paired=False):
             inst, new_cxt2str, new_query2str, *a)
     return task
 
+def corrupt_query(task):
+    vocab_fn, gen_fn, inst, cxt2str, query2str, *a = task
+
+    def new_gen_fn(*args,**kwargs):
+        cxt, query, candidates, (tgt, *a, ans0, ans), *label = gen_fn(*args,**kwargs)
+        vocabs = args[0]
+        rel0, rel1 = [v.relations[0] for v in vocabs]
+        new_query = choice(list_diff(rel0.dom(), candidates2dict(candidates)['query']))
+        return (cxt, query, candidates, (tgt, *a, ans0, ans), *label), \
+            (cxt, new_query, candidates, (tgt, *a, ans0, ans), *label)
+    new_gen_fn.__name__ = f'corrupt_query[{fn2str(gen_fn)}]'
+
+    task = vocab_fn, new_gen_fn, inst, cxt2str, query2str, *a
+    return task
+
 def has_local_hop(task):
     vocab_fn, *a = task; vocabs = vocab_fn()
     return vocabs[0].data != vocabs[1].data
 
 def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
                 rel0_kwargs=None, rel1_kwargs=None, do_swap_qa=False, do_negate=False,
-                do_rm_query=False, do_g2c=False,
+                do_rm_query=False, do_g2c=False, do_corrupt_query=False,
                 cxt_len=3, rev_item2str=False, abstract=False):
     args = {k: v for k, v in locals().items() if k not in ['task', 'e']}
     try:
@@ -1688,6 +1776,7 @@ def transform_and_validate_task(task, rel0_i=None, rel1_i=None,
         if not has_local_hop(task): task = remove_local_hop(task, do_swap_qa, do_rm_query, do_g2c, cxt_len)
         if do_rm_query: task = remove_query(task)
         if do_g2c: task = g2c(task, counter_paired=do_g2c == 'counter_paired')
+        if do_corrupt_query: task = corrupt_query(task)
     except InvalidTransException as e:
         print(f'\ntransform_task failed: {e} ({args2str(args)})')
         return None
@@ -1745,13 +1834,13 @@ def generate(task, nrows=8, cxt_len=3, rev_item2str=False, abstract=0, counter_p
     all_vocabs, all_examples = (vocabs, examples) if counter_paired else ([vocabs], [examples])
     ret = []
     for vocabs, examples in zip(all_vocabs, all_examples):
-        examples, text, bos_token = make_input_str(task, vocabs, examples,
+        examples, text, bos_tokens = make_input_str(task, vocabs, examples,
             rev_item2str=rev_item2str, abstract=abstract, tokenizer=tokenizer)
         if verbose: print(text)
         if my_isinstance(tokenizer, LLAMATokenizer):  # add by lxy  avoid  len(text) > max_length
             if len(tokenizer.tokenize(text)) >= max_length:
                 return generate(task, nrows - 1, cxt_len, rev_item2str, abstract, plot, verbose, max_length, tokenizer)
-        ret.append((examples, text, bos_token))
+        ret.append((examples, text, bos_tokens))
     return ret if counter_paired else ret[0]
         
 def task2str(task):

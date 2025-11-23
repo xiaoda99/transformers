@@ -1171,35 +1171,110 @@ def get_argmax_labels(model, hidden_states, labels, logits=None):
     argmax_labels[labels != -100] = logits.argmax(-1)[labels != -100]
     return argmax_labels
 
+def create_client(api_type):
+    from openai import OpenAI, AzureOpenAI
+    from together import Together
+    if not hasattr(create_client, 'api_keys'):
+        create_client.api_keys = json.load(open('/home/xd/projects/api_keys.json'))
+    api_key = create_client.api_keys[api_type]
+    if api_type == 'together': return Together(api_key=api_key)
+    if api_type == 'openai': return OpenAI(api_key=api_key)
+    if api_type == 'juhe': return OpenAI(api_key=api_key, base_url='https://api.juheai.top/v1/')
+    if api_type == 'azure': return AzureOpenAI(api_key=api_key,
+        azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"), api_version='2024-03-01-preview') # '2023-05-15',
+
+def get_api_model(model_name, client_type='openai'):
+    def forward(input_ids):
+        text = input_ids # tokenizer.decode(input_ids[0])
+        if client_type in ['openai', 'juhe', 'azure']:
+            # sys_prompt = 'Complete this sentence and output just one word.'
+            sys_prompt = 'Output a word or phrase to complete the last sentence according to the given examples.'
+            messages=[# {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": f"{sys_prompt}\n{text}"}]
+            response = create_client(client_type).chat.completions.create(
+                model=model_name, messages=messages,
+                temperature=0, max_tokens=10, logprobs=True, top_logprobs=5, stop='\n'
+            )
+            return Outputs(logits=response.choices[0].logprobs.content)
+        if client_type in ['together']:
+            client = create_client(client_type)
+            response = client.completions.create(model=model_name, prompt=text,
+                temperature=0, max_tokens=1, echo=True, logprobs=1)
+            return Outputs(logits=response.prompt[0].logprobs)
+    forward.is_chat = client_type in ['openai', 'juhe', 'azure']
+    return forward
+
+def get_logprobs(logits, i):
+    if hasattr(logits, 'token_logprobs'):  # old openai or together.ai
+        if hasattr(logits, 'top_logprobs'): print('In get_logprobs 111, logits.top_logprobs =', logits.top_logprobs)
+        logprob = logits.token_logprobs[i]
+        top_logprobs = (logits.top_logprobs[i] if hasattr(logits, 'top_logprobs') # old openai
+            else {logits.tokens[i]: logits.token_logprobs[i]})  # together.ai
+    elif hasattr(logits[i], 'logprob'):  # new openai
+        logprob, top_logprobs = logits[i].logprob, logits[i].top_logprobs
+    return logprob, top_logprobs
+
+def get_tokens(logits):
+    if hasattr(logits, 'tokens'): return logits.tokens # old together.ai
+    elif hasattr(logits[0], 'token'): return [l.token for l in logits] # new openai
+
+def get_api_tokenizer(model_fn):
+    def tokenize(text, return_logits=True):
+        logits = model_fn(text).logits
+        return (get_tokens(logits), logits) if return_logits else get_tokens(logits)
+    tokenize.is_chat = model_fn.is_chat
+    return tokenize
+
 def get_prob_dist(d, topk=5, digits=3):
-    return {k: round(math.exp(v), digits) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]}
+    return OrderedDict((k, round(math.exp(v), digits)) for k, v in sorted(d.items(), key=lambda x: x[1], reverse=True)[:topk]) \
+        if isinstance(d, dict) else OrderedDict((t.token, round(math.exp(t.logprob), 3)) for t in d[:topk]) # TopLogprob in openai api
 
 def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers, candidates, answer_indices,
         logits=None, labels=None, mask_logits=False, logits_bias=None,
-        k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True, plot=True):
+        k_shot=3, topk=5, loss_reduction='mean', sep='\t', verbose=True, plot=True,batchsize=0):
     # if k_shot == 0: mask_logits = True  # ioi task
     if isinstance(mask_logits, types.FunctionType): logits = mask_logits(logits); mask_logits = False
-    use_openai_api = hasattr(logits, 'token_logprobs')  # isinstance(model, types.FunctionType)
-    ans_nlls = []
-    labels_mask = torch.zeros_like(labels)
-    logits_mask = torch.zeros_like(logits) if candidates is not None else None
-
+    use_api = hasattr(logits, 'token_logprobs') or hasattr(logits[0], 'logprob')  # isinstance(model, types.FunctionType)
+    if not use_api:
+        logits = logits.float()
+        labels_mask = torch.zeros_like(labels)
+        logits_mask = torch.zeros_like(logits) if candidates is not None and not use_api else None
+        convert_fn = tokenizer.convert_ids_to_tokens if True else partial(convert_ids_to_tokens, tokenizer=tokenizer)
+    else:
+        logits_mask, labels_mask = None, None
     assert len(bos_indices) == len(example_strs), '%d != %d' % (len(bos_indices), len(example_strs))
+    ans_nlls = []
     top1_corrects, answer_probs, candidate_probs = [], [], []
-    convert_fn = tokenizer.convert_ids_to_tokens if True else partial(convert_ids_to_tokens, tokenizer=tokenizer)
     for i, (example_str, bos_i, eos_i, ans_ids) in enumerate(zip(example_strs, bos_indices, eos_indices, answers)):
-        ans_tokens = convert_fn(ans_ids)
+        ans_tokens = convert_fn(ans_ids) if not use_api else ans_ids
+        if bos_i is None:  # chat api
+            top1_corrects.append(False); answer_probs.append(0.)
+            if candidates is not None: candidate_probs.append([0.] * len(candidates[0]))
+            continue
         for j, (ans_id, ans_token) in enumerate(zip(ans_ids, ans_tokens)):#, ans_probs, ans_prob_dist):
             logits_str = ''
-            if use_openai_api:
-                dist = get_prob_dist(logits.top_logprobs[bos_i + 1 + j], topk=topk)
-                ans_prob = round(math.exp(logits.token_logprobs[bos_i + 1 + j]), 3)
-                if i >= k_shot: ans_nlls.append(-logits.token_logprobs[bos_i + 1 + j])
-                top1_correct = max(dist.items(), key=lambda x: x[1])[0] == ans_token.replace('Ġ', ' ')
+            if use_api:
+                logprob, top_logprobs = get_logprobs(logits, bos_i + 1 + j)
+                dist = get_prob_dist(top_logprobs, topk=topk)
+                #************ nrk modify
+                # print(f"ans = {OrderedDict(dist, **{ans_token: dist.setdefault(ans_token, 0.)})} ")
+                # ans_prob = [v for k, v in OrderedDict(dist, ans_token=0.).items() if ans_token.startswith(k.lstrip())] \
+                #     if tokenizer.is_chat else math.exp(logprob)
+                # if tokenizer.is_chat: ans_prob = ans_prob[0] if ans_prob else 0.0
+                #************
+                ans_prob = [v for k, v in OrderedDict(dist, **{ans_token: dist.get(ans_token, 1e-5)}).items() if ans_token.startswith(k)][0] \
+                    if tokenizer.is_chat else math.exp(logprob)
+                # ans_prob = round(ans_prob, 3)
+                print("In show: ans_prob=", ans_prob)
+                if ans_prob == 0: ans_prob = 1e-5 #nrk add
+                if i >= k_shot: ans_nlls.append(math.log(ans_prob))
+                top1_correct = ans_token.replace('Ġ', ' ').lstrip().startswith(max(dist.items(), key=lambda x: x[1])[0].lstrip())#nrk add .lstrip()
                 if candidates is not None:
-                    candidate_probs.append([dist.get(cand, 0.) for cand in [t.replace('Ġ', ' ')
-                        for t in convert_fn(candidates[i])]])
-                topk_stat = dist
+                    cand_prob = [dist.get(cand, 0.) for cand in [t.replace('Ġ', ' ') for t in candidates[i]]]
+                    if len(dist) == 1: # together completion api, echo=True, logprobs=1
+                        print("ans_prob = ",ans_prob)
+                        top1_correct = ans_prob > 1. / len(candidates[i])
+                topk_stat = dict(dist)
             else:
                 logits_ = logits[0, bos_i + j]; dist = logits_.softmax(-1)  # mqy
                 labels_mask[:, bos_i + j] = logits_.argmax() == ans_id
@@ -1220,22 +1295,24 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
                     logits_str = ' '.join(('*' if cand == ans_id else '') +
                         f'{tokenizer.convert_ids_to_tokens(cand)}:{logits_[cand].item():.3f}'
                         for cand in set(candidates[i]).union({logits_.argmax().item()}))
-                    candidate_probs.append([dist[cand].item() for cand in candidates[i]])
+                    cand_prob = [dist[cand].item() for cand in candidates[i]]
                 ans_prob = round(dist[ans_id].item(), 3)
                 top1_correct = (dist.argmax() == ans_id).item()
+                
                 topk_stat = show_topk(*dist.topk(topk), indices_fn=convert_fn)
 
             if i == k_shot and j == 0: k_shot_len = len(top1_corrects)
             top1_corrects.append(top1_correct)
             answer_probs.append(ans_prob)
+            candidate_probs.append(cand_prob if candidates is not None else None) #nrk add if candidates is not None else None
             if verbose: 
                 print(('*' if top1_correct else ' ') + ans_token, ans_prob, topk_stat, sep, example_str, logits_str)
-    if use_openai_api:
+    if use_api:
         loss = (ans_nlls if loss_reduction == 'none' else sum(ans_nlls) / len(ans_nlls))
     else:
         loss = compute_loss(logits, labels, reduction=loss_reduction)
         loss = loss.item() if loss_reduction == 'mean' else loss[labels != -100]#.tolist()  # 'none'
-        
+        # print("loss=",logits.size(), labels.size())
     if verbose and plot:
         print(loss, np.array(top1_corrects[k_shot_len:]).mean())
         plot_dist = candidates is not None and answer_indices is not None and len(answer_indices) > 2
@@ -1248,11 +1325,14 @@ def show_predictions(tokenizer, example_strs, bos_indices, eos_indices, answers,
             label_probs = F.one_hot(torch.LongTensor(answer_indices))
             _ = sns.heatmap(torch.cat([label_probs, torch.Tensor(candidate_probs)], dim=1).T, cbar=False, ax=ax1)
         plt.show()
-    label_mask = labels != -100
-    pred_logits, pred_labels = logits[label_mask], labels[label_mask]  # batch dim is squeezed
-    if logits_mask is not None and all(len(c) == 2 for c in candidates):  # for Y/N g2c task
-        pred_logits_mask = (logits_mask == 0)[label_mask]
-        pred_logits = pred_logits[pred_logits_mask].view(pred_logits.size(0), -1)
+    pred_logits, pred_labels = None, None
+    if not use_api:
+        label_mask = labels != -100
+        if batchsize>0: label_mask = label_mask.repeat(batchsize,1);  labels=labels.repeat(batchsize,1) #nrk add
+        pred_logits, pred_labels = logits[label_mask], labels[label_mask]  # batch dim is squeezed 
+        if logits_mask is not None and all(len(c) == 2 for c in candidates):  # for Y/N g2c task
+            pred_logits_mask = (logits_mask == 0)[label_mask]
+            pred_logits = pred_logits[pred_logits_mask].view(pred_logits.size(0), -1)
     return pred_logits, pred_labels, loss, top1_corrects[k_shot_len:], \
         answer_probs, candidate_probs, logits_mask, labels_mask
 
@@ -1266,19 +1346,169 @@ def trim_outputs(outputs):
 
 def is_trimmed_outputs(outputs): return outputs.mlp_outputs == ()
 
-def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_token=None, #'Ċ',
-            logits_bias=None, custom_forward=True, by_head=None, trim=False, verbose=True, outputs = None):
+#*****************nrk add
+def get_max_lhs(L, H, lhs, data_tuple, pattern):
+    assert len(lhs)>=1, "None lhs please check your parameter"
+    assert '->' in pattern, "Please check your pattern, '->' is not in patterns"
+    src,tgt = pattern.split('->')[0],pattern.split('->')[1]
+    attn = np.zeros((L,H))
+    maxst = np.empty((60, 52), dtype=object) 
+    flag = 0
+    for l in range(L):
+        for h in range(H):
+            attn_matrix = data_tuple[-1].attentions[l][-1][h]
+            src_loc = getattr(data_tuple[3][-1], src)
+            tgt_loc = getattr(data_tuple[3][-1], tgt)
+            if isinstance(tgt_loc[0], np.ndarray):#isinstance()
+                flag = 1
+                subattn = []
+                for s,t in zip(*tgt_loc):
+                    subattn.extend(attn_matrix[src_loc[0]:src_loc[1],s:t].flatten().tolist())
+                attn_score = max(subattn)
+                (max_s,max_t) = (tgt_loc[0][1],tgt_loc[1][1]) if subattn.index(attn_score) > len(subattn)/2 else (tgt_loc[0][0],tgt_loc[1][0])
+                maxst[l][h] = (max_s,max_t)
+            else:
+                attn_score = np.array(attn_matrix)[src_loc[0]:src_loc[1],tgt_loc[0]:tgt_loc[1]].max()
+            attn[l][h] = attn_score
+    max_value = np.amax(attn)
+    max_index = np.argmax(attn)
+    max_layer, max_head = np.unravel_index(max_index, attn.shape)
+    if flag==1: return max_layer, max_head, max_value, [((l,h),attn[l][h]) for (l,h) in lhs], maxst[max_layer][max_head]
+    else: return max_layer, max_head, max_value, [((l,h),attn[l][h]) for (l,h) in lhs], None
+    
+def strong_intervention(rows, columns, tgt_loc):
+    human_matrix = torch.zeros((rows, columns))
+    if isinstance(tgt_loc[0], np.ndarray):#isinstance()
+        length = (tgt_loc[1][0]-tgt_loc[0][0])+(tgt_loc[1][1]-tgt_loc[0][1])
+        attn_score = 1/length
+        human_matrix[:,tgt_loc[0][0]:tgt_loc[1][0]] = attn_score
+        human_matrix[:,tgt_loc[0][1]:tgt_loc[1][1]] = attn_score
+    else:
+        length = tgt_loc[1]-tgt_loc[0]
+        attn_score = 1/length
+        tgt = slice(*tgt_loc)
+        human_matrix[:,tgt] = attn_score
+    return human_matrix
+
+def intervention_fn(model, lhs, knock_heads, src_loc, matrix, pattern2loc, args): #对一个样例进行计算
+    mask = {}
+    for layer, head in lhs:
+        if layer not in mask.keys():
+            mask[layer] = {}
+        if head not in mask[layer].keys():
+            mask[layer][(pattern2loc,head)] = []
+        mask[layer][(pattern2loc,head)].append((src_loc, matrix))
+
+    for layer, head in lhs:   
+        self = model.transformer.h[layer].attn 
+        # print(f"layer={layer}, head=", mask[layer])
+        self.mask = mask[layer]
+    
+    if knock_heads != None: 
+        knock = {layer:[] for (layer, _) in knock_heads}
+        for layer,head in knock_heads:
+            knock[layer].append(head)
+        for layer,head in knock_heads:
+            self = model.transformer.h[layer].attn 
+            self.knock_out = knock[layer]
+########################################
+    # if args[-1][-1] == 0: 
+    #     knock = {layer:[] for layer, _ in lhs}
+    #     # print(knock)
+    #     for layer,head in lhs:
+    #         knock[layer].append(head)
+    #     for layer,head in lhs:
+    #         self = model.transformer.h[layer].attn 
+    #         self.knock_out = knock[layer]
+########################################        
+            
+def del_inter(model, lhs):
+    assert lhs!=None, "lhs is None"
+    assert type(lhs) == dict, "lhs is not a dict"
+    lhs_list = []
+    for i in lhs.values(): lhs_list.extend(i)
+    for layer, _ in lhs_list:
+        self = model.transformer.h[layer].attn
+        if getattr(self, "knock_out", None) is not None:
+            del self.knock_out
+        if getattr(self, "mask", None) is not None:
+            del self.mask
+
+def intervention_predict(model, tokenizer, text, examples, k_shot=3, bos_tokens=None, eos_tokens=None, #'Ċ',
+            logits_bias=None, counter_paired=False, custom_forward=True, by_head=None, trim=False, verbose=True, outputs = None, 
+            intervention=False, lhs = None, patterns=False, L=None, H=None, knock_heads=None):
+    assert intervention in [True,'strong'], "Wrong intervention type! intervention should in [True,'strong']"
+    # 1st forword get attntion matrix
+    pred_logits, pred_labels, data_tuple, eval_result0 = predict(model, tokenizer, text, examples, k_shot=k_shot, bos_tokens=bos_tokens, eos_tokens=eos_tokens,
+            logits_bias=logits_bias, custom_forward=custom_forward, by_head=by_head, trim=trim, verbose=verbose, outputs = outputs)
+    input_ids, labels, ranges, *args = make_data_tuple(
+        text, examples, tokenizer, k_shot=k_shot, bos_tokens=bos_tokens, eos_tokens=eos_tokens)
+    
+    with torch.no_grad():
+        if isinstance(input_ids, torch.Tensor):
+            input_ids = input_ids.to(getattr(model, 'device', 'cpu'))
+        return_attns = {}
+        lhs_values = {}
+        pattern2loc = {}
+        for i in range(len(patterns[f'{counter_paired}'])): #给每个pattern赋值，分别干预
+            pattern2loc[patterns[f'{counter_paired}'][i]] = i
+
+        for pattern in patterns[f'{counter_paired}']:
+            max_layer, max_head, max_value, lhs_value, maxst = get_max_lhs(L, H, lhs[pattern], data_tuple, pattern)
+            src_loc = getattr(ranges[-1], pattern.split('->')[0])
+            tgt_loc = getattr(ranges[-1], pattern.split('->')[1])
+            matrix = data_tuple[-1].attentions[max_layer][-1][max_head][src_loc[0]:src_loc[1]]
+            if intervention == 'strong': matrix = strong_intervention(*(matrix.size()), tgt_loc)
+            if matrix.dim() < 2: matrix = matrix.unsqueeze(0)
+            intervention_fn(model, lhs[pattern], knock_heads, src_loc, matrix, pattern2loc[pattern], args)
+            if (max_layer, max_head) not in return_attns.keys(): return_attns[(max_layer, max_head)] = {}
+            return_attns[(max_layer, max_head)][pattern] = max_value
+            lhs_values[pattern] = lhs_value
+        # o = model(input_ids,output_attentions=True)
+        length = len(lhs)+1
+        o = model(input_ids.repeat(length,1),output_attentions=True)
+            
+        del_inter(model, lhs)
+        
+        for field in fields(o):
+            name = field.name
+            # workaround for the weird bug of CausalLMOutputWithPast tampering values
+            if name == 'loss': setattr(o, name, None); continue
+            v = getattr(o, name)
+            if isinstance(v, torch.Tensor) and v.device != torch.device('cpu'):
+                setattr(o, name, v.to('cpu').float())
+    pred_logits, pred_labels, *results, logits_mask, labels_mask = show_predictions(
+        tokenizer, *args, logits=o.logits, logits_bias=logits_bias, labels=labels,
+        loss_reduction='mean', k_shot=k_shot, topk=3, verbose=verbose, batchsize=length) #nrk add batchsize=length
+    if isinstance(examples[0], dict): cands = examples[0]['candidates'] # ioi/wino task wab
+    else: cxt, query, cands, *cls = examples[0]
+    cands = candidates2dict(cands)
+    if cands is not None and (cands['ans0'] == cands['ans'] or len(cls) > 0) and logits_mask is not None: # rel1 is copy or g2c task
+        o.logits_mask = logits_mask
+    o.labels_mask = labels_mask
+    if trim: o = trim_outputs(o)
+    data_tuple = [text, input_ids, labels, ranges] + args + [o]
+    eval_result = results # == (loss, top1_corrects, answer_probs, candidate_probs)
+    return pred_logits, pred_labels, data_tuple, eval_result, return_attns, lhs_values#, eval_result0
+#*****************
+
+def predict(model, tokenizer, text, examples, k_shot=3, bos_tokens=None, eos_tokens=None, #'Ċ',
+            logits_bias=None, custom_forward=True, by_head=None, trim=False, verbose=True, outputs = None): 
     if by_head is None: by_head = ['value', 'attn_out']
-    input_ids, labels, ranges, *args = make_data_tuple( # args = [example_strs, bos_indices, eos_indices, answers]
-        text, examples, tokenizer, k_shot=k_shot, bos_token=bos_token, eos_token=eos_token)
+    # args = [example_strs, bos_indices, eos_indices, answers, candidates, answer_indices]
+    input_ids, labels, ranges, *args = make_data_tuple(
+        text, examples, tokenizer, k_shot=k_shot, bos_tokens=bos_tokens, eos_tokens=eos_tokens)
     if outputs is not None:
         assert isinstance(tokenizer, LLAMATokenizer)
         o = outputs
+    elif isinstance(tokenizer, types.FunctionType):  # use_api
+        o = Outputs(logits=labels)  # use labels to pass logits
     else:
         with torch.no_grad():
-            o = forward0(model, input_ids.to(model.device), by_head=by_head, ranges=ranges) \
-                if isinstance(model, nn.Module) and custom_forward else \
-                model(input_ids.to(getattr(model, 'device', 'cpu')))
+            if isinstance(input_ids, torch.Tensor):
+                input_ids = input_ids.to(getattr(model, 'device', 'cpu'))
+            o = forward0(model, input_ids, by_head=by_head, ranges=ranges) \
+                if isinstance(model, nn.Module) and custom_forward else model(input_ids)
             # for name in ['logits', 'loss']: # move outputs of native forward to cpu
             for field in fields(o):
                 name = field.name
@@ -1288,9 +1518,8 @@ def predict(model, tokenizer, text, examples, k_shot=3, bos_token=' ->', eos_tok
                 if isinstance(v, torch.Tensor) and v.device != torch.device('cpu'):
                     setattr(o, name, v.to('cpu').float())
 
-    logits = o.logits.float() # add lxy
     pred_logits, pred_labels, *results, logits_mask, labels_mask = show_predictions(
-        tokenizer, *args, logits=logits, logits_bias=logits_bias, labels=labels,
+        tokenizer, *args, logits=o.logits, logits_bias=logits_bias, labels=labels,
         loss_reduction='mean', k_shot=k_shot, topk=3, verbose=verbose)
     # logits_mask is used when rel1 is equal relation and cxt_len > 1 (checked in make_data_tuple)
     if isinstance(examples[0], dict): cands = examples[0]['candidates'] # ioi/wino task wab
@@ -1392,7 +1621,8 @@ def plot_aggregate_predictions(tokenizer, pred_logits, pred_labels):
 
 def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size,
             logits_bias=None, dataset=None, by_head=None, trim=False,custom_forward=True,
-            counter_paired=False, verbose=True, result=None, save_label=False, test_acc=False, **gen_args):
+            counter_paired=False, verbose=True, result=None, save_label=False, test_acc=False,
+            intervention = False, lhs = None, patterns=None, L=None, H=None, **gen_args): #nrk add
     if result is None:
         if dataset is not None:  # wab ioi/wino dataset
             indices_groups = np.arange(batch_size * nrows).reshape(batch_size, nrows)
@@ -1414,11 +1644,10 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
         #        item[1] = item[1].replace('boy', 'he').replace('girl', 'she')
         #        item[2] = tuple([t.replace('boy', 'he').replace('girl', 'she') for t in item[2][0]] + list(item[2][1:])) 
         #texts = [text.replace(' not', '') for text in texts] # mqy test another text format
-
         result = Result(task=task, gen_args=gen_args, all_examples=all_examples, texts=texts, all_bos_tokens=all_bos_tokens)
     else:
         all_examples, texts, all_bos_tokens = result.all_examples, result.texts, result.all_bos_tokens
-    for text in texts[:1]: print('\n' + '\n'.join(text.strip('\n').split('\n')[:]))
+    for text in texts[:2]: print('\n' + '\n'.join(text.strip('\n').split('\n')[:]))
     if batch_size == 1 or model is None: return result
 
     if result.data_tuples is None or is_trimmed_outputs(result.data_tuples[0][-1]):
@@ -1436,10 +1665,20 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
             task_dict['input_ids'] = [input_id.tolist() for input_id in input_ids]
             return task_dict
             # return result
-        if True: # with Timer('In generate_and_predict_batch: predict'):
+        if intervention: #nrk add
+            pred_logits, pred_labels, result.data_tuples, result.eval_results, max_data, lhs_values = map(list, zip(*[intervention_predict(
+                    model, tokenizer, text, examples,
+                    k_shot=k_shot, bos_tokens=bos_tokens, logits_bias=logits_bias, by_head=by_head,
+                    trim=trim, counter_paired=counter_paired, custom_forward=custom_forward, verbose=verbose,
+                    outputs= batch_outputs[i] if my_isinstance(tokenizer, LLAMATokenizer) else None,
+                    intervention = intervention, lhs = lhs, patterns=patterns, L=L, H=H)
+                for i, (examples, text, bos_tokens) in enumerate(zip(all_examples, texts, all_bos_tokens))
+                if True or any(s in text[24:] for s in ['dangerous'])]))
+
+        else:# with Timer('In generate_and_predict_batch: predict'):
             pred_logits, pred_labels, result.data_tuples, result.eval_results = map(list, zip(*[predict(
                     model, tokenizer, text, examples,
-                    k_shot=k_shot, bos_token=bos_tokens, logits_bias=logits_bias, by_head=by_head,
+                    k_shot=k_shot, bos_tokens=bos_tokens, logits_bias=logits_bias, by_head=by_head,
                     trim=trim, custom_forward=custom_forward, verbose=verbose,
                     outputs= batch_outputs[i] if my_isinstance(tokenizer, LLAMATokenizer) else None)
                 for i, (examples, text, bos_tokens) in enumerate(zip(all_examples, texts, all_bos_tokens))
@@ -1454,8 +1693,12 @@ def generate_and_predict_batch(model, tokenizer, task, nrows, k_shot, batch_size
     if test_acc:
         result.texts = texts[:1]
         return result2dict(result)
-    return result,np.array(join_lists(acc)) #nrk add np.array(join_lists(acc))
-
+    try: #nrk add np.array(join_lists(acc)), max_data, lhs_values
+        
+        return result,np.array(join_lists(acc)),result.mean_loss, max_data, lhs_values
+    except:
+        return result,np.array(join_lists(acc)),result.mean_loss
+    
 def show_predictions_by_data_tuples(model, tokenizer, data_tuples, k_shot, to_layer=None, verbose=True):
     losses, acc = [], []
     for _, _, labels, ranges, *args, o in data_tuples:
@@ -1542,9 +1785,9 @@ def attn_pattern2labels(ranges, attn_pattern, attn_size, k_shot=0, attribute_k=F
     q, k = attn_pattern.split('->')  # e.g. 'bos->ans0'
     cross_example = k.endswith('^'); k = k.replace('^', '')
     is_relating_pattern = q.endswith('^'); q = q.replace('^', '')
-    ranges_q, rq_start = (ranges[k_shot:], k_shot) \
-        if attribute_k or not is_relating_pattern \
-        else (ranges[: len(ranges) - k_shot], 0)
+    ranges_q, rq_start = ((ranges[k_shot:], k_shot)
+        if not is_relating_pattern  # or attribute_k  # TODO: what's the appropriate condition
+        else (ranges[: len(ranges) - k_shot], 0))
     if k in ['ans0s', 'ntgts'] and getattr(ranges_q[0], k) is None:
         k = 'example'  # tasks with cxt_len=1 has no 'ans0s' or 'ntgts'. Fall back to 'example'
     attn_labels = torch.zeros(*attn_size)
@@ -2244,12 +2487,13 @@ def _add_node(parent, data, verbose=True):
 
 def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_type=None, attn_pattern=None, 
             H=None, step=None, dummy=False, mixed=False, force=False, verbose=True, **kwargs):
+    if H is None: 
+        H = parent.data.H if parent.data.H is not None else parent.data.attr.head.size(1)
     if parent is None:
         si = -1; node = Node(f' {label_type}' if label_type != 'labels' else '')
-        node.data = AttrData(step=si, layer=layer, label_type=label_type)
+        node.data = AttrData(step=si, layer=layer,H=H,label_type=label_type)   
         return node
 
-    if H is None: L, H = parent.data.attr.head.size()
     if parent.data.attr is None and not force:
         print('parent has not been attributed yet, replace it instead of adding to it.')
         _id = id(parent); parent = parent.parent
@@ -2270,7 +2514,7 @@ def add_node(parent, layer=None, head=None, head_attr_fn=None, topi=None, label_
 attn_patterns_by_step = {
     -1: ['bos->ans0'],
     0: ['bos->ans]^', 'bos->query', 'bos->ans0+', 'bos->tgt', 'bos->bos^', 'bos->rel', 'bos->cls^',
-        'bos->ans]', 'bos->ans+', # 'bos->ans-', 
+        'bos->ans]', 'bos->ans+','bos->ans]|ans+', # 'bos->ans-', 
         'bos->sep',  # 11-4
         'bos->sep+',  # 13-11
         'bos->sep-',
@@ -2278,10 +2522,10 @@ attn_patterns_by_step = {
         'bos->tgt+',
         'bos->tgt',
         ],
-    1: ['ans]^->ans0]', 'ans]^->ans0+', 'ans]^->ans-', 'query->query', 'query->tgt','query->tgt+', 'query->ans0', 'tgt->ans0',
-        'ans]^->query', 'ans]->ans+^', 'ans]^->query+', 'sep->ans0', 'sep+->ans0', 'sep-->ans0',
+    1: ['ans]^->ans0]', 'ans]^->ans0+', 'ans]^->dans0', 'ans]^->ans-', 'query->query', 'query->tgt','query->tgt+', 'query->ans0', 'tgt->ans0',
+        'ans]^->query', 'ans]->ans+^', 'ans]^->query+', 'sep->ans0', 'sep+->ans0', 'sep-->ans0','ans]->query]',
         'ans+->query', 'ans+->ans]', 'ans+->ans+^', 'ans]^->query|query+', 'ans+->ans]|ans+', 'ans]->dans0]', 'dans0]->dtgt]|dtgt+',  # 'ans+->query-|ans+', # g2c tasks
-        'ans0+->ans0', 'sep+->sep', 'query->ans]^','ans]->bos^', 'query->sep+', 'rel->query',
+        'ans0+->ans0', 'sep+->sep', 'query->ans]^','ans]->bos^', 'query->sep+', 'rel->query','query->ans0','query^->ans0',
         'query->ntgts', 'query->ntgts+', 'query->ans0+', 'query->nans0s', 'query->nans0s+', 'query->query-', 'query->sep+', 'query-->ans]', 'query+->query]',
         'sep+->ans+^', 'sep+->ans]^', 'tgt+->ntgts+', 'tgt+->ntgts', 'ans]->ntgts+','ans]->nans0s',
         'cls->ans', 'cls->query', 'ans->query','ans->dans0','dans0->dtgt','dans0->dtgt+',
@@ -2388,7 +2632,7 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.3): # use fixed k_shot
         label_types = ['labels']  # e.g. bos->bos at step 0
         # if d.head == d.H and (d.layer, d.head) in parent.data.top_mlps:
         #     label_types += ['mlp_gate_labels']
-    elif False and (icl_score > icl_score_thld or is_predicting_head or is_recurrent_head or d.attn_pattern in ['ans]->query']): #or d.ap_score >0.99: #mqy
+    elif (icl_score > icl_score_thld or is_predicting_head or is_recurrent_head or d.attn_pattern in ['ans]->query']): #or d.ap_score >0.99: #mqy
         label_types = ['attn_labels', normalized_attn_labels][:1] if not point_wise(d.attn_pattern) else [None]
         activating_attn_labels = f'attn_labels:{parse_attn_pattern(d.attn_pattern)[0]}->~<s>,{min(3, k_shot)}'
         # head_label_types = get_root(parent).data.head_label_types
@@ -2404,6 +2648,8 @@ def get_label_types(parent, d, k_shot=3, icl_score_thld=0.3): # use fixed k_shot
     # if is_predicting_head: label_types += ['attn_labels:attribute_k']
     # if d.attn_pattern in ['ans]->query', 'query->tgt+', 'query->ans0']:label_types += ['attn_labels:attribute_k'] # mqy add k attribution
     if is_predicting_head and d.attn_pattern.startswith('bos->query'): label_types += ['labels']  # mqy TODO
+    if d.attn_pattern in ['bos->ans0','bos->query','ans]->query','query->tgt']: label_types += ['attn_labels'] #nrk add
+    if (d.layer, d.head) in [(14,18),(14,46),(15,0),(14,5),(15,51)]: label_types += ['attn_labels','attn_labels:attribute_k']
     return label_types
 
 def get_icl_score(ap_scores, k_shot=3):
@@ -2968,7 +3214,7 @@ def plot_attn(data_tuple, tokenizer, l, h, attn_pattern=None, k_shot=0):
         for t in tokenizer.convert_ids_to_tokens(input_ids[0])]
     bos_indices = args[1]
     ystart, ystop = bos_indices[k_shot], aw_size[0]
-    attn_labels = attn_pattern2labels(ranges, attn_pattern, aw_size)
+    attn_labels, _ = attn_pattern2labels(ranges, attn_pattern, aw_size)
     y_pos, x_pos = attn_labels.nonzero().T
     _plot_attn(a, tokens, ystart=ystart, ystop=ystop, y_pos=y_pos, x_pos=x_pos,
         fontsize=9, transpose=True, figsize=(15, 15)); plt.show()  # bij->ij
@@ -3168,6 +3414,9 @@ def gen_detach_heads_tuples(module, exit_module, kept_layer, kept_head):
             tuples.append((get_attn_module(block), 'attn_weights_transform',
                           get_detach_heads_fn(kept_head=kept_head if i == kept_layer else None)))
     return tuples
+
+
+
 
 # ans_positions = bos_indices + 1
 # src = bos_indices[-1].item()

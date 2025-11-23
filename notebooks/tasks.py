@@ -3,6 +3,80 @@ from child_utils import _cxt2str, _item2str
 from child_frames import *
 from const import *
 
+def remove_duplicate_values(dicts):
+    value_count = {}
+    for d in dicts:
+        for values in d.values():
+            for value in values:
+                value_count[value] = value_count.get(value, 0) + 1
+    
+    duplicates = set(key for key, count in value_count.items() if count > 1)
+    for d in dicts:
+        for key, values in d.items():
+            d[key] = [value for value in values if value not in duplicates]
+
+def process_samples(json_data):
+    processed_data = {}
+    for sample in json_data["samples"]:
+        subject_e = sample["subject"]
+        object_e = sample["object"]
+        if subject_e[0] in ['.'] or object_e[0] in ['.']: continue
+        if subject_e[-1] in ['.']: subject_e = subject_e[:-1]
+        if object_e[-1] in ['.']: object_e = object_e[:-1]  # e.g. D.C. -> D.C
+        if object_e not in processed_data:
+            processed_data[object_e] = []
+        processed_data[object_e].append(subject_e)
+        remove_duplicate_values([processed_data])
+    return processed_data
+
+def countries_of_landmarks():
+    countries_of_landmarks.wh = 'which country'
+    countries_of_landmarks.name = 'countries of landmarks'
+    countries_of_landmarks.sub_wh = 'the country which'
+    landmarks = process_samples(json.load(open('maguangyu/landmark_in_country.json')))
+    return landmarks, dict(child='a place in',sibling='a landmark in the same country as')
+
+def color_of_fruits():
+    color_of_fruits.name = 'color of fruits'
+    color_of_fruits.wh = 'which'
+    color_of_fruits.sub_wh = 'the fruit which'
+    colorOfFruits = process_samples(json.load(open('maguangyu/color_of_fruits.json')))
+    # return colorOfFruits,dict(child='skin color',sibling='')
+    return colorOfFruits,dict(child='a kind of fruit with skin color of',sibling='')  # XD
+
+def occupations_Of_Persons():
+    occupations_Of_Persons.wh = 'who'
+    occupations_Of_Persons.name = 'occupations of persons'
+    occupations_Of_Persons.sub_wh = 'the person who'
+    occupations_Of_Persons.bos = {'child': ' the'}
+    return {
+        'the actor': ['Leonardo DiCaprio', 'Meryl Streep', 'Tom Hanks', 'Jennifer Lawrence', 'Denzel Washington', 'Julia Roberts', 'Brad Pitt', 'Natalie Portman', 'Johnny Depp', 'Charlize Theron'],
+        'the athlete': ['LeBron James', 'Serena Williams', 'Cristiano Ronaldo', 'Usain Bolt', 'Lionel Messi', 'Simone Biles', 'Michael Phelps', 'Roger Federer', 'Tom Brady', 'Alex Morgan'],
+        'the musician': ['Beyoncé', 'Taylor Swift', 'Drake', 'Adele', 'Kanye West', 'Rihanna', 'Ed Sheeran', 'Lady Gaga', 'Justin Bieber', 'Eminem'], # should be singersr
+        'the scientist': ['Albert Einstein', 'Marie Curie', 'Stephen Hawking', 'Jane Goodall', 'Neil deGrasse Tyson', 'Ada Lovelace', 'Nikola Tesla', 'Carl Sagan', 'Rosie Franklin', 'Richard Dawkins'],
+        'the architect': ['Frank Lloyd Wright', 'Zaha Hadid', 'Le Corbusier', 'Ieoh Ming Pei', 'Rem Koolhaas', 'Norman Foster', 'Antoni Gaudí', 'Louis Sullivan', 'Mies van der Rohe', 'Maya Lin'],
+        'the author': ['J.K. Rowling', 'Stephen King', 'Agatha Christie', 'George Orwell', 'Toni Morrison', 'Ernest Hemingway', 'Jane Austen', 'Harper Lee', 'J.R.R. Tolkien', 'Mark Twain'], # not very famous?
+        'the entrepreneur': ['Elon Musk', 'Jeff Bezos', 'Bill Gates', 'Mark Zuckerberg', 'Oprah Winfrey', 'Steve Jobs', 'Richard Branson', 'Warren Buffett', 'Larry Page', 'Sergey Brin'],
+        'the doctor': ['Dr. Anthony Fauci', 'Dr. Sanjay Gupta', 'Dr. Mehmet Oz', 'Dr. Jane Goodall', 'Dr. Michio Kaku', 'Dr. Ben Carson', 'Dr. Neil deGrasse Tyson', 'Dr. Temple Grandin', 'Dr. Gabor Maté', 'Dr. Sylvia Earle'],
+        'the lawyer': ['Barack Obama', 'Hillary Clinton', 'Ruth Bader Ginsburg', 'Johnnie Cochran', 'Thurgood Marshall', 'Gloria Allred', 'Clarence Darrow', 'Sonia Sotomayor', 'Alan Dershowitz', 'F. Lee Bailey'],
+        'the artist': ['Pablo Picasso', 'Vincent van Gogh', 'Leonardo da Vinci', 'Frida Kahlo', 'Georgia O\'Keeffe', 'Claude Monet', 'Salvador Dalí', 'Andy Warhol', 'Michelangelo', 'Jackson Pollock']
+    },dict(child = '',sibling='')
+
+def countries_of_landmarks():
+    countries_of_landmarks.wh = 'which country'
+    countries_of_landmarks.name = 'countries of landmarks'
+    countries_of_landmarks.sub_wh = 'the country which'
+    landmarks = process_samples(json.load(open('maguangyu/landmark_in_country_clean.json')))
+    return landmarks,dict(child='a landmark in',sibling='a landmark in the same country as')
+
+def sports_played_by_persons():
+    sports_played_by_persons.name = 'sports played by persons'
+    sports_played_by_persons.wh = 'who'
+    sports_played_by_persons.sub_wh = 'the person who'
+    sportPlayerPerson = process_samples(json.load(open('maguangyu/person_plays_pro_sport.json')))
+    return sportPlayerPerson,dict(child='a player of',sibling='')
+
+
 # I = Identity; M = Mophism; A = Aggregation; C = CMP; G = GroupBy; N = Negation, l = local
 patterns = ['M', 'A?', 'IA', 'MA',
     'IlI', 'MlI', 'IlM', 'MlM', 'IlMlI',

@@ -783,7 +783,7 @@ class CrossHeadProjectionV2(nn.Module):
         ret = 0#inputs 
         if self.use_static_w:
             if self.squeeze_ratio is None:
-                w = self.w + torch.eye(self.num_heads_per_group, device=self.w.device, dtype=self.w.dtype)
+                w = self.w * 0 + torch.eye(self.num_heads_per_group, device=self.w.device, dtype=self.w.dtype)
                 #print('dtype', inputs.dtype, w.dtype)
                 ret = torch.einsum('BGMTS,GMN->BGNTS', inputs, w)
         #if idx ==15: print('after sw', self.mode, rms(ret))

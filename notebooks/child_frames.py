@@ -200,7 +200,7 @@ _person_adjs = [
     [['friendly', 'affable'], ['unfriendly', 'hostile']],
     [['interesting', 'fascinating'], ['boring', 'uninteresting']],  # amusing
     # expanded by gpt-4
-    [['beautiful', 'attractive', 'pretty'], ['ugly', 'unattractive']],
+    [['beautiful', 'attractive', 'pretty'], ['ugly', 'unattractive']], # gpt3 wrong
     [['gentle', 'tender'], ['harsh', 'severe']],
     # [['good', 'virtuous'], ['bad', 'evil']],
     # [['popular'], ['unpopular']],
@@ -234,12 +234,12 @@ _person_adjs = [
     [['sociable', 'outgoing'], ['introverted', 'reserved']],  # shy
     [['thoughtful', 'considerate'], ['thoughtless', 'inconsiderate']],
     [['patient', 'tolerant'], ['impatient', 'intolerant']],
-    [['creative', 'innovative'], ['unimaginative', 'conventional']],
+    [['creative', 'innovative'], ['unimaginative', 'conventional']],  # gpt3 wrong
     [['punctual', 'timely'], ['tardy', 'late']],
     [['optimistic', 'positive'], ['pessimistic', 'negative']],
     [['humorous', 'witty', 'funny'], ['serious', 'humorless']],
     [['selfish', 'egotistical'], ['selfless', 'altruistic']],
-    [['determined', 'decisive', 'resolute'], ['hesitant', 'indecisive', 'tentative']],
+    [['determined', 'decisive', 'resolute'], ['hesitant', 'indecisive', 'tentative']],  # gpt3 wrong
     # [['light', 'bright'], ['dark', 'dim']], # not for person
     # ['warm', 'hot'], ['cool', 'cold']], # not for person
 
@@ -251,7 +251,11 @@ _person_adjs = [
     # [['single'], ['married']],
 ]
 
-def person_adjs(): return _person_adjs
+def person_adjs():
+    person_adjs.name = 'Descriptions of people'
+    # person_adjs.wh = 'which'
+    # person_adjs.sub_wh = 'the thing which'
+    return _person_adjs, dict()
     # ans = []
     # for vec in _person_adjs:
     #     for tmp in vec:
